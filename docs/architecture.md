@@ -17,6 +17,8 @@ The architecture prioritizes the following, in order:
 
 The fixed technical constraints are Rust 2024; Qt 6.11.2+ Widgets; CXX-Qt (`cxx-qt`, `cxx-qt-lib`, and `cxx-qt-build`); Cargo-only builds; C++17 or newer; and macOS 26.7+ only. Qt is linked dynamically under LGPLv3. QML/Qt Quick, CMake, Corrosion, qmake project files, Windows or Linux support, a GUI-dependent core, and blocking work on the GUI thread are outside this design.
 
+Dual Pane runs as a single application window containing one workspace; there is no multi-window mode. It is built and run locally without notarization and without the App Sandbox, so file access is governed by ordinary permissions and macOS privacy (TCC) grants. Those grants are tied to the code signature and can be lost when a locally signed build changes, so a privacy denial is a routine, recoverable error rather than an edge case.
+
 ## 2. Dependency rule and logical rings
 
 Clean Architecture is defined by **source-code dependency direction**, not by runtime call direction or directory nesting. Code in an inner ring must not name a type, API, storage format, or framework from an outer ring. Dependencies between Dual Pane's logical modules point inward:
@@ -26,14 +28,14 @@ Clean Architecture is defined by **source-code dependency direction**, not by ru
 
   ┌──────────────────────────────────────────────────────────────┐
   │ Frameworks and drivers                                        │
-  │ Qt Widgets/C++, CXX-Qt bridge, macOS APIs, worker runtime,    │
+  │ Qt Widgets/C++, CXX-Qt bridge, macOS APIs, runtime, gateways, │
   │ file-system and settings implementations                      │
   │   ┌──────────────────────────────────────────────────────┐   │
   │   │ Interface adapters                                   │   │
-  │   │ controllers, presenters, gateway translations        │   │
+  │   │ controllers and presenters (Qt-free)                 │   │
   │   │   ┌──────────────────────────────────────────────┐   │   │
   │   │   │ Application                                   │   │   │
-  │   │   │ use cases, workspace state, ports, outputs    │   │   │
+  │   │   │ use cases, workspace state, requests, outputs │   │   │
   │   │   │   ┌──────────────────────────────────────┐   │   │   │
   │   │   │   │ Domain                               │   │   │   │
   │   │   │   │ file-manager rules and value types   │   │   │   │
@@ -45,7 +47,7 @@ Clean Architecture is defined by **source-code dependency direction**, not by ru
                  composition root lives at the outer edge
 ```
 
-Runtime control often travels in the other direction: a Qt action invokes an application input, an application use case invokes an injected output port, and a macOS implementation later returns a result as another application input. That is valid because the application owns the port contract and never imports the implementation.
+Runtime control often travels in the other direction: a Qt action becomes an application input, the application returns a work request, and an outer runtime carries it out with macOS facilities and later returns a result as another application input. That is valid because the application owns the request and result types and never imports the implementation.
 
 The outermost implementations necessarily import Qt or macOS SDKs. Those third-party imports are confined to their outer components; they are not permission for application or domain code to do so.
 
@@ -55,7 +57,7 @@ The outermost implementations necessarily import Qt or macOS SDKs. Those third-p
 |---|---|---|
 | Domain | Rust standard library and small platform-neutral value utilities | Application, Qt, CXX-Qt, macOS APIs, I/O, threads, storage, logging backends |
 | Application | Domain | Qt, CXX-Qt, macOS types, widgets, platform I/O, concrete schedulers, storage formats |
-| Interface adapters | Application and Domain | Widget ownership, raw macOS file APIs, application-policy decisions |
+| Interface adapters | Application and Domain | Qt, CXX-Qt, widget ownership, raw macOS file APIs, application-policy decisions |
 | Frameworks and drivers | Inner public contracts and the necessary platform/framework APIs | Inward implementation details or policy of their own |
 | Composition root | Every public concrete type needed for wiring | Reusable business policy |
 
@@ -76,51 +78,51 @@ The C++ Qt Widgets shim and `build.rs` live in `dual-pane-desktop`. Modules with
 
 ### 3.1 Domain — stable file-manager policy
 
-The domain ring contains rules that remain meaningful if the UI, operating system, and execution model change. It has no ports because a port represents a use case's need of the outside world, not an enterprise rule.
+The domain ring contains rules that remain meaningful if the UI, operating system, and execution model change. It performs no I/O and knows nothing about asynchronous work.
 
 | Area | Responsibility |
 |---|---|
 | Value types | Pane side, tab ID, operation ID, request/version token, location, entry name, file kind, sort specification, and capability values. Their representations are platform-neutral. |
-| Invariants | Valid pane/tab ownership, selection and cursor consistency, operation intent validity, and the conditions under which a choice is required. |
-| Policies | Conflict and destructive-operation decision requirements, safe-operation semantics, stale-result identity rules, and domain-level validation that does not require I/O. |
+| Workspace structure | `Pane`, `Tab`, tab history, `Selection`, and `Cursor` types that enforce their own invariants: each pane has at least one tab and exactly one active tab, history positions stay in range, and cursor and selection refer only to entries in the current listing. |
+| Policies | Operation intent validity; conflict, kind-mismatch, and destructive-operation decision requirements; directory-merge semantics; safe-operation semantics; stale-result identity rules; sort ordering; and other validation that does not require I/O. |
 | Errors | Stable, user-relevant categories with operation and path context, never native error objects. |
 
-`Location` and entry identity are application values, not leaked native paths or file handles. A platform adapter may supply an opaque stable identity when one is available; the domain must not assume that an identity survives a rename, a volume boundary, or every provider-backed location.
+`Location` and entry identity are platform-neutral domain values, not leaked native paths or file handles. A platform adapter may supply an opaque stable identity when one is available; the domain must not assume that an identity survives a rename, a volume boundary, or every provider-backed location.
 
 ### 3.2 Application — use cases and application state
 
-The application ring coordinates the product's use cases. It owns the state previously described as a separate `state` layer: separating it outside the use cases would reverse the dependency direction. The state is an implementation detail of the application's input boundary, not a UI model and not a Qt object.
+The application ring coordinates the product's use cases. It owns the single `Workspace` aggregate, built from the domain's pane and tab types plus the asynchronous state the domain does not model. The state is an implementation detail of the application's input boundary, not a UI model and not a Qt object.
 
 | Area | Responsibility |
 |---|---|
-| Input boundary | Commands and externally observed facts: navigate, select, tab operations, file-operation requests, decisions, cancellation, listing results, watcher invalidations, and job progress/completion. |
+| Input boundary | Commands and externally observed facts: navigate, select, tab operations, file-operation requests, decisions, cancellation, listing results, watcher invalidations, operation step results, and settings load/save results. |
 | Workspace use cases | Validate inputs, evolve the workspace state, issue work requests, reject stale results, and produce application output. |
-| Workspace state | Two panes; tabs; histories; locations; selection; loading state; jobs; pending decisions; and preferences required to carry out use cases. It has one serialized owner. |
-| Output models | Immutable, framework-neutral snapshots or deltas of panes, jobs, decisions, and recoverable errors. They state *what changed*, not how a widget redraws it. |
-| Output ports | Narrow contracts the use cases need from the outside: directory reading, file-operation execution, location watching, session persistence, desktop opening, task dispatch, and application-output delivery. |
+| Workspace state | Two panes of domain tabs; outstanding request tokens and loading state; file operations with their plans, progress, and pending decisions; and preferences required to carry out use cases. It has one serialized owner. |
+| Output models | Immutable, framework-neutral values describing panes, jobs, decisions, and recoverable errors. Listing changes are row deltas (insert, remove, update) against the previous listing so that views keep scroll position, cursor, and selection. They state *what changed*, not how a widget redraws it. |
+| Work requests | Typed, purpose-specific descriptions of outside work the use cases need: read a directory, execute an operation step, start or stop watching a location, load or save settings, and open a file with its default application. |
 
-The application ring owns every port it calls. Ports are purpose-specific; there is no universal `FileSystem` façade whose broad API encourages business logic to drift into adapters. For example, directory reading exposes the listing data required by navigation, and operation execution accepts an already validated operation intent and reports typed progress, conflict, failure, or completion.
-
-A useful internal shape is a reducer-like transition, but its outputs are application concepts:
+Use cases are a pure reducer. The application never calls outward, holds a callback, or waits:
 
 ```
-Application input
+Workspace::handle(input)
   → validate and transition workspace state
-  → application output + zero or more work requests
+  → (application outputs, zero or more work requests)
 ```
 
-It must not return a Qt `ViewChange`, manipulate a model, choose dialog text, own a GUI-thread callback, or start a thread. The scheduler or gateway implements an output port and later submits a typed result through the same serialized application input boundary.
+A runtime in the frameworks ring carries out each work request and later submits its typed result as a new input. The application owns the request and result types; there are no application-owned I/O traits to implement or fake. Work requests are purpose-specific; there is no universal `FileSystem` façade whose broad API encourages business logic to drift outward. For example, a directory-read request carries the location, sort and filter specification, and the previous listing snapshot needed to compute row deltas, and an operation-step request carries an already validated intent and the decisions that apply to it.
+
+`handle` must not return a Qt `ViewChange`, manipulate a model, choose dialog text, or start a thread. A multi-step flow is modelled as explicit state identified by tokens, not as a suspended call.
 
 ### 3.3 Interface adapters — translate, do not decide
 
-Interface adapters turn delivery and platform-specific forms into the application boundary's forms. They may reshape data for a screen or a gateway, but they do not contain a second set of file-manager policy.
+Interface adapters translate between the user interface and the application boundary. They are plain Rust with no Qt or CXX-Qt dependency, so they are tested without the Qt/C++ build. They reshape data for a screen, but they do not contain a second set of file-manager policy.
 
 | Adapter | Responsibility |
 |---|---|
-| Input controller | Maps Qt actions, menus, drag-and-drop, and eventual approved shortcuts into application commands. It does not decide whether a command is valid. |
-| Presenter | Maps application output models into screen-oriented models and dialog requests. It owns display concerns such as row roles and formatting, not policy or wording choices that change available user actions. |
-| Gateway translator | Maps the application ports' values and errors to an outer driver's values and maps results back to typed application events. |
-| Event ingress | Delivers every external result through the serialized application input boundary; a worker, watcher, or dialog never mutates workspace state directly. |
+| Input controller | Maps Qt-free UI events (for example `UiEvent::DropOnPane { pane, row }` or a menu command identifier) plus current view context into application commands. It does not decide whether a command is valid. |
+| Presenter | Maps application output into plain-Rust view-models: row view-models with display text and icon kind, row-delta instructions, operation status, and dialog view-models listing the permitted choices. It owns formatting and wording, not policy or the set of available user actions. |
+
+The Qt delivery driver performs only the mechanical translation from Qt signals, actions, and model indexes to `UiEvent` values and from view-models to Qt model notifications and widgets.
 
 The presenter may keep rendering caches that can be reconstructed from application output. Cursor, selection, active pane, pending conflict decisions, and other behaviorally significant state remain in the application ring.
 
@@ -130,17 +132,17 @@ This outer ring owns concrete technology and resource lifetime. It includes the 
 
 | Driver | Responsibility |
 |---|---|
-| Qt delivery | Constructs widgets, owns Qt object lifetime, connects signals to the input controller, and renders presenter output. CXX-Qt types stay here because they name a framework. |
-| File-system gateway | Implements directory reading and file-operation execution using macOS facilities. It enforces syscall-level protections such as no-overwrite behavior and preserves sufficient native detail to classify errors. |
+| Qt delivery | Constructs the single window and its widgets, owns Qt object lifetime, translates Qt signals into `UiEvent` values for the input controller, and applies presenter view-models to Qt models and dialogs. CXX-Qt types stay here because they name a framework. |
+| Runtime | Receives work requests from the reducer, dispatches them to gateways on the worker pool, owns cancellation primitives and native handles, and delivers every typed result as an application input on the GUI thread. A worker, watcher, or dialog never mutates workspace state directly. |
+| File-system gateway | Reads directories, then sorts, filters, and computes row deltas against the previous listing snapshot on a worker. Scans operation sources and executes operation steps using macOS facilities. Enforces syscall-level protections such as no-overwrite behavior and classifies native errors into application error categories. |
 | Watcher gateway | Watches a requested location and reports invalidation; it never refreshes a pane or changes state itself. |
-| Settings gateway | Stores application-defined settings values at an application-support location using an adapter-chosen format and atomic replacement writes. |
-| Worker/runtime driver | Runs blocking port work, owns cancellation primitives and native handles, queues typed results, and requests an event-loop wake-up. |
+| Settings gateway | Stores application-defined settings values at an application-support location using a driver-chosen format and atomic replacement writes. |
 
 Infrastructure code may contain FFI and `unsafe`, but it is isolated here. Each unsafe boundary is minimal and documented with a `SAFETY:` explanation. Native types, file descriptors, Qt objects, and platform error objects never escape this ring.
 
 ### 3.5 Composition root — wiring only
 
-The executable entry point creates concrete drivers, binds them to application-owned ports, creates controllers and presenters, and starts the Qt event loop. It is allowed to know every concrete type. It must not introduce business rules, recover errors, or decide operation outcomes.
+The executable entry point creates concrete drivers and the runtime, creates the workspace, controller, and presenter, and starts the Qt event loop. It is allowed to know every concrete type. It must not introduce business rules, recover errors, or decide operation outcomes.
 
 ## 4. Data and control flow
 
@@ -148,12 +150,12 @@ The executable entry point creates concrete drivers, binds them to application-o
 
 ```
 Qt signal / drag-and-drop / menu action
-  → input controller
-  → application input boundary
-  → workspace use case and state transition
-  → framework-neutral output model
-  → presenter
-  → Qt model or dialog view
+  → Qt delivery driver: UiEvent
+  → input controller: application command
+  → Workspace::handle
+  → application outputs (+ work requests, see 4.2)
+  → presenter: view-models
+  → Qt delivery driver: Qt model notifications or dialog
 ```
 
 Menus, toolbars, drag-and-drop, tests, and future shortcuts all use the same command boundary. The interface adapter may report invalid input, but it does not replace application validation with widget-specific rules.
@@ -161,30 +163,32 @@ Menus, toolbars, drag-and-drop, tests, and future shortcuts all use the same com
 ### 4.2 Blocking work and external events
 
 ```
-application work request
-  → application-owned output port
-  → outer gateway and worker runtime
+work request returned by Workspace::handle
+  → runtime dispatches to a gateway on a worker
   → macOS / storage / watcher
-  → typed application event
-  → serialized application input boundary
-  → new output model
+  → typed result
+  → runtime delivers it on the GUI thread as an application input
+  → Workspace::handle
+  → new outputs and work requests
 ```
 
-The runtime, not the application use case, chooses threads, queues, cancellation handles, and wake-up mechanics. The application requires only that inputs are processed in order by one owner. The Qt delivery layer binds that owner to the GUI thread so that output reaches models there, while all blocking work stays outside it.
+The runtime, not the application, chooses threads, queues, cancellation handles, and wake-up mechanics. The application requires only that inputs are processed in order by one owner. The Qt delivery layer binds that owner to the GUI thread so that output reaches models there, while all blocking work stays outside it.
 
 Every asynchronous request has a request/version token. The application records the token when issuing work and ignores a result that no longer describes the current tab, location, or operation generation. A blocked network or provider-backed location may delay a worker but cannot overwrite newer state or freeze the UI.
 
 ### 4.3 File operations and decisions
 
-File operations cross two boundaries: policy decides whether the operation may proceed and which decision is needed; the outer executor performs the actual file-system work safely.
+File operations cross two boundaries: policy decides whether the operation may proceed and which decision is needed; the outer executor performs the actual file-system work safely. The application drives the operation step by step, so no worker ever waits for a person.
 
-1. An application command creates a validated operation intent and a new operation ID.
-2. The application issues execution work and records its pending/running state.
-3. The executor reports typed progress, conflict, failure, completion, or cancellation. It never chooses a conflict resolution on its own.
-4. A conflict or destructive-operation decision becomes application output. The presenter displays the permitted choices and returns the selected choice as an application command.
-5. The application validates that the choice still belongs to the pending operation, resumes or finishes it through the executor, then requests affected listings to refresh.
+1. An application command creates a validated operation intent and a new operation ID. A destructive command that needs confirmation first becomes a pending decision.
+2. The application requests a source scan. A worker returns the operation plan: the ordered items to process, with symlinks recorded as links and never traversed.
+3. The application issues an execution step for the plan starting at a given item, together with the decisions that apply to it, and records the operation as running.
+4. The executor processes items until the step finishes, the operation is cancelled, or it reaches an item that needs a decision: a destination conflict, a file/folder kind mismatch, or a recoverable error. It then stops, reports typed progress and the item's outcome, and releases its worker. It never chooses a resolution on its own. A directory whose destination is an existing directory is merged without a decision; only the items inside it can conflict.
+5. A required decision becomes application output. The presenter displays the permitted choices and returns the selected choice as an application command.
+6. The application validates that the choice still belongs to the pending operation and item, records it (including any "apply to all" choice, scoped to that operation), and issues the next step from that item. Cancelling simply issues no further step and requests cleanup of the operation's known partial artifacts.
+7. When the operation finishes, the application requests affected listings to refresh.
 
-Product-level delete behavior and confirmation policy are defined in [mvp.md](mvp.md); no driver may infer them from a menu label or platform default.
+Product-level delete behavior, conflict choices, and confirmation policy are defined in [mvp.md](mvp.md); no driver may infer them from a menu label or platform default.
 
 ## 5. Ownership, concurrency, and safety
 
@@ -193,6 +197,7 @@ Product-level delete behavior and confirmation policy are defined in [mvp.md](mv
 | Widgets, `QObject`s, and Qt item models | Qt delivery driver on the GUI thread | A worker never reads or writes them. |
 | Workspace state | Serialized application input boundary | Changes only while processing an application command or event. |
 | Work request lifecycle | Application use case | Identified by request/operation tokens; only matching events affect state. |
+| Operation plan, progress, and pending decisions | Application use case | Held in workspace state between steps; no worker holds a pending decision. |
 | Worker handles, queues, file descriptors, native buffers | Outer runtime and gateway drivers | Never escape as domain or application types. |
 | Rendering caches | Presenter/Qt driver | Rebuildable from application output and never authoritative for policy. |
 
@@ -202,13 +207,13 @@ The desktop runtime uses a small, bounded set of execution contexts. This is a t
 
 | Execution context | Owns and may do | Must not do |
 |---|---|---|
-| GUI/application thread | Qt event loop; widgets and Qt models; the serialized application input boundary; bounded state transitions; output delivery and rendering. | Synchronous file, provider, watch, persistence, process, or other unbounded work; waiting for a worker; holding a lock while invoking Qt or a port. |
-| Worker runtime | Blocking directory reads, file-operation steps, settings I/O, native calls, and CPU work that could delay an event-loop turn. It emits typed events only. | Read or write Qt objects, presenter state, or workspace state; decide product policy; synchronously wait for GUI processing. |
+| GUI/application thread | Qt event loop; widgets and Qt models; the serialized application input boundary; bounded state transitions; output delivery and rendering. | Synchronous file, provider, watch, persistence, process, or other unbounded work; waiting for a worker; holding a lock while invoking Qt or the application. |
+| Worker runtime | Blocking directory reads; listing sort, filter, and delta computation; operation scans and steps; settings I/O; native calls; and other CPU work that could delay an event-loop turn. It emits typed events only. | Read or write Qt objects, presenter state, or workspace state; decide product policy; synchronously wait for GUI processing. |
 | Native callback sources | Minimal watcher or platform callbacks that enqueue an invalidation or typed result. | Refresh a listing, perform I/O, update a model, or call application code re-entrantly. |
 
 The worker runtime is bounded and demand-driven: it uses a configured finite capacity or equivalent controlled execution resource, never an unbounded thread-per-request design. Capacity and scheduling may evolve with measurement, but foreground interaction always has a free GUI event-loop turn; pending work waits in a cancellable queue rather than creating more threads. The runtime may run independent reads or operations concurrently when their resources and safety constraints permit it. It must serialize steps that depend on one another and must prevent conflicting writes to the same operation destination from racing.
 
-Every GUI-thread action is short and non-waiting. Application transitions process one input at a time and return to Qt promptly; a large batch of worker results is drained in bounded slices over successive event-loop turns. Directory-listing results are published as complete, token-identified snapshots or as bounded batches with a final completion event. Progress updates are rate-limited or coalesced, and repeated watcher invalidations for the same location are coalesced into one refresh request. These rules prevent a fast worker, a large directory, or an event storm from starving input, painting, dialogs, or accessibility processing.
+Every GUI-thread action is short and non-waiting. Application transitions process one input at a time and return to Qt promptly; a large batch of worker results is drained in bounded slices over successive event-loop turns. Directory-listing results arrive already sorted and filtered, as token-identified row deltas against the previous listing (or bounded batches with a final completion event); the GUI thread never sorts or diffs a listing. Progress updates are rate-limited or coalesced, and repeated watcher invalidations for the same location are coalesced into one refresh request. These rules prevent a fast worker, a large directory, or an event storm from starving input, painting, dialogs, or accessibility processing.
 
 Cancellation is cooperative and observable. Cancelling a queued request removes it before execution when possible; cancelling running work signals the worker without blocking the GUI thread. Workers check cancellation at safe boundaries, report a typed terminal event, and release native resources before their handle is discarded. A worker that is slow, blocked, or cannot be interrupted may finish later, but its token and cancellation state ensure that it cannot change newer workspace state.
 
@@ -216,35 +221,38 @@ Locks, if the chosen runtime needs them, protect only driver-local mutable resou
 
 The architecture requires these data-safety invariants:
 
-- A conflict is established by the write primitive or an equivalent atomic reservation, never only by a check-then-write race.
+- A conflict is established by the write primitive or an equivalent atomic reservation, never only by a check-then-write race. Name equality is therefore whatever the destination file system decides (including APFS case and Unicode rules); the application never pre-compares names to decide safety.
 - A replacement must not destroy an existing destination until the replacement data is complete and the final switch is safe for the relevant object and volume.
+- Replacement applies only to a file replacing a file. A directory arriving at an existing directory is merged; a file/folder kind mismatch is never resolved by replacing either side.
 - A cross-volume move completes each destination copy successfully before removal of its corresponding source.
-- Recursive work does not unexpectedly follow symlinks and remains inside its intended source and destination trees.
+- Recursive work never follows symlinks: a symlink is copied or moved as a link, and work remains inside its intended source and destination trees. Navigating into a symlinked directory is ordinary navigation, not recursive work.
 - Cancellation leaves completed work intact and removes only known partial artifacts created by the cancelled operation.
 - Errors retain operation and location context. Drivers classify native failures; application chooses recovery choices; presentation chooses wording and accessibility treatment.
 
 ## 6. Error, settings, and observability boundaries
 
-Application errors distinguish conditions that affect available choices: item missing, destination exists, permission denied, privacy restriction, no space, read-only location, cross-device behavior, cancellation, and unknown failure. The macOS gateway maps native errors into those categories and may retain driver-only diagnostics for logging.
+Application errors distinguish conditions that affect available choices: item missing, destination exists, file/folder kind mismatch, permission denied, privacy restriction, no space, item busy, read-only location, cross-device behavior, cancellation, and unknown failure. The macOS gateway maps native errors into those categories and may retain driver-only diagnostics for logging. The application decides which categories are recoverable and therefore offer the choices defined in [mvp.md](mvp.md#file-operation-safeguards).
 
-Settings and session values are application-owned value types. Their file format, storage location, atomic-write mechanism, and corrupt-data handling belong to the settings driver. A failed or corrupt load becomes a recoverable application event; it never makes a serialization format part of domain policy.
+Settings and session values are application-owned value types. The application requests a save of a coalesced session snapshot shortly after any session-relevant change and once more on quit, so a crash loses at most the most recent changes. The file format, storage location, atomic-write mechanism, and corrupt-data handling belong to the settings driver. A failed or corrupt load becomes a recoverable application event; it never makes a serialization format part of domain policy.
 
-Logging is an outer concern. Structured operation context may be passed outward through an application-owned diagnostic port or emitted by a driver, but domain and application decisions must not depend on a logging backend succeeding.
+Logging is an outer concern. Structured operation context may be carried in application outputs and emitted by a driver, but domain and application decisions must not depend on a logging backend succeeding.
 
 ## 7. Verification strategy
 
 | Boundary | Primary tests | Evidence |
 |---|---|---|
-| Domain | Unit and property tests | Invariants and policy choices hold without I/O. |
-| Application | Unit tests with deterministic output-port fakes | Commands/events yield the correct state, outputs, work requests, token rejection, and decision lifecycle. |
-| Adapters | Focused controller/presenter tests | Native input maps to the right application input; output is rendered without duplicating policy. |
+| Domain | Unit and property tests | Pane, tab, history, selection, and cursor invariants and policy choices hold without I/O. |
+| Application | Unit and property tests of `Workspace::handle` | Commands/events yield the correct state, outputs, work requests, token rejection, row deltas, and operation/decision lifecycle, with no fakes. |
+| Adapters | Focused controller/presenter tests without Qt | UI events map to the right application commands; outputs become view-models without duplicating policy. |
 | Drivers | Temporary-directory and Qt smoke tests | Error mapping, exclusive writes, metadata behavior, symlink safety, settings atomicity, model notifications, GUI-thread confinement, cancellation, and bounded event delivery. |
 | End-to-end | Small opt-in macOS scenarios | Volume, privacy, File Provider, watcher, and desktop-service behavior that fakes cannot reproduce. |
 
-Tests that touch a file system stay in a temporary directory. No test uses a real user path, and the application/domain test suites require neither Qt nor macOS facilities.
+Tests that touch a file system stay in a temporary directory. No test uses a real user path, and the domain, application, and adapter test suites require neither Qt nor macOS facilities.
+
+Property tests generate input sequences and check that invariants hold, for example: the cursor and selection always refer to the current listing; only the latest token changes a tab's listing; applying emitted row deltas to the old listing yields the new listing; an operation terminates exactly once and rejects decisions that are not pending; and a restored session equals the saved one apart from unrestorable tabs. A property-testing dev-dependency requires approval under [AGENTS.md](../AGENTS.md) when the first such test is written.
 
 ## 8. Deliberate non-decisions
 
-This architecture does not decide exact macOS API choices, concurrency primitive, worker-capacity value, storage format, sort collation rules, performance thresholds, or distribution tooling. Product choices and remaining key-binding work are defined in [mvp.md](mvp.md).
+This architecture does not decide exact macOS API choices, concurrency primitive, worker-capacity value, operation step size, storage format, sort collation rules, session-save delay, or performance thresholds. Distribution is limited to local, unnotarized, unsandboxed builds (see [§1](#1-goals-and-constraints)); packaging tooling is not decided. Product choices and remaining key-binding work are defined in [mvp.md](mvp.md).
 
 Those choices may vary, but each must preserve the dependency rule, ownership model, and data-safety invariants in this document.

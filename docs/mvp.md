@@ -6,7 +6,7 @@ This document is the single source of truth for the first usable Dual Pane relea
 
 ## Included
 
-- Two side-by-side panes with independent current locations and one active pane.
+- One application window with two side-by-side panes, independent current locations, and one active pane. There is no multi-window mode.
 - Tabs in each pane, including tab history and an active tab.
 - Copy and move between panes; rename; create directory; move to Trash; and permanent deletion.
 - Opening a regular file with its macOS default application.
@@ -29,7 +29,12 @@ A slow or unavailable location affects only the work or pane that depends on it.
 
 - Delete moves items to Trash without a confirmation dialog.
 - Permanent deletion is a separate command and always requires confirmation.
-- A destination conflict offers **Skip**, **Replace**, and **Cancel**. The dialog includes an initially unchecked option to apply the selected choice to all remaining conflicts in that operation.
+- A file whose name already exists as a file at the destination offers **Skip**, **Replace**, and **Cancel**. The dialog includes an initially unchecked option to apply the selected choice to all remaining conflicts in that operation.
+- A folder copied or moved onto an existing folder with the same name is merged into it without asking. Only the files inside that collide ask the conflict question above.
+- A file onto an existing folder with the same name, or a folder onto an existing file, offers **Try Again**, **Skip**, and **Cancel**. Neither item is replaced.
+- A recoverable error, such as permission denied, a privacy restriction, no space, or an item in use, offers **Try Again**, **Skip**, and **Cancel**.
+- Try Again/Skip/Cancel dialogs have no option to apply the choice to remaining items.
+- Opening a symbolic link to a folder navigates into it. Copy and move copy the link itself, and operations never follow links inside folders.
 - The safety invariants for replacement, cross-volume moves, symlinks, cancellation, and error handling are defined in [architecture.md](architecture.md).
 
 ## Session recovery

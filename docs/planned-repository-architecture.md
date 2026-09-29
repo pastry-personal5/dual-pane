@@ -37,7 +37,7 @@ This is the target tree once each crate and its first representative test have e
 │   │   └── tests/
 │   │       ├── stale_listing_results.rs  # token and state behavior
 │   │       └── support/
-│   │           └── mod.rs                # application-test fakes/builders
+│   │           └── mod.rs                # application-test builders
 │   ├── dual-pane-adapters/
 │   │   ├── Cargo.toml
 │   │   ├── src/
@@ -71,9 +71,9 @@ Cargo package and directory names are identical. Their Rust crate identifiers us
 | Package and directory | Rust crate identifier | Ring | Direct Dual Pane dependencies | Owns |
 |---|---|---|---|---|
 | `dual-pane-domain` | `dual_pane_domain` | Domain | None | Platform-neutral value types, invariants, policies, and stable errors. |
-| `dual-pane-application` | `dual_pane_application` | Application | `dual-pane-domain` | Input boundary, workspace state, use cases, application outputs, and application-owned ports. |
-| `dual-pane-adapters` | `dual_pane_adapters` | Interface adapters | `dual-pane-domain`, `dual-pane-application` | Controllers, presenters, gateway translations, and event ingress. |
-| `dual-pane-desktop` | `dual_pane_desktop` | Frameworks, drivers, composition root | The three inner crates | Qt delivery, CXX-Qt bridge, macOS and settings drivers, worker runtime, and executable wiring. |
+| `dual-pane-application` | `dual_pane_application` | Application | `dual-pane-domain` | Input boundary, workspace state, the `Workspace::handle` reducer, application outputs, and work-request and result types. |
+| `dual-pane-adapters` | `dual_pane_adapters` | Interface adapters | `dual-pane-domain`, `dual-pane-application` | Qt-free input controllers and presenters that produce plain-Rust view-models. |
+| `dual-pane-desktop` | `dual_pane_desktop` | Frameworks, drivers, composition root | The three inner crates | Qt delivery, CXX-Qt bridge, the work-request runtime and event delivery, macOS and settings gateways, and executable wiring. |
 
 These rules apply to every crate:
 
@@ -81,8 +81,8 @@ These rules apply to every crate:
 - `dual-pane-domain`, `dual-pane-application`, and `dual-pane-adapters` are libraries. `dual-pane-desktop` is the only binary package and the only crate allowed to start the Qt event loop.
 - Each package declares the dependencies it uses. Versions and source locations shared by multiple packages belong in the workspace manifest; package manifests opt into them explicitly. Adding or changing a dependency still requires the approval required by [AGENTS.md](../AGENTS.md).
 - Default visibility is private. A public item is a deliberate boundary: expose only the types, constructors, traits, and functions another crate needs, and keep inner state and technology details crate-private.
-- Ports are declared in `dual-pane-application`, because the application owns the needs they express. Their concrete implementations live in `dual-pane-desktop`; adapters may translate values at either side but do not move port ownership outward.
-- A module tree follows ownership, not the four ring names. For example, the application crate may add modules for inputs, outputs, ports, and workspace behavior when those concepts acquire code, but it must not mirror every table row or create one-file abstractions without a boundary to protect.
+- Work-request and result types are declared in `dual-pane-application`, because the application owns the needs they express. The runtime and gateways that carry them out live in `dual-pane-desktop`. `dual-pane-adapters` does not depend on Qt or CXX-Qt.
+- A module tree follows ownership, not the four ring names. For example, the application crate may add modules for inputs, outputs, work requests, and workspace behavior when those concepts acquire code, but it must not mirror every table row or create one-file abstractions without a boundary to protect.
 - `dual-pane-desktop` may depend on Qt, CXX-Qt, and macOS implementation dependencies. Those types must be translated before values cross into adapters or application code.
 
 ## File and module naming rules
