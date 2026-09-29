@@ -6,7 +6,7 @@ This file is the **single source of agent instructions**. Do not create `CLAUDE.
 
 ## Project
 
-`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. It is in the **pre-alpha** stage; P1-M2 provides only the Cargo/Qt Widgets stack spike, not file-manager behavior.
+`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. It is in the **pre-alpha** stage: the desktop crate shows an empty Qt Widgets window, and the Qt-free domain, application, and adapter crates implement and test the logic for one-pane listing and directory changes. Nothing reads real directories or shows a listing yet.
 
 See [README.md](README.md) for the user-facing overview, [docs/mvp.md](docs/mvp.md) for product scope, and [docs/architecture.md](docs/architecture.md) for architecture. Design and process docs are indexed at [docs/README.md](docs/README.md).
 
@@ -70,6 +70,8 @@ Follow the dependency, ownership, concurrency, and implementation-boundary rules
 - Use default `rustfmt` formatting. No `clippy` warnings.
 - Limit `unsafe` to what CXX-Qt bridges require. Any other `unsafe` block needs a `// SAFETY:` comment that explains why it is sound.
 - Return errors as `Result` and don't `unwrap()` or `expect()` on I/O in non-test code. File operations fail routinely (permissions, missing files, full disks) and must be reported to the user.
+- Don't use phase words such as `phase`, `phase-1`, `phase1`, or `phase_1` in source-code names: crates, modules, files, types, functions, variables, constants, tests, or build and script targets. Name code after the concept it owns.
+- Don't use `MVP` in any form (`MVP`, `mvp`, `Mvp`) anywhere in source code or scripts, including identifiers, comments, and strings. Those terms belong only in `docs/`.
 
 ## Safety rules for a file manager
 
@@ -117,7 +119,7 @@ This file is loaded in every session, so keep it short. Long-form material belon
   - Use `-q` and `--message-format=short` with cargo, for example `cargo clippy -q --message-format=short --all-targets -- -D warnings`.
   - Filter long logs, for example with `2>&1 | rg 'error|warning' | head -n 40`. Look for `error:` before reading C++ compiler output.
 - **Iterate narrowly, verify once.**
-  - While iterating, run only the affected tests: `cargo test -q <filter>`, or `-p <crate>` for a Qt-free crate, which skips the Qt/C++ build.
+  - While iterating, run only the affected tests: `cargo test -q <filter>`, or `-p <crate>` for a Qt-free crate (`dual-pane-domain`, `dual-pane-application`, `dual-pane-adapters`), which skips the Qt/C++ build.
   - Run the full gate once, before calling the change done.
 - **Look up APIs at the source.**
   - For a bridged type, read its `#[cxx_qt::bridge]` module, not the generated headers.
