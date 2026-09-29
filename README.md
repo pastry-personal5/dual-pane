@@ -2,40 +2,17 @@
 
 Dual Pane is a super-fast file manager for macOS, written in Rust.
 
-> **Status: pre-alpha.** The project has just been initialized. Only a placeholder binary exists, and nothing is usable yet.
+> **Status: pre-alpha.** The current stack spike launches an empty native window; file-manager behavior has not started.
 
 ## Goals
 
 Two file panes sit side by side. Each pane browses its own directory, and files move between them with as little friction as possible.
 
-### MVP scope
+The [MVP scope](docs/mvp.md) defines the included features, user interaction, file-operation safeguards, session behavior, and exclusions.
 
-- Two side-by-side panes, each with an independent current directory, and one active pane at a time
-- Basic file operations: copy and move between panes, rename, delete, and create directory
-- Tabs in each pane, so each side can hold several directories
+## Technology and architecture
 
-Not part of the MVP: a built-in viewer or Quick Look, archive browsing, and remote file systems (SFTP/SMB).
-
-### Interaction model
-
-The keyboard and mouse interaction model is **to be designed**. The project will not copy an existing file manager's keymap (Total Commander, Midnight Commander, and so on) by default.
-
-## Technology
-
-| Area          | Choice                                                                 |
-|---------------|------------------------------------------------------------------------|
-| Language      | Rust (edition 2024)                                                    |
-| GUI toolkit   | Qt 6, **Qt Widgets** (not QML/Qt Quick)                                |
-| Rust ↔ Qt     | [CXX-Qt](https://github.com/KDAB/cxx-qt) plus a thin C++ layer for the widgets |
-| Build system  | Cargo only; `cxx-qt-build` in `build.rs` compiles the C++ and links Qt |
-| Platform      | macOS                                                                  |
-| License       | Apache-2.0                                                             |
-
-### Planned architecture
-
-- **Rust core.** File-system operations, pane and tab state, and the application logic. It is kept independent of Qt so it can be tested without a GUI.
-- **Bridge.** CXX-Qt exposes Rust types to C++ as `QObject`s with properties, signals, and invokables.
-- **C++ widget shim.** A thin layer that builds the Qt Widgets UI (main window, pane views, tabs) and connects it to the bridged objects. It contains no application logic.
+The [architecture](docs/architecture.md) defines the selected technologies, Clean Architecture boundaries, threading, file-operation safety, and verification strategy.
 
 ## Requirements
 
@@ -43,6 +20,7 @@ The keyboard and mouse interaction model is **to be designed**. The project will
 - Rust stable, installed through [rustup](https://rustup.rs/), with the `rustfmt` and `clippy` components
 - Xcode Command Line Tools (`xcode-select --install`), which provide the C++ compiler
 - Qt 6, installed with Homebrew (`brew install qt`) or the official Qt installer
+- LLVM's `clang-format` and `clang-tidy` (`brew install llvm`)
 
 CXX-Qt finds Qt through `qmake`. Either put Qt 6's `qmake` on your `PATH`, or point the `QMAKE` environment variable at it:
 
@@ -50,24 +28,24 @@ CXX-Qt finds Qt through `qmake`. Either put Qt 6's `qmake` on your `PATH`, or po
 export QMAKE="$(brew --prefix qt)/bin/qmake"
 ```
 
-The current scaffold does not link Qt yet. Qt only becomes a hard requirement once the UI work starts.
+The stack spike requires Qt 6.11.2+ and dynamically links Qt Widgets through CXX-Qt. The quality scripts locate Homebrew LLVM automatically; set `CLANG_FORMAT` or `CLANG_TIDY` to override those binaries.
 
 ## Building and running
 
 ```sh
-cargo build
-cargo run
+make build
+make run
 ```
 
 ## Development
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+make check
 ```
 
-The contributor and coding-agent guidelines are in [AGENTS.md](AGENTS.md).
+`make fmt`, `make fmt-check`, `make lint-rust`, `make lint-cpp`, and `make test` expose each part of the gate. Rustfmt has a practical unlimited width (`max_width = 1000000`); clang-format has no column limit (`ColumnLimit: 0`); neither linter applies a line-length diagnostic.
+
+The contributor and coding-agent guidelines are in [AGENTS.md](AGENTS.md). Design docs, the development process (phases and milestones), and plans are in [docs/](docs/README.md).
 
 ## License
 

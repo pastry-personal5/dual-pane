@@ -6,57 +6,64 @@ This file is the **single source of agent instructions**. Do not create `CLAUDE.
 
 ## Project
 
-`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. It is in the **pre-alpha** stage: so far only a placeholder `src/main.rs` exists.
+`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. It is in the **pre-alpha** stage; P1-M2 provides only the Cargo/Qt Widgets stack spike, not file-manager behavior.
 
-See [README.md](README.md) for the user-facing overview and the MVP scope.
+See [README.md](README.md) for the user-facing overview, [docs/mvp.md](docs/mvp.md) for product scope, and [docs/architecture.md](docs/architecture.md) for architecture. Design and process docs are indexed at [docs/README.md](docs/README.md).
+
+## Agent workflow
+
+- Work autonomously only on a clearly scoped task within the active milestone. [docs/roadmap.md](docs/roadmap.md) identifies the active phase; follow its milestones in order unless its phase plan says otherwise.
+- Before starting implementation, read the active phase and milestone plans, the relevant design docs, and the applicable items under "Undecided" below.
+- Before executing a milestone, add a completion checklist to its overview doc. The checklist is its executable definition of done; it replaces a narrative "Done when" section.
+- Check an item only after its acceptance evidence exists. Keep implementation, tests, and directly affected documentation in the same change.
+- A milestone is complete only when every checklist item is checked and `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass. If a command cannot run, leave its related item unchecked and report the exact blocker.
+- Ask before deciding an item in "Undecided", adding or changing a dependency or build tool, deleting user data, or broadly restructuring the repository. Everything else that is within the approved milestone and task scope may proceed without a separate approval.
 
 ## Decided — do not change without asking
 
-- **Language:** Rust, edition 2024.
-- **GUI:** Qt 6 **Widgets**. Do not introduce QML/Qt Quick.
-- **Rust ↔ Qt:** [CXX-Qt](https://github.com/KDAB/cxx-qt) (`cxx-qt`, `cxx-qt-lib`, `cxx-qt-build`). Qt Widgets APIs have no Rust bindings, so a thin C++ layer builds the widgets.
-- **Build system:** Cargo only. `cxx-qt-build` in `build.rs` compiles the C++ and links Qt. Do not add CMake, Corrosion, or qmake project files.
-- **Platform:** macOS only. Don't add Windows or Linux code paths or CI unless asked.
+- **Architecture and technical stack:** [architecture.md](docs/architecture.md).
+- **MVP scope:** [mvp.md](docs/mvp.md).
+- **Interaction model:** [mvp.md](docs/mvp.md).
 - **License:** Apache-2.0 for all project code.
-- **MVP scope:** two panes, copy, move, rename, delete, mkdir, and tabs in each pane. The viewer or Quick Look, archive browsing, and remote file systems are out of scope for now.
+- **Development process:** work is organized in numbered phases (Phase 1, 2, 3, …). Each phase has numbered milestones (Milestone 1, 2, 3, …), and milestone numbering restarts in every phase. Milestone IDs look like `P1-M2`. See [docs/development-process.md](docs/development-process.md).
 
 ## Undecided — ask before inventing
 
-- **Interaction model and keymap:** to be designed. Don't hard-code keybindings modeled on Total Commander, Midnight Commander, or another file manager.
-- **Module and directory layout:** not decided yet, including where the C++ shim lives. Propose a layout before creating one.
-- **Delete semantics:** whether delete means move to Trash or permanent deletion, and how confirmations work.
+The product and architecture decisions above leave only the following item open.
+
+- **Concrete key bindings:** to be designed. Don't copy bindings from Total Commander, Midnight Commander, or another file manager by default.
 
 ## Environment setup
 
 - Rust stable via rustup, plus the `rustfmt` and `clippy` components.
 - Xcode Command Line Tools for the C++ compiler.
 - Qt 6, for example from `brew install qt`. CXX-Qt locates Qt through `qmake`. It checks the `QMAKE` env var first, then looks for `qmake6` or `qmake` on `PATH`. If both Qt 5 and Qt 6 are installed, set `QT_VERSION_MAJOR=6`.
+- LLVM's `clang-format` and `clang-tidy`, for example from `brew install llvm`. The repository scripts locate Homebrew LLVM automatically; `CLANG_FORMAT` and `CLANG_TIDY` can override their paths.
 
   ```sh
   export QMAKE="$(brew --prefix qt)/bin/qmake"
   ```
 
-The current scaffold has no Qt dependency. Qt is needed only once CXX-Qt is added.
+P1-M2 requires Qt 6.11.2+ and dynamically links its Widgets framework through CXX-Qt.
 
 ## Commands
 
 ```sh
-cargo build                                  # build
-cargo run                                    # run the app
-cargo test                                   # run tests
-cargo fmt --all                              # format
-cargo fmt --all -- --check                   # check formatting
-cargo clippy --all-targets -- -D warnings    # lint; must be clean
+make build                                   # Cargo build
+make run                                     # launch the empty Qt Widgets window
+make test                                    # Cargo tests
+make fmt                                     # Rust and C++ formatters
+make fmt-check                               # formatter checks
+make lint-rust                               # Clippy with warnings denied
+make lint-cpp                                # configured clang-tidy
+make check                                   # full formatter, linter, and test gate
 ```
 
-Before you consider a change done, run `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`. All three must pass.
+Before you consider a change done, run `make check` and the equivalent direct commands. Rustfmt uses `max_width = 1000000` and `use_small_heuristics = "Max"`; `.clang-format` uses `ColumnLimit: 0`. Clippy and clang-tidy deliberately have no line-length diagnostic.
 
-## Architecture rules
+## Architecture
 
-- **Keep logic in Rust.** File-system operations, pane and tab state, and file-operation jobs live in Rust modules that do not depend on Qt, so they can be unit-tested without a GUI.
-- **Bridge modules stay thin.** `#[cxx_qt::bridge]` modules expose Rust state to C++ as `QObject`s (properties, signals, invokables). They should mostly delegate to the Qt-free core.
-- **C++ is a view layer only.** The C++ shim constructs and wires up widgets. Don't put business logic there. Use C++17 or newer, as Qt 6 requires.
-- **Don't block the UI thread.** Long-running file operations (copying, moving, deleting, scanning large directories) must run off the GUI thread and report progress back.
+Follow the dependency, ownership, concurrency, and implementation-boundary rules in [architecture.md](docs/architecture.md).
 
 ## Code conventions
 
@@ -67,14 +74,58 @@ Before you consider a change done, run `cargo fmt --all -- --check`, `cargo clip
 ## Safety rules for a file manager
 
 - Tests and examples that touch the file system must work inside a temporary directory (for example, with the `tempfile` crate). Never use real user paths such as `~`, `/`, or `/Users/...`.
-- Never silently overwrite or delete user data. Conflicts (for example, when the destination exists) must be surfaced for a decision.
+- Follow the file-operation safeguards in [mvp.md](docs/mvp.md) and the data-safety invariants in [architecture.md](docs/architecture.md).
 
 ## Dependencies and licensing
 
-- New dependencies must have licenses compatible with Apache-2.0, such as MIT, Apache-2.0, BSD, or Zlib. Don't add GPL-only crates.
+- Ask before adding or changing a dependency or build tool. Approved dependencies must have licenses compatible with Apache-2.0, such as MIT, Apache-2.0, BSD, or Zlib. Don't add GPL-only crates.
 - Qt is linked dynamically and used under the LGPLv3. Don't introduce static linking of Qt.
 
-## Keeping docs current
+## Documentation
 
-- Update `README.md` when user-visible features, requirements, or build steps change.
-- Update this file when build commands, tooling, or project decisions change, or when an item under "Undecided" gets decided.
+- **Where docs go:**
+  - `README.md` is user-facing.
+  - `AGENTS.md` holds the rules for contributors and agents.
+  - `docs/` holds design, research, process, and plan docs.
+  - `docs/archive/` holds docs that are no longer active.
+- **Format:** filenames are lowercase kebab-case. Each doc starts with a title, then a `Status:` line, then a one- to three-sentence summary.
+- **Index:** add every new doc to [docs/README.md](docs/README.md) with a one-line description.
+- **Phases and milestones:** phase plans and milestone status follow [docs/development-process.md](docs/development-process.md).
+- **Milestone checklists:** each milestone overview has a completion checklist instead of a "Done when" section. Check an item only after its acceptance evidence exists; do not mark the milestone `Done` until every item is checked and the full gate passes.
+- **Keep docs current:**
+  - Update docs in the same change as the code or decision they describe.
+  - Update `README.md` when user-visible features, requirements, or build steps change.
+  - Update this file when build commands, tooling, or project decisions change, or when an item under "Undecided" gets decided.
+- **Link, don't copy.** Each fact lives in one place, and other docs link to it.
+- **Archive, don't delete:**
+  1. When a doc is finished or superseded (for example a completed phase plan), set its status line.
+  2. `git mv` it into `docs/archive/`. A finished phase directory (`docs/phase-N/`) moves as a whole into `docs/archive/phases/`.
+  3. Fix every link to it.
+
+  Archived docs are not maintained.
+
+## Token efficiency
+
+This file is loaded in every session, so keep it short. Long-form material belongs in `docs/`.
+
+- **Skip generated and bulky files.**
+  - Never read or search `target/`. It holds build output, including CXX-Qt-generated C++ and moc files.
+  - Search with `rg` or `git grep`, which skip ignored files.
+  - Don't open `Cargo.lock`, `LICENSE`, or `docs/archive/` unless the task needs them.
+- **Read docs narrowly.** Start with `docs/README.md`, then read only what the task needs. For long docs such as `docs/architecture.md`, list the headings with `rg -n '^#' <file>` and read just the relevant section.
+- **Keep build output small.**
+  - Use `-q` and `--message-format=short` with cargo, for example `cargo clippy -q --message-format=short --all-targets -- -D warnings`.
+  - Filter long logs, for example with `2>&1 | rg 'error|warning' | head -n 40`. Look for `error:` before reading C++ compiler output.
+- **Iterate narrowly, verify once.**
+  - While iterating, run only the affected tests: `cargo test -q <filter>`, or `-p <crate>` for a Qt-free crate, which skips the Qt/C++ build.
+  - Run the full gate once, before calling the change done.
+- **Look up APIs at the source.**
+  - For a bridged type, read its `#[cxx_qt::bridge]` module, not the generated headers.
+  - For CXX-Qt, find the pinned version with `rg -A1 'name = "cxx-qt"' Cargo.lock`, then grep that version's source under `~/.cargo/registry/src/`.
+  - For Qt, grep the one header you need under `$(brew --prefix qt)` instead of browsing framework directories.
+- **Ask before building on an undecided item.** Redoing work is the most expensive outcome.
+- **Edit, don't rewrite.**
+  - Change files with targeted edits.
+  - Don't re-read a file to confirm an edit.
+  - Check `git diff --stat` before reading a full diff.
+- **Reply briefly.** Summarize command output and diffs instead of pasting them. This repo is small, so search it directly instead of delegating searches to subagents.

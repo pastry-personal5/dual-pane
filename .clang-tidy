@@ -1,0 +1,16 @@
+# QApplication's required mutable `char **argv` ABI needs a C-style character array and array
+# decay. These three exclusions apply only at that narrow Qt application-construction boundary.
+Checks: >
+  bugprone-*,
+  cert-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -modernize-avoid-c-arrays
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(cpp/include/dual_pane_desktop/.*|cpp/src/.*)$'
+FormatStyle: file
