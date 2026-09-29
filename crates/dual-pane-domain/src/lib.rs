@@ -7,7 +7,7 @@ mod listing_error;
 mod location;
 mod request_token;
 
-pub use entry::{Entry, EntryKind, listing_order};
+pub use entry::{Entry, EntryKind, ListingSortKey, listing_sort_key};
 pub use listing_error::{ListingError, ListingErrorKind};
 pub use location::{EntryName, InvalidEntryName, Location};
 pub use request_token::RequestToken;

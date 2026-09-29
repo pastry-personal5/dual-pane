@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dual_pane_domain::{Entry, EntryName, ListingError, Location, RequestToken};
+use dual_pane_domain::{Entry, EntryName, ListingErrorKind, Location, RequestToken};
 
 /// Everything the workspace reacts to, processed one at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,18 +20,18 @@ pub enum Command {
     GoToParent,
 }
 
-/// The typed result of outside work requested by the workspace.
+/// The typed result of outside work requested by the workspace. The token
+/// alone identifies the request, and so the location it concerns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// A directory read succeeded. `entries` are already in listing order.
     ListingLoaded {
         token: RequestToken,
-        location: Location,
         entries: Arc<[Entry]>,
     },
     ListingFailed {
         token: RequestToken,
-        error: ListingError,
+        kind: ListingErrorKind,
     },
 }
 

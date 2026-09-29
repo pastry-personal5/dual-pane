@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use dual_pane_application::{Command, Event, Input, Transition, WorkRequest, Workspace};
-use dual_pane_domain::{Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, RequestToken};
+use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, Location, RequestToken};
 
 pub fn name(text: &str) -> EntryName {
     EntryName::new(text).unwrap()
@@ -47,18 +47,18 @@ pub fn navigate(workspace: &mut Workspace, to: Location) -> RequestToken {
     read_token(&workspace.handle(Command::Navigate(to).into()))
 }
 
-pub fn loaded(token: RequestToken, location: Location, list: Vec<Entry>) -> Input {
-    Event::ListingLoaded { token, location, entries: entries(list) }.into()
+pub fn loaded(token: RequestToken, list: Vec<Entry>) -> Input {
+    Event::ListingLoaded { token, entries: entries(list) }.into()
 }
 
-pub fn failed(token: RequestToken, location: Location, kind: ListingErrorKind) -> Input {
-    Event::ListingFailed { token, error: ListingError::new(location, kind) }.into()
+pub fn failed(token: RequestToken, kind: ListingErrorKind) -> Input {
+    Event::ListingFailed { token, kind }.into()
 }
 
 /// A workspace that shows `at` with `list`.
 pub fn showing(at: Location, list: Vec<Entry>) -> Workspace {
     let mut workspace = Workspace::new();
     let token = navigate(&mut workspace, at.clone());
-    workspace.handle(loaded(token, at, list));
+    workspace.handle(loaded(token, list));
     workspace
 }

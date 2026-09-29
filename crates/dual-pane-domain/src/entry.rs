@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 
+use unicode_normalization::UnicodeNormalization;
+
 use crate::EntryName;
 
 /// What kind of object a directory entry is, as classified by the platform.
@@ -38,77 +40,71 @@ impl Entry {
     }
 }
 
-/// The order of entries in a listing.
+/// The position of an entry in a listing. Compute it once per entry, for
+/// example with `sort_by_cached_key(listing_sort_key)`, and compare keys.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ListingSortKey {
+    /// 0 for entries that can be entered, so they come first.
+    group: u8,
+    name: Vec<NameToken>,
+    /// The exact bytes break every remaining tie, so the order is total.
+    exact: Box<[u8]>,
+}
+
+/// The sort key for `entry`.
 ///
 /// Entries that can be entered come first. Names then compare in natural,
-/// case-insensitive order: runs of ASCII digits compare by numeric value and
-/// other characters compare by their Unicode lowercase form. The exact bytes
-/// break every remaining tie, so the order is total.
-pub fn listing_order(a: &Entry, b: &Entry) -> Ordering {
-    b.can_enter().cmp(&a.can_enter()).then_with(|| natural_order(&a.name.to_text_lossy(), &b.name.to_text_lossy())).then_with(|| a.name.as_bytes().cmp(b.name.as_bytes()))
+/// case-insensitive order on their canonically composed (NFC) text: runs of
+/// ASCII digits compare by numeric value and other characters by their
+/// Unicode lowercase form. Names that differ only in Unicode composition
+/// therefore sort together; they stay distinct entries.
+pub fn listing_sort_key(entry: &Entry) -> ListingSortKey {
+    let text: String = entry.name.to_text_lossy().nfc().collect();
+    ListingSortKey { group: u8::from(!entry.can_enter()), name: name_tokens(&text), exact: entry.name.as_bytes().into() }
 }
 
-fn natural_order(a: &str, b: &str) -> Ordering {
-    let mut a = Tokens { rest: a };
-    let mut b = Tokens { rest: b };
-    loop {
-        match (a.next(), b.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) => match x.cmp(&y) {
-                Ordering::Equal => {}
-                unequal => return unequal,
-            },
-        }
-    }
+/// A unit of natural ordering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NameToken {
+    /// A run of ASCII digits with leading zeros removed, so the numeric value
+    /// is compared by length and then digit by digit, without overflow.
+    Number(Box<str>),
+    /// The lowercase form of one character that is not an ASCII digit.
+    Text(Box<str>),
 }
 
-/// A unit of natural ordering: a run of ASCII digits or one other character.
-#[derive(Debug, PartialEq, Eq)]
-enum Token<'a> {
-    /// Digits with leading zeros removed, so the numeric value is compared
-    /// by length and then digit by digit, without overflow.
-    Number(&'a str),
-    Char(char),
-}
-
-impl Ord for Token<'_> {
+impl Ord for NameToken {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Token::Number(x), Token::Number(y)) => x.len().cmp(&y.len()).then_with(|| x.cmp(y)),
-            (Token::Char(x), Token::Char(y)) => x.to_lowercase().cmp(y.to_lowercase()),
-            // A character token is never an ASCII digit, and its lowercase
-            // form never starts with one, so '0' stands for every number.
-            (Token::Number(_), Token::Char(y)) => std::iter::once('0').cmp(y.to_lowercase()),
-            (Token::Char(x), Token::Number(_)) => x.to_lowercase().cmp(std::iter::once('0')),
+            (Self::Number(x), Self::Number(y)) => x.len().cmp(&y.len()).then_with(|| x.cmp(y)),
+            (Self::Text(x), Self::Text(y)) => x.cmp(y),
+            // Text never starts with an ASCII digit, so "0" stands for every
+            // number and a number never equals text.
+            (Self::Number(_), Self::Text(y)) => "0".cmp(y),
+            (Self::Text(x), Self::Number(_)) => (**x).cmp("0"),
         }
     }
 }
 
-impl PartialOrd for Token<'_> {
+impl PartialOrd for NameToken {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-struct Tokens<'a> {
-    rest: &'a str,
-}
-
-impl<'a> Iterator for Tokens<'a> {
-    type Item = Token<'a>;
-
-    fn next(&mut self) -> Option<Token<'a>> {
-        let first = self.rest.chars().next()?;
+fn name_tokens(text: &str) -> Vec<NameToken> {
+    let mut tokens = Vec::new();
+    let mut rest = text;
+    while let Some(first) = rest.chars().next() {
         if first.is_ascii_digit() {
-            let end = self.rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(self.rest.len());
-            let (digits, rest) = self.rest.split_at(end);
-            self.rest = rest;
-            Some(Token::Number(digits.trim_start_matches('0')))
+            let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+            let (digits, tail) = rest.split_at(end);
+            tokens.push(NameToken::Number(digits.trim_start_matches('0').into()));
+            rest = tail;
         } else {
-            self.rest = &self.rest[first.len_utf8()..];
-            Some(Token::Char(first))
+            tokens.push(NameToken::Text(first.to_lowercase().collect::<String>().into()));
+            rest = &rest[first.len_utf8()..];
         }
     }
+    tokens
 }

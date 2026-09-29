@@ -19,7 +19,7 @@ fn navigating_requests_a_directory_read_and_reports_loading() {
 fn a_matching_result_replaces_the_listing() {
     let mut workspace = Workspace::new();
     let token = navigate(&mut workspace, location(&["home"]));
-    let transition = workspace.handle(loaded(token, location(&["home"]), vec![dir("docs"), file("a.txt")]));
+    let transition = workspace.handle(loaded(token, vec![dir("docs"), file("a.txt")]));
     assert_eq!(transition.outputs, [Output::ListingReplaced { location: location(&["home"]), entries: entries(vec![dir("docs"), file("a.txt")]) }]);
     assert!(transition.work.is_empty());
     assert_eq!(workspace.location(), Some(&location(&["home"])));
@@ -39,7 +39,7 @@ fn results_are_kept_in_the_order_they_arrive() {
 fn a_failed_read_keeps_the_previous_listing_and_reports_the_error() {
     let mut workspace = showing(location(&["home"]), vec![dir("secret")]);
     let token = read_token(&workspace.handle(Command::OpenEntry(name("secret")).into()));
-    let transition = workspace.handle(failed(token, location(&["home", "secret"]), ListingErrorKind::PermissionDenied));
+    let transition = workspace.handle(failed(token, ListingErrorKind::PermissionDenied));
     assert_eq!(transition.outputs, [Output::ListingFailed { error: ListingError::new(location(&["home", "secret"]), ListingErrorKind::PermissionDenied) }]);
     assert_eq!(workspace.location(), Some(&location(&["home"])));
     assert_eq!(workspace.entries(), [dir("secret")]);

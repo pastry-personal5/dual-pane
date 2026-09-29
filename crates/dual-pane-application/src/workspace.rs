@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dual_pane_domain::{Entry, EntryName, ListingError, Location, RequestToken};
+use dual_pane_domain::{Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken};
 
 use crate::{Command, Event, Input, Output, WorkRequest};
 
@@ -47,8 +47,8 @@ impl Workspace {
             Input::Command(Command::Navigate(location)) => self.navigate(location),
             Input::Command(Command::OpenEntry(name)) => self.open_entry(&name),
             Input::Command(Command::GoToParent) => self.go_to_parent(),
-            Input::Event(Event::ListingLoaded { token, location, entries }) => self.listing_loaded(token, location, entries),
-            Input::Event(Event::ListingFailed { token, error }) => self.listing_failed(token, error),
+            Input::Event(Event::ListingLoaded { token, entries }) => self.listing_loaded(token, entries),
+            Input::Event(Event::ListingFailed { token, kind }) => self.listing_failed(token, kind),
         }
     }
 
@@ -68,6 +68,10 @@ impl Workspace {
     }
 
     fn navigate(&mut self, location: Location) -> Transition {
+        // Restarting a read that is already under way would only delay it.
+        if self.loading_location() == Some(&location) {
+            return Transition::default();
+        }
         let token = self.last_token.map_or_else(RequestToken::first, RequestToken::next);
         self.last_token = Some(token);
         let mut work = Vec::new();
@@ -98,20 +102,24 @@ impl Workspace {
         }
     }
 
-    fn listing_loaded(&mut self, token: RequestToken, location: Location, entries: Arc<[Entry]>) -> Transition {
-        if !self.pane.pending.as_ref().is_some_and(|pending| pending.token == token && pending.location == location) {
+    fn listing_loaded(&mut self, token: RequestToken, entries: Arc<[Entry]>) -> Transition {
+        let Some(pending) = self.take_pending(token) else {
             return Transition::default();
-        }
-        self.pane.pending = None;
+        };
+        let location = pending.location;
         self.pane.listing = Some(Listing { location: location.clone(), entries: Arc::clone(&entries) });
         Transition { outputs: vec![Output::ListingReplaced { location, entries }], work: Vec::new() }
     }
 
-    fn listing_failed(&mut self, token: RequestToken, error: ListingError) -> Transition {
-        if !self.pane.pending.as_ref().is_some_and(|pending| pending.token == token) {
+    fn listing_failed(&mut self, token: RequestToken, kind: ListingErrorKind) -> Transition {
+        let Some(pending) = self.take_pending(token) else {
             return Transition::default();
-        }
-        self.pane.pending = None;
-        Transition { outputs: vec![Output::ListingFailed { error }], work: Vec::new() }
+        };
+        Transition { outputs: vec![Output::ListingFailed { error: ListingError::new(pending.location, kind) }], work: Vec::new() }
+    }
+
+    /// Ends the pending navigation if `token` identifies it.
+    fn take_pending(&mut self, token: RequestToken) -> Option<PendingNavigation> {
+        self.pane.pending.take_if(|pending| pending.token == token)
     }
 }

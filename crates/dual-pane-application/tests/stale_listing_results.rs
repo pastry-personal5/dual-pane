@@ -1,7 +1,7 @@
 mod support;
 
 use dual_pane_application::{Command, Event, Input, Output, Transition, WorkRequest, Workspace};
-use dual_pane_domain::{Entry, ListingErrorKind, Location, RequestToken};
+use dual_pane_domain::{Entry, ListingError, ListingErrorKind, Location, RequestToken};
 use proptest::prelude::*;
 use support::*;
 
@@ -20,8 +20,8 @@ fn a_superseded_result_changes_nothing() {
     let mut workspace = Workspace::new();
     let first = navigate(&mut workspace, location(&["a"]));
     navigate(&mut workspace, location(&["b"]));
-    assert_eq!(workspace.handle(loaded(first, location(&["a"]), vec![file("x")])), Transition::default());
-    assert_eq!(workspace.handle(failed(first, location(&["a"]), ListingErrorKind::Unknown)), Transition::default());
+    assert_eq!(workspace.handle(loaded(first, vec![file("x")])), Transition::default());
+    assert_eq!(workspace.handle(failed(first, ListingErrorKind::Unknown)), Transition::default());
     assert_eq!(workspace.location(), None);
     assert_eq!(workspace.loading_location(), Some(&location(&["b"])));
 }
@@ -30,8 +30,8 @@ fn a_superseded_result_changes_nothing() {
 fn a_result_that_arrives_twice_applies_once() {
     let mut workspace = Workspace::new();
     let token = navigate(&mut workspace, location(&["a"]));
-    workspace.handle(loaded(token, location(&["a"]), vec![file("x")]));
-    assert_eq!(workspace.handle(loaded(token, location(&["a"]), vec![file("y")])), Transition::default());
+    workspace.handle(loaded(token, vec![file("x")]));
+    assert_eq!(workspace.handle(loaded(token, vec![file("y")])), Transition::default());
     assert_eq!(workspace.entries(), [file("x")]);
 }
 
@@ -39,17 +39,26 @@ fn a_result_that_arrives_twice_applies_once() {
 fn an_unknown_token_changes_nothing() {
     let mut workspace = showing(location(&["a"]), vec![file("x")]);
     let unknown = RequestToken::first().next().next().next();
-    assert_eq!(workspace.handle(loaded(unknown, location(&["b"]), vec![])), Transition::default());
-    assert_eq!(workspace.handle(failed(unknown, location(&["b"]), ListingErrorKind::ItemMissing)), Transition::default());
+    assert_eq!(workspace.handle(loaded(unknown, vec![])), Transition::default());
+    assert_eq!(workspace.handle(failed(unknown, ListingErrorKind::ItemMissing)), Transition::default());
     assert_eq!(workspace.entries(), [file("x")]);
 }
 
 #[test]
-fn a_result_for_a_different_location_changes_nothing() {
+fn navigating_to_the_location_being_loaded_keeps_the_pending_read() {
     let mut workspace = Workspace::new();
     let token = navigate(&mut workspace, location(&["a"]));
-    assert_eq!(workspace.handle(loaded(token, location(&["b"]), vec![])), Transition::default());
-    assert_eq!(workspace.loading_location(), Some(&location(&["a"])));
+    assert_eq!(workspace.handle(Command::Navigate(location(&["a"])).into()), Transition::default());
+    workspace.handle(loaded(token, vec![file("x")]));
+    assert_eq!(workspace.location(), Some(&location(&["a"])));
+}
+
+#[test]
+fn a_result_is_committed_at_the_location_its_token_was_issued_for() {
+    let mut workspace = Workspace::new();
+    let token = navigate(&mut workspace, location(&["a"]));
+    let transition = workspace.handle(failed(token, ListingErrorKind::PrivacyRestricted));
+    assert_eq!(transition.outputs, [Output::ListingFailed { error: ListingError::new(location(&["a"]), ListingErrorKind::PrivacyRestricted) }]);
 }
 
 /// One step of a generated session. Result steps refer to an earlier
@@ -84,6 +93,10 @@ proptest! {
         for step in steps {
             match step {
                 Step::Navigate(target) => {
+                    if pending.is_some_and(|index| issued[index].1 == place(target)) {
+                        prop_assert_eq!(workspace.handle(Command::Navigate(place(target)).into()), Transition::default());
+                        continue;
+                    }
                     let token = navigate(&mut workspace, place(target));
                     prop_assert!(issued.iter().all(|(earlier, _)| *earlier != token), "tokens are never reused");
                     issued.push((token, place(target)));
@@ -91,7 +104,7 @@ proptest! {
                 }
                 Step::Load { navigation, entries } => {
                     let Some((token, location)) = issued.get(navigation).cloned() else { continue };
-                    let transition = workspace.handle(Input::Event(Event::ListingLoaded { token, location: location.clone(), entries: listing(entries).into() }));
+                    let transition = workspace.handle(Input::Event(Event::ListingLoaded { token, entries: listing(entries).into() }));
                     if pending == Some(navigation) {
                         prop_assert_eq!(transition.outputs.len(), 1);
                         expected = Some((location, listing(entries)));
@@ -102,10 +115,9 @@ proptest! {
                 }
                 Step::Fail { navigation } => {
                     let Some((token, location)) = issued.get(navigation).cloned() else { continue };
-                    let transition = workspace.handle(failed(token, location, ListingErrorKind::PermissionDenied));
+                    let transition = workspace.handle(failed(token, ListingErrorKind::PermissionDenied));
                     if pending == Some(navigation) {
-                        let reported_failure = matches!(transition.outputs.as_slice(), [Output::ListingFailed { .. }]);
-                        prop_assert!(reported_failure);
+                        prop_assert_eq!(transition.outputs, vec![Output::ListingFailed { error: ListingError::new(location, ListingErrorKind::PermissionDenied) }]);
                         pending = None;
                     } else {
                         prop_assert_eq!(transition, Transition::default());

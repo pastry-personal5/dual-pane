@@ -10,3 +10,4 @@ license = "Apache-2.0"
 dual-pane-application = { path = "crates/dual-pane-application" }
 dual-pane-domain = { path = "crates/dual-pane-domain" }
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
+unicode-normalization = "=0.1.25"
