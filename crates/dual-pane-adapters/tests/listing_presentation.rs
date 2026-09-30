@@ -18,6 +18,7 @@ fn an_empty_pane_shows_nothing() {
     assert_eq!(presenter.view().location_text(), "");
     assert!(!presenter.view().is_loading());
     assert_eq!(presenter.view().error(), None);
+    assert_eq!(presenter.view().status_text(), "");
     assert_eq!(presenter.view().row_count(), 0);
 }
 
@@ -57,7 +58,7 @@ fn loading_keeps_the_current_listing_and_clears_the_last_error() {
 
 #[test]
 fn a_failure_keeps_the_listing_and_explains_each_error_kind() {
-    let cases = [(ListingErrorKind::ItemMissing, "“/a/b” no longer exists."), (ListingErrorKind::NotADirectory, "“/a/b” is not a folder."), (ListingErrorKind::PermissionDenied, "You don’t have permission to open “/a/b”."), (ListingErrorKind::PrivacyRestricted, "macOS privacy settings don’t allow Dual Pane to open “/a/b”."), (ListingErrorKind::Unknown, "“/a/b” couldn’t be opened.")];
+    let cases = [(ListingErrorKind::ItemMissing, "“/a/b” no longer exists."), (ListingErrorKind::NotADirectory, "“/a/b” is not a folder."), (ListingErrorKind::PermissionDenied, "You don’t have permission to open “/a/b”."), (ListingErrorKind::PrivacyRestricted, "macOS privacy settings don’t allow Dual Pane to open “/a/b”."), (ListingErrorKind::Internal, "Dual Pane couldn’t finish reading this folder unexpectedly."), (ListingErrorKind::Unknown, "“/a/b” couldn’t be opened.")];
     for (kind, message) in cases {
         let mut presenter = PanePresenter::new();
         presenter.apply(&Output::ListingReplaced { location: location(&["a"]), entries: Arc::from(vec![Entry::new(name(b"x"), EntryKind::File)]) });
@@ -69,4 +70,15 @@ fn a_failure_keeps_the_listing_and_explains_each_error_kind() {
         assert_eq!(view.location_text(), "/a");
         assert_eq!(view.row_count(), 1);
     }
+}
+
+#[test]
+fn cancellation_clears_loading_without_a_message() {
+    let mut presenter = PanePresenter::new();
+    presenter.apply(&Output::ListingReplaced { location: location(&["a"]), entries: Arc::from(Vec::new()) });
+    presenter.apply(&Output::LoadingStarted { location: location(&["a", "b"]) });
+    presenter.apply(&Output::ListingCancelled);
+    assert!(!presenter.view().is_loading());
+    assert_eq!(presenter.view().error(), None);
+    assert_eq!(presenter.view().status_text(), "/a");
 }

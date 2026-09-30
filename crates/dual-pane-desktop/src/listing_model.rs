@@ -1,11 +1,11 @@
 use std::pin::Pin;
 
-use cxx_qt::{CxxQtType, Threading};
+use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QModelIndex, QString, QVariant};
-use dual_pane_adapters::PaneViewModel;
+use dual_pane_adapters::{PaneViewModel, reader_start_failure_status};
 use dual_pane_application::Command;
 
-use crate::pane_session::{DRAIN_SLICE, PaneSession, PaneStartup, ViewChange, status_text};
+use crate::pane_session::{DRAIN_SLICE, PaneSession, PaneStartup, ViewChange};
 use crate::runtime::Runtime;
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
@@ -32,6 +32,8 @@ pub mod ffi {
         /// Runs the Qt application with one pane until its window closes, and
         /// returns the event loop's exit status.
         fn run_desktop(startup: Box<PaneStartup>) -> i32;
+        /// Posts a C++-owned queued drain event when the model is still alive.
+        fn schedule_gui_drain();
     }
 
     unsafe extern "RustQt" {
@@ -57,6 +59,10 @@ pub mod ffi {
 
         /// Starts the pane's worker and its first navigation.
         fn start(self: Pin<&mut ListingModel>, startup: Box<PaneStartup>);
+
+        /// Drains one slice. The C++ scheduler calls this and schedules the
+        /// next slice only after this RustQt call has returned.
+        fn drain(self: Pin<&mut ListingModel>) -> bool;
     }
 
     impl cxx_qt::Threading for ListingModel {}
@@ -94,12 +100,7 @@ impl ffi::ListingModel {
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<PaneStartup>) {
         let PaneStartup { location, source } = *startup;
-        let thread = self.qt_thread();
-        let wake = Box::new(move || {
-            // Queuing fails only once the model is destroyed, when there is
-            // nothing left to update.
-            thread.queue(Self::drain).ok();
-        });
+        let wake = Box::new(ffi::schedule_gui_drain);
         match Runtime::start(source, wake) {
             Ok(runtime) => {
                 let mut session = PaneSession::new(runtime, DRAIN_SLICE);
@@ -107,21 +108,19 @@ impl ffi::ListingModel {
                 self.as_mut().rust_mut().session = Some(session);
                 self.apply(change);
             }
-            Err(error) => self.set_status_text(QString::from(format!("Dual Pane couldn’t start reading folders: {error}").as_str())),
+            Err(_error) => self.set_status_text(QString::from(reader_start_failure_status())),
         }
     }
 
-    /// Handles one slice of delivered results on the GUI thread, and queues
-    /// another drain if more remain so input and painting run in between.
-    fn drain(mut self: Pin<&mut Self>) {
+    /// Handles one slice on the GUI thread. C++ owns rescheduling so no Qt
+    /// work is posted while this RustQt call holds its shared lock.
+    fn drain(mut self: Pin<&mut Self>) -> bool {
         let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
-            return;
+            return false;
         };
         let drained = session.drain();
         self.as_mut().apply(drained.change);
-        if drained.more_pending {
-            self.qt_thread().queue(Self::drain).ok();
-        }
+        drained.more_pending
     }
 
     /// Notifies Qt of `change`, copying the session's view into `shown`.
@@ -141,7 +140,7 @@ impl ffi::ListingModel {
         if reset {
             self.as_mut().end_reset_model();
         }
-        let text = status_text(&self.rust().shown);
+        let text = self.rust().shown.status_text().to_owned();
         self.set_status_text(QString::from(text.as_str()));
     }
 

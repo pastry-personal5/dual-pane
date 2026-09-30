@@ -134,7 +134,7 @@ This outer ring owns concrete technology and resource lifetime. It includes the 
 |---|---|
 | Qt delivery | Constructs the single window and its widgets, owns Qt object lifetime, translates Qt signals into `UiEvent` values for the input controller, and applies presenter view-models to Qt models and dialogs. CXX-Qt types stay here because they name a framework. |
 | Runtime | Receives work requests from the reducer, dispatches them to gateways on the worker pool, owns cancellation primitives and native handles, and delivers every typed result as an application input on the GUI thread. A worker, watcher, or dialog never mutates workspace state directly. |
-| File-system gateway | Reads directories, then sorts, filters, and computes row deltas against the previous listing snapshot on a worker. Scans operation sources and executes operation steps using macOS facilities. Enforces syscall-level protections such as no-overwrite behavior and classifies native errors into application error categories. |
+| File-system gateway | Reads directories, then sorts, filters, and computes row deltas against the previous listing snapshot on a worker. Scans operation sources and executes operation steps using macOS facilities. Probes mounted-volume capabilities outside the GUI thread, enforces only the syscall-level protections the mounted file system actually supports, and classifies native errors into application error categories. |
 | Watcher gateway | Watches a requested location and reports invalidation; it never refreshes a pane or changes state itself. |
 | Settings gateway | Stores application-defined settings values at an application-support location using a driver-chosen format and atomic replacement writes. |
 
@@ -194,7 +194,7 @@ Product-level delete behavior, conflict choices, and confirmation policy are def
 
 | Resource | Owner | Rule |
 |---|---|---|
-| Widgets, `QObject`s, and Qt item models | Qt delivery driver on the GUI thread | A worker never reads or writes them. |
+| Widgets, GUI-facing `QObject`s, and Qt item models | Qt delivery driver on the GUI thread | They are created, used, and destroyed on their affinity thread. A worker never reads or writes them. |
 | Workspace state | Serialized application input boundary | Changes only while processing an application command or event. |
 | Work request lifecycle | Application use case | Identified by request/operation tokens; only matching events affect state. |
 | Operation plan, progress, and pending decisions | Application use case | Held in workspace state between steps; no worker holds a pending decision. |
@@ -203,21 +203,121 @@ Product-level delete behavior, conflict choices, and confirmation policy are def
 
 ### 5.1 Threading and responsiveness
 
-The desktop runtime uses a small, bounded set of execution contexts. This is a threading policy, not a commitment to a particular executor or synchronization crate:
+The desktop runtime uses a small, bounded set of execution contexts. These are architectural roles, not a commitment to a particular executor, synchronization crate, or one operating-system thread per row:
 
 | Execution context | Owns and may do | Must not do |
 |---|---|---|
-| GUI/application thread | Qt event loop; widgets and Qt models; the serialized application input boundary; bounded state transitions; output delivery and rendering. | Synchronous file, provider, watch, persistence, process, or other unbounded work; waiting for a worker; holding a lock while invoking Qt or the application. |
-| Worker runtime | Blocking directory reads; listing sort, filter, and delta computation; operation scans and steps; settings I/O; native calls; and other CPU work that could delay an event-loop turn. It emits typed events only. | Read or write Qt objects, presenter state, or workspace state; decide product policy; synchronously wait for GUI processing. |
+| GUI/application thread | Qt event loop; widgets and Qt models; the serialized application input boundary; bounded state transitions; output delivery and rendering. | Synchronous file, provider, watch, persistence, process, or other unbounded work; waiting for a worker; blocking queue submission; a blocking queued connection; nested event-loop pumping; or holding a lock while invoking Qt or application code. |
+| Runtime coordinator | Non-blocking work admission; bounded queues; prioritization and fairness; request cancellation state; worker supervision; and terminal-result accounting. | Perform file I/O or expensive computation; call application or Qt code; wait for a user decision; or make product-policy decisions. |
+| Worker execution | Blocking directory reads; listing sort, filter, and delta computation; operation scans and steps; settings I/O; native calls; and other work that could delay an event-loop turn. It emits typed events only. | Read or write Qt objects, presenter state, or workspace state; decide product policy; synchronously wait for GUI processing; or hold a destination lease while waiting for a person. |
 | Native callback sources | Minimal watcher or platform callbacks that enqueue an invalidation or typed result. | Refresh a listing, perform I/O, update a model, or call application code re-entrantly. |
 
-The worker runtime is bounded and demand-driven: it uses a configured finite capacity or equivalent controlled execution resource, never an unbounded thread-per-request design. Capacity and scheduling may evolve with measurement, but foreground interaction always has a free GUI event-loop turn; pending work waits in a cancellable queue rather than creating more threads. The runtime may run independent reads or operations concurrently when their resources and safety constraints permit it. It must serialize steps that depend on one another and must prevent conflicting writes to the same operation destination from racing.
+Nothing may simulate responsiveness by calling `QCoreApplication::processEvents`, entering a nested event loop, or using a synchronous cross-thread callback. Those techniques permit re-entrancy and make state ordering implicit. Dialogs and other user decisions are asynchronous: opening the UI returns to Qt, and the eventual response arrives as a new application command. Cross-thread Qt delivery always uses a queued invocation; a direct or blocking queued connection is not used across thread boundaries.
 
-Every GUI-thread action is short and non-waiting. Application transitions process one input at a time and return to Qt promptly; a large batch of worker results is drained in bounded slices over successive event-loop turns. Directory-listing results arrive already sorted and filtered, as token-identified row deltas against the previous listing (or bounded batches with a final completion event); the GUI thread never sorts or diffs a listing. Progress updates are rate-limited or coalesced, and repeated watcher invalidations for the same location are coalesced into one refresh request. These rules prevent a fast worker, a large directory, or an event storm from starving input, painting, dialogs, or accessibility processing.
+Every GUI-thread action is short and non-waiting. Application transitions process one input at a time and return to Qt promptly. Worker results are drained in slices bounded by both item count and elapsed time, over successive event-loop turns; a count limit alone is insufficient because individual results may have very different costs. The GUI thread applies only already-computed model changes. It never enumerates, sorts, filters, diffs, formats a complete large listing, resolves icons through blocking I/O, or eagerly converts every row to a Qt value. A full replacement swaps immutable backing data and issues the required Qt notification in bounded work; incremental results use bounded row-delta batches. All `QAbstractItemModel` API and begin/end notification pairs remain on the model's GUI thread.
 
-Cancellation is cooperative and observable. Cancelling a queued request removes it before execution when possible; cancelling running work signals the worker without blocking the GUI thread. Workers check cancellation at safe boundaries, report a typed terminal event, and release native resources before their handle is discarded. A worker that is slow, blocked, or cannot be interrupted may finish later, but its token and cancellation state ensure that it cannot change newer workspace state.
+The event-loop budget covers controller mapping, one `Workspace::handle` transition, presentation, model notification, and scheduling the next drain. Progress updates are rate-limited or coalesced, repeated watcher invalidations for the same location become one refresh request, and paint is requested with Qt's coalescing update path rather than forced synchronously. Exact slice sizes and time budgets are measured and tuned later, but an event storm, large directory, or fast worker must always leave turns for input, painting, window management, dialogs, and accessibility.
 
 Locks, if the chosen runtime needs them, protect only driver-local mutable resources and have a narrow lifetime. Workspace state is not shared behind a mutex: its serialized input owner is its synchronization mechanism. Qt thread affinity and application event ordering therefore remain visible architectural rules rather than accidental properties of locking.
+
+### 5.2 Planned desktop execution model
+
+**Status: Planned.** This is the target after the P1-M4 single-worker listing runtime. It refines the required behavior above without selecting an executor, synchronization crate, pool-size value, or platform cancellation API.
+
+The runtime has a GUI-thread endpoint, a coordinator, finite worker capacity, and a GUI-bound result endpoint. The GUI endpoint is the only component that may call the controller, `Workspace::handle`, presenter, CXX-Qt bridge, Qt models, or widgets. Dispatch is an O(1), non-blocking handoff. Workers own only a job's copied request data, cancellation handle, gateway-local resources, and result publisher; they have no reference to workspace or presenter state, a GUI `QObject`, or a callable that can re-enter the GUI thread.
+
+#### Workload isolation and scheduling
+
+The runtime exposes logical execution lanes. An implementation may use separate pools or a shared physical pool only if it preserves the isolation, capacity, and scheduling guarantees in this table:
+
+| Lane | Work | Scheduling rule |
+|---|---|
+| Foreground blocking I/O | Directory enumeration, metadata needed for visible rows, navigation, and other latency-sensitive reads. | Superseded listing requests are cancelled before admission when possible. It has reserved service capacity so bulk operations and CPU work cannot occupy every slot. Provider and remote-volume calls have separate bounded allowances, so one blocked mount cannot consume all foreground capacity. |
+| File-operation I/O | Copy, move, rename, create, delete, source scans, and cancellation cleanup. | Fair progress with bounded parallelism. Dependent steps and writes with overlapping destination scopes are serialized by runtime-owned destination leases. A step releases its worker and lease before asking for a decision. |
+| CPU transformation | Sort, filter, diff, checksum, and other computation over data already read. | Bounded independently from blocking I/O so CPU saturation cannot prevent a read or cancellation cleanup from starting. Long computations split into cancellable units. |
+| Serialized services | Settings persistence and native facilities that require one owner or a particular callback context. | Each service has one ordered owner and coalesces replaceable work such as session snapshots. It receives a dedicated thread only when the native API requires one. |
+
+Every lane and queue has a configured finite bound; there is no unbounded thread-per-request fallback. Capacity is based on measurement, workload type, and memory limits rather than equating every task with a CPU core. Fair scheduling prevents sustained navigation from starving file-operation cleanup and prevents background refreshes from delaying foreground navigation. Slow or uninterruptible I/O is never compensated for by unlimited replacement threads. If a lane has exhausted its bounded capacity, further work remains cancellable in its queue or admission fails visibly; the GUI still does not block.
+
+#### Admission, backpressure, and delivery
+
+The GUI thread never waits for queue space. At admission the coordinator either accepts the request immediately or returns a typed retryable saturation result. Each accepted job reserves the capacity needed for its one terminal event, so a success, failure, or cancellation is never dropped merely because the result queue is full. Replaceable events use keyed coalescing: only the newest pending listing refresh per tab/version, watcher invalidation per location, progress snapshot per operation, and settings snapshot need remain queued. Product commands and terminal events are not coalesced.
+
+Large immutable payloads cross threads by shared ownership rather than repeated copying. Publishing a result sets one coalesced wake flag and posts at most one queued GUI wake while a drain is pending. The GUI endpoint consumes terminal/control events before replaceable progress, drains within its count-and-time budget, clears or rearms the wake without a lost-wakeup race, returns to Qt, and schedules another queued turn only if work remains. Closing the endpoint makes later publications harmless no-ops; a failed CXX-Qt queue operation after object destruction is teardown, not an application error.
+
+Request/version tokens remain the authority for relevance. Queue removal and worker cancellation reduce wasted work, but the application independently rejects every stale result before mutation. Runtime priority never changes application event ordering or lets a later step of one operation overtake an earlier dependent step.
+
+#### Cancellation and shutdown
+
+Cancellation is a runtime-owned, idempotent state machine associated with an application token. The application requests cancellation; it does not manipulate thread handles or native resources.
+
+1. A per-job terminal claim makes success, failure, and cancellation mutually exclusive. Before a job starts, cancellation removes or marks it in the queue and publishes exactly one typed terminal cancellation, unless the delivery endpoint has already closed during teardown.
+2. For running work, cancellation sets a cheap shared flag and invokes a native cancellation mechanism when one is available. The gateway checks before a side effect, between bounded units, and after an interruptible blocking call returns. Cancellation submission itself never waits for the worker or a mutex held by it.
+3. A worker that loses the terminal claim discards its late outcome. Application token validation remains a separate defense, so even a broken or uninterruptible provider cannot overwrite newer state.
+4. A file operation finishes its current atomic safe boundary. Completed items remain completed. The executor removes only partial artifacts it can positively identify as its own. If cleanup cannot establish a safe result, it reports a typed failure with operation and artifact context rather than claiming cancellation completed cleanly.
+5. During window teardown, the GUI owner first closes delivery, then rejects new work and requests cancellation for queued and running jobs. It does not call `waitForDone`, join a worker, or otherwise wait inside the Qt event loop. Workers hold no UI references, so late completion cannot touch a destroyed object. After the event loop exits, the composition root may perform only a bounded graceful join; an uninterruptible worker is detached for process teardown rather than forcing termination or delaying exit without bound.
+
+Cancellation is therefore cooperative, not a promise that arbitrary I/O stops immediately. A token is invalidated as soon as cancellation is accepted, so late work cannot change a newer listing, operation, or view even when the operating system cannot interrupt it.
+
+#### Error and panic containment
+
+Expected gateway failures are data, not worker failures. A gateway maps native failures at the edge into the application-owned error category plus operation, location, and item context; it keeps raw OS errors and diagnostics driver-local for logging. The worker remains available after permission, privacy, missing-item, no-space, busy, read-only, and other routine outcomes. The application decides whether the typed error exposes a retry, a conflict decision, or a terminal operation state; presentation supplies the wording.
+
+Each worker executes one job behind a Rust panic boundary. A panic is never allowed to cross a CXX-Qt, Qt, Objective-C, C++, or other FFI boundary, and its payload is never presented to the person. The runtime wins or observes the job's terminal claim, publishes one `Internal` failure for an affected non-cancelled token, discards that worker and its gateway-local state, and replaces capacity under bounded backoff. It does not continue using possibly poisoned worker-local state.
+
+The replacement never replays the panicked job automatically: a file-operation step may already have changed the file system. Queued independent jobs remain queued and cancellable while capacity is restored. Repeated worker loss opens a circuit for that lane: new admissions receive a typed unavailable result while periodic bounded recovery attempts continue. A panic, failed spawn, closed coordinator, or runtime-initialization failure is logged with sanitized diagnostics and becomes a typed runtime failure; it must not terminate the GUI process or silently leave an accepted request loading forever.
+
+This boundary does not make process-abort panics, memory corruption, or a crashed native library recoverable. Those failures are outside Rust panic recovery. The runtime minimizes their blast radius by keeping native calls and `unsafe` blocks narrow, avoiding poisoned shared application state, and ensuring that no worker owns a Qt object or authoritative workspace data.
+
+#### Responsiveness evidence and observability
+
+The runtime records queue depth, admission rejection and coalescing counts, queue wait, execution time, cancellation latency, result-drain time, and worker replacement without making application behavior depend on logging. A GUI heartbeat may measure event-loop delay, but it only reports; it never mutates Qt from a monitor thread or attempts recovery by pumping events.
+
+The planned verification evidence includes: GUI-affinity assertions for every model and widget mutation; tests that dispatch and cancellation return without waiting when queues or workers are blocked; bounded-queue, fair-scheduling, reserved-capacity, and coalesced-wake stress tests; count-and-time-bounded drain tests; exactly-once terminal-event tests for queued, running, stale, saturated, panicking, and teardown paths; tests that a slow cancelled job cannot publish late state; native-error mapping tests; panic containment tests proving no payload reaches output, no unsafe replay occurs, and capacity or the lane circuit is recovered; and shutdown tests proving late publications cannot use a destroyed delivery endpoint or delay the GUI event loop.
+
+### 5.3 Planned mounted remote-volume model
+
+**Status: Planned.** This section plans safe future handling of a location already mounted by macOS, including an SMB share presented in the local file-system namespace. It does not add remote file systems to the current product scope in [mvp.md](mvp.md#out-of-scope), implement an SMB client, mount shares, prompt for network credentials, or store them.
+
+A mounted remote volume looks path-like but is not local-storage-equivalent. Any directory enumeration, metadata lookup, path resolution, open, close, flush, rename, deletion, free-space query, or watch setup may perform network I/O, pause during reconnect, or return after the server has changed independently. No such call, including a preliminary `stat`, capability query, mount check, or icon lookup, runs on the GUI thread.
+
+#### Mount identity and capabilities
+
+The macOS gateway builds a `MountedVolumeProfile` on a worker when a location first crosses a mount boundary. The profile is driver-owned and contains an opaque mount-instance identity, mount generation, connectivity generation, local/remote and read-only state, file-system type for diagnostics, and the capabilities relevant to the requested operation: case sensitivity and preservation, persistent IDs, exclusive rename, ordinary rename, Trash behavior, cloning, permissions, extended attributes, maximum file size, and watcher availability. Capability discovery itself can block or fail, so an unknown value is not treated as supported.
+
+The gateway chooses behavior by observed capability, not by assuming that every `smbfs` mount or every server behaves alike. It may use protocol or file-system type to select conservative scheduling and diagnostics, but never to manufacture a guarantee. A profile is cached only for the lifetime of its observed mount and connectivity generations. Unmount, remount, mount-path rename, wake from sleep, transport loss, reconnect, or an error that indicates a stale mount advances one of those generations and requires revalidation. A path reused by a later mount is a new volume until reprobed, even if the server and share names look identical.
+
+Entry identity on a remote volume is best-effort. The domain receives an opaque identity only when the mounted volume reports persistent IDs; otherwise path components plus the listing generation identify the observed entry. Inode numbers, file IDs, timestamps, case-folded names, and mount paths are never assumed stable across reconnect, failover, server upgrade, or remount. After uncertainty, the application preserves selection or cursor only for entries it can match safely and treats the rest as new observations.
+
+Mount triggers and nested mount points are boundaries, not ordinary directories for recursive work. Merely listing a parent must not activate a dormant mount trigger. Explicit navigation may ask macOS to enter an already supported mounted location, but recursive scans do not silently cross into a different mounted volume. Encountering such a boundary becomes a typed application fact; behavior beyond that boundary remains a future product decision.
+
+#### Responsiveness, isolation, and backpressure
+
+Remote calls use a global bounded remote-I/O allowance and a smaller per-mount allowance layered over the execution lanes in §5.2. Local navigation, cancellation cleanup, settings, and another remote mount retain service capacity when one share stalls. A blocked call keeps its existing allowance; the runtime never creates an unlimited replacement thread to hide a hung server. Requests waiting behind that mount remain cancellable without starting.
+
+Deadlines are observations, not claims that a mounted-file-system syscall can be forcibly stopped. Crossing a soft deadline publishes a coalesced slow-location state and keeps the GUI interactive; cancellation immediately invalidates the application token and invokes native cancellation when available, but the worker may remain blocked. Repeated timeouts, disconnects, or transport failures open a per-mount circuit. While open, background refreshes are suppressed, new work fails fast with a typed unavailable state, and at most one bounded probe runs after backoff or an explicit retry. Success closes the circuit only after the mount identity and capabilities are revalidated.
+
+Directory reads request only metadata required for the current view and operation, preferring one enumerator result over per-entry round trips. Expensive metadata, previews, and icons are lazy, separately cancellable, and prioritized for visible rows. Partial listing batches are published only when their ordering and provisional status are explicit; otherwise the worker completes enumeration, sorting, and diffing off the GUI thread and delivers immutable backing data. Listing and metadata caches are memory-bounded, keyed by mount generation, and never presented as fresh after disconnect. The last successful listing may remain visible as unavailable/stale so the other pane stays useful, but actions revalidate the target and mount before execution.
+
+Watch notifications on remote volumes are advisory. The watcher uses native notification support only when available and still treats each event as an invalidation requiring a worker rescan. Missing, dropped, or unsupported notifications fall back to visibility-aware polling with bounded exponential backoff and jitter; hidden tabs do not poll continuously. Reconnect, remount, watcher overflow, or a changed mount generation requires a full rescan. Watch activity from one share is coalesced and cannot flood the GUI result queue.
+
+#### Safe operations and uncertain outcomes
+
+Remote mutation uses the same data-safety invariants as local mutation, with additional distrust of cached metadata and acknowledgements. Immediately before each namespace or destructive step, the gateway revalidates the mount and connectivity generations, source, destination parent, relevant identities, and required capabilities. It uses the mounted file system's atomic no-overwrite or exclusive-create primitive rather than a check-then-write sequence. Server locks and advisory locks are not correctness boundaries because another client or reconnect may invalidate them. If exclusive publication, required durability, or macOS Trash semantics are unavailable or unknown, the affected replace, move, or Trash operation reports a typed unsupported-safety failure; Trash never degrades to permanent deletion and no operation silently substitutes a weaker algorithm. Free-space and quota values are hints only; the executor still handles failure from every write and close.
+
+Copies write to an operation-owned, uniquely named partial artifact in the destination directory or volume. Data is streamed in cancellation-sized chunks, write and close/flush errors are checked, and the final destination switch occurs only after the completed artifact is verified to the degree supported by that volume. Replacement does not remove the old destination until that point. Cross-volume moves do not remove the source until the destination is complete and verified.
+
+A timeout or disconnect during a mutating call creates an **uncertain outcome** unless postcondition evidence proves what happened. Rename, replace, delete, create-directory, final destination publication, and source removal are not retried automatically after an uncertain outcome. Before issuing such a call, the executor atomically persists a driver-local recovery record containing its operation ID, mount and connectivity generations, step, known source and destination observations, and owned partial-artifact name; it clears the record only after a confirmed terminal outcome. The record contains no credential or mount-from secret. After an uncertain return, the executor releases the worker and reports uncertainty to the application. After connectivity returns—or after a later launch—a separate read-only reconciliation step observes both sides and classifies the step as completed, not completed, or still ambiguous. Recovery never resumes a mutation automatically. Only the application may then offer a safe retry or decision. It never infers success solely from a missing source or matching name, and it never repeats source deletion merely because the first reply was lost.
+
+Read-only operations may retry automatically with bounded exponential backoff and jitter while their token is current. A data-transfer step may resume only when the runtime can prove it is reopening the same operation-owned partial artifact at the verified offset; otherwise it restarts into a new owned artifact or asks for recovery. Automatic retry budgets are per request and per mount so a disconnected server cannot generate permanent traffic.
+
+Unmount and remount notifications are delivered as application inputs. An unmount invalidates the mount generation, cancels queued work, marks affected tabs unavailable without discarding their last successful view, and moves any in-flight mutation to cancellation or uncertain-outcome reconciliation according to its last safe boundary. Remount never automatically resumes a mutating operation. Credentials and mount-from locations are never written to logs; diagnostics use a redacted mount identifier and operation token.
+
+#### Remote-volume verification
+
+Most tests use a deterministic fault-injecting gateway, not a real user share. It simulates delayed and permanently blocked calls, disconnect before and after a server commit, stale replies, remount at the same path with a new generation, missing persistent IDs, case-insensitive names, unavailable exclusive rename, watcher loss, queue saturation, and cancellation at every operation boundary. Properties prove that local work remains serviceable, worker counts remain bounded, stale results never commit, an uncertain mutation is never replayed automatically, and no source is removed before verified destination completion.
+
+Opt-in macOS integration tests may use only a disposable, test-owned share backed by a temporary directory and provisioned for that test run. They never mutate an existing mounted share or a real user path. The milestone that introduces such a harness must separately approve its server or mounting tool, credentials handling, teardown, and licensing.
 
 The architecture requires these data-safety invariants:
 
@@ -233,7 +333,11 @@ The architecture requires these data-safety invariants:
 
 Application errors distinguish conditions that affect available choices: item missing, destination exists, file/folder kind mismatch, permission denied, privacy restriction, no space, item busy, read-only location, cross-device behavior, cancellation, and unknown failure. The macOS gateway maps native errors into those categories and may retain driver-only diagnostics for logging. The application decides which categories are recoverable and therefore offer the choices defined in [mvp.md](mvp.md#file-operation-safeguards).
 
+Planned mounted remote-volume support also distinguishes slow, timed out, disconnected, authentication required, server unavailable, stale mount generation, unsupported safety capability, and uncertain mutation outcome. These are application-visible states rather than protocol error numbers. A driver may collapse native errors only when doing so preserves the recovery choices and never converts an uncertain mutation into an ordinary retryable failure.
+
 Settings and session values are application-owned value types. The application requests a save of a coalesced session snapshot shortly after any session-relevant change and once more on quit, so a crash loses at most the most recent changes. The file format, storage location, atomic-write mechanism, and corrupt-data handling belong to the settings driver. A failed or corrupt load becomes a recoverable application event; it never makes a serialization format part of domain policy.
+
+An operation recovery record is separate from session settings. The runtime persists it locally and atomically before an ambiguity-prone remote mutation, restricts it to the context needed for reconciliation, and never stores credentials. Loading a record may request read-only reconciliation but never executes or resumes a mutation by itself.
 
 Logging is an outer concern. Structured operation context may be carried in application outputs and emitted by a driver, but domain and application decisions must not depend on a logging backend succeeding.
 
@@ -244,8 +348,8 @@ Logging is an outer concern. Structured operation context may be carried in appl
 | Domain | Unit and property tests | Pane, tab, history, selection, and cursor invariants and policy choices hold without I/O. |
 | Application | Unit and property tests of `Workspace::handle` | Commands/events yield the correct state, outputs, work requests, token rejection, row deltas, and operation/decision lifecycle, with no fakes. |
 | Adapters | Focused controller/presenter tests without Qt | UI events map to the right application commands; outputs become view-models without duplicating policy. |
-| Drivers | Temporary-directory and Qt smoke tests | Error mapping, exclusive writes, metadata behavior, symlink safety, settings atomicity, model notifications, GUI-thread confinement, cancellation, and bounded event delivery. |
-| End-to-end | Small opt-in macOS scenarios | Volume, privacy, File Provider, watcher, and desktop-service behavior that fakes cannot reproduce. |
+| Drivers | Temporary-directory, fault-injection, and Qt smoke tests | Error mapping, exclusive writes, metadata behavior, symlink safety, settings atomicity, model notifications, GUI-thread confinement, cancellation, bounded event delivery, mount-generation invalidation, and uncertain-outcome reconciliation. |
+| End-to-end | Small opt-in macOS scenarios | Local and disposable mounted-volume capabilities, disconnects, privacy, File Provider, watcher, and desktop-service behavior that fakes cannot reproduce. |
 
 Tests that touch a file system stay in a temporary directory. No test uses a real user path, and the domain, application, and adapter test suites require neither Qt nor macOS facilities.
 
@@ -254,5 +358,7 @@ Property tests generate input sequences and check that invariants hold, for exam
 ## 8. Deliberate non-decisions
 
 This architecture does not decide exact macOS API choices, concurrency primitive, worker-capacity value, operation step size, storage format, sort collation rules, session-save delay, or performance thresholds. Distribution is limited to local, unnotarized, unsandboxed builds (see [§1](#1-goals-and-constraints)); packaging tooling is not decided. Product choices and remaining key-binding work are defined in [mvp.md](mvp.md).
+
+Section 5.3 plans invariants for future support of locations already mounted by macOS; it does not change the current exclusion of remote file systems or decide mounting, discovery, authentication, credential storage, direct SMB access, or user-visible offline behavior. Those product and technology choices require a future phase decision.
 
 Those choices may vary, but each must preserve the dependency rule, ownership model, and data-safety invariants in this document.

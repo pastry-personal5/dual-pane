@@ -52,6 +52,7 @@ This is the target tree once each crate and its first representative test have e
 │       │   ├── listing_model.rs        # CXX-Qt bridge: Qt list model and run_desktop
 │       │   ├── pane_session.rs         # Qt-free: workspace, presenter, bounded drain
 │       │   ├── runtime.rs              # Qt-free: worker thread, cancellation, GUI wake
+│       │   ├── synthetic_listing.rs    # P1-M4 source; P1-M5 removes it
 │       │   └── native_location.rs      # Qt-free: Path to Location conversion
 │       ├── cpp/                        # created with C++ Qt shim source
 │           ├── include/dual_pane_desktop/

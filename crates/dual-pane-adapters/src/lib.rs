@@ -8,4 +8,4 @@ mod input_controller;
 mod pane_presenter;
 
 pub use input_controller::{InputController, UiEvent};
-pub use pane_presenter::{PanePresenter, PaneViewModel, RowKind, RowViewModel};
+pub use pane_presenter::{PanePresenter, PaneViewModel, RowKind, RowViewModel, reader_start_failure_status};

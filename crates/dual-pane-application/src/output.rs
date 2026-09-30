@@ -12,4 +12,7 @@ pub enum Output {
     ListingReplaced { location: Location, entries: Arc<[Entry]> },
     /// Loading failed; the pane keeps its previous location and listing.
     ListingFailed { error: ListingError },
+    /// Loading ended because its request was cancelled. This is deliberately
+    /// distinct from an error so presenters can keep it silent.
+    ListingCancelled,
 }

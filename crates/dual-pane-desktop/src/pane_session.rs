@@ -53,7 +53,7 @@ impl<R: WorkRunner> PaneSession<R> {
             self.presenter.apply(output);
             change = change.max(match output {
                 Output::ListingReplaced { .. } => ViewChange::Reset,
-                Output::LoadingStarted { .. } | Output::ListingFailed { .. } => ViewChange::Status,
+                Output::LoadingStarted { .. } | Output::ListingFailed { .. } | Output::ListingCancelled => ViewChange::Status,
             });
         }
         for request in transition.work {
@@ -71,15 +71,6 @@ impl<R: WorkRunner> PaneSession<R> {
 
     pub fn view(&self) -> &PaneViewModel {
         self.presenter.view()
-    }
-}
-
-/// The status line for `view`: the error, loading, or the shown location.
-pub fn status_text(view: &PaneViewModel) -> String {
-    match view.error() {
-        Some(error) => error.to_owned(),
-        None if view.is_loading() => "Loading…".to_owned(),
-        None => view.location_text().to_owned(),
     }
 }
 
@@ -136,7 +127,7 @@ mod tests {
         let change = session.submit(Command::Navigate(location("alpha")));
         assert_eq!(change, ViewChange::Status);
         assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { token: RequestToken::first(), location: location("alpha") }]);
-        assert_eq!(status_text(session.view()), "Loading…");
+        assert_eq!(session.view().status_text(), "Loading…");
     }
 
     #[test]
@@ -146,7 +137,7 @@ mod tests {
         session.runner.delivered.push_back(loaded(RequestToken::first(), 3));
         assert_eq!(session.drain(), Drained { change: ViewChange::Reset, more_pending: false });
         assert_eq!(session.view().row_count(), 3);
-        assert_eq!(status_text(session.view()), "/alpha");
+        assert_eq!(session.view().status_text(), "/alpha");
     }
 
     #[test]
@@ -155,7 +146,7 @@ mod tests {
         session.submit(Command::Navigate(location("alpha")));
         session.runner.delivered.push_back(Event::ListingFailed { token: RequestToken::first(), kind: ListingErrorKind::PermissionDenied });
         assert_eq!(session.drain().change, ViewChange::Status);
-        assert_eq!(status_text(session.view()), "You don’t have permission to open “/alpha”.");
+        assert_eq!(session.view().status_text(), "You don’t have permission to open “/alpha”.");
     }
 
     #[test]

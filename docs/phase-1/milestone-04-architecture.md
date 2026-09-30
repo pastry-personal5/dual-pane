@@ -26,6 +26,10 @@ crates/dual-pane-desktop/
 
 `synthetic_listing.rs` is the only module the next milestone deletes. Every other module keeps its role.
 
+## Post-review corrections
+
+Every accepted runtime request now ends in exactly one typed terminal event: loaded, failed, or cancelled. Cancellation has no presentation error. A per-job atomic terminal claim is shared by the GUI and worker paths, so cancellation cannot race a queued completion into a duplicate. A supervisor contains a source panic, emits `Internal` without its panic payload, and continues after worker-creation failures, disconnected workers, or source panics with exponential bounded backoff. Dispatch to an unavailable supervisor also becomes an immediate `Internal` terminal event. The C++ shim owns queued GUI-drain scheduling so RustQt locks have returned before a follow-up slice is posted; it also owns lifetime-safe wake suppression during teardown and launch precondition guards.
+
 ## Composition and startup
 
 1. `main.rs` computes the start location: `std::env::current_dir()` converted by `native_location::location_from_path`, or `Location::root()` if either step fails. It builds a `PaneStartup` holding that location and the listing source (a `SyntheticListing` with `rows = 100_000`) and calls `run_desktop(Box<PaneStartup>)`. It maps the returned status to the process exit code.
@@ -61,12 +65,12 @@ Keeping this logic out of the bridge makes the bounded-drain rule testable witho
 
 ## Runtime (`runtime.rs`)
 
-`Runtime` owns one named worker thread, `listing-worker`. That is the Phase 1 capacity; the queue design allows more workers later without changing callers.
+`Runtime` owns a supervisor and one active named `listing-worker`. That is the Phase 1 capacity; a source panic is caught per job, reported as `Internal`, and followed by replacement after 100 ms exponential backoff capped at 5 s. A completed job resets the delay.
 
 | Part | Design |
 |---|---|
-| Job queue | `std::sync::mpsc` channel of jobs `{ token, location, cancelled: Arc<AtomicBool> }`. |
-| Cancellation | A map from `RequestToken` to its flag. `WorkRequest::Cancel` sets the flag and forgets it; taking a delivered event also forgets its token, so the map stays bounded. The worker skips a job whose flag is already set and passes the flag to the source, which checks it at least every 1,024 entries. A cancelled job delivers nothing: the workspace has already moved on. |
+| Job queue | `std::sync::mpsc` channel of jobs `{ token, location, state: Arc<JobState> }`. A closed supervisor queue immediately produces one `Internal` failure instead of silently losing the request. |
+| Cancellation | A map from `RequestToken` to per-job state. Its atomic terminal claim is shared with the worker: `WorkRequest::Cancel` sets the flag and delivers `ListingCancelled` only if it wins that claim, while a worker delivers its result only if it wins. Taking a terminal event forgets its token, so the map stays bounded. The worker skips a job whose flag is already set and passes the flag to the source, which checks it at least every 1,024 entries. |
 | Results | A second channel carries application `Event`s from the worker to the GUI thread. |
 | Wake | After sending a result, the worker calls the wake function only if an `AtomicBool` "wake pending" flag was clear. `drain` clears the flag before reading, so no result is left without a wake. |
 | Shutdown | Dropping the runtime closes the job channel and sets every outstanding flag. The GUI thread never joins or waits for the worker; the worker exits after its current job. |

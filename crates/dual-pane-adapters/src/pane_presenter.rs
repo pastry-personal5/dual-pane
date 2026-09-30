@@ -10,6 +10,7 @@ pub struct PaneViewModel {
     location_text: String,
     loading: bool,
     error: Option<String>,
+    status_text: String,
     entries: Arc<[Entry]>,
 }
 
@@ -45,6 +46,11 @@ impl PaneViewModel {
         self.error.as_deref()
     }
 
+    /// Fully formatted status text for the desktop shell.
+    pub fn status_text(&self) -> &str {
+        &self.status_text
+    }
+
     pub fn row_count(&self) -> usize {
         self.entries.len()
     }
@@ -78,19 +84,32 @@ impl PanePresenter {
             Output::LoadingStarted { .. } => {
                 self.view.loading = true;
                 self.view.error = None;
+                self.view.status_text = "Loading…".to_owned();
             }
             Output::ListingReplaced { location, entries } => {
                 self.view.location_text = location_text(location);
                 self.view.entries = Arc::clone(entries);
                 self.view.loading = false;
                 self.view.error = None;
+                self.view.status_text = self.view.location_text.clone();
             }
             Output::ListingFailed { error } => {
                 self.view.loading = false;
                 self.view.error = Some(error_message(error));
+                self.view.status_text = self.view.error.clone().unwrap_or_default();
+            }
+            Output::ListingCancelled => {
+                self.view.loading = false;
+                self.view.error = None;
+                self.view.status_text = self.view.location_text.clone();
             }
         }
     }
+}
+
+/// Safe wording for failures before a pane session can be created.
+pub fn reader_start_failure_status() -> &'static str {
+    "Dual Pane couldn’t start reading folders."
 }
 
 fn row_kind(kind: EntryKind) -> RowKind {
@@ -121,6 +140,7 @@ fn error_message(error: &ListingError) -> String {
         ListingErrorKind::NotADirectory => format!("“{path}” is not a folder."),
         ListingErrorKind::PermissionDenied => format!("You don’t have permission to open “{path}”."),
         ListingErrorKind::PrivacyRestricted => format!("macOS privacy settings don’t allow Dual Pane to open “{path}”."),
+        ListingErrorKind::Internal => "Dual Pane couldn’t finish reading this folder unexpectedly.".to_owned(),
         ListingErrorKind::Unknown => format!("“{path}” couldn’t be opened."),
     }
 }

@@ -36,6 +36,16 @@ fn a_result_that_arrives_twice_applies_once() {
 }
 
 #[test]
+fn current_cancellation_ends_loading_once_and_stale_cancellation_is_ignored() {
+    let mut workspace = Workspace::new();
+    let first = navigate(&mut workspace, location(&["a"]));
+    let second = read_token(&workspace.handle(Command::Navigate(location(&["b"])).into()));
+    assert_eq!(workspace.handle(Input::Event(Event::ListingCancelled { token: first })), Transition::default());
+    assert_eq!(workspace.handle(Input::Event(Event::ListingCancelled { token: second })).outputs, vec![Output::ListingCancelled]);
+    assert_eq!(workspace.handle(Input::Event(Event::ListingCancelled { token: second })), Transition::default());
+}
+
+#[test]
 fn an_unknown_token_changes_nothing() {
     let mut workspace = showing(location(&["a"]), vec![file("x")]);
     let unknown = RequestToken::first().next().next().next();

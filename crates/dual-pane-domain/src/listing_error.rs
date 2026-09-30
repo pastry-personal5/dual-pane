@@ -8,6 +8,9 @@ pub enum ListingErrorKind {
     NotADirectory,
     PermissionDenied,
     PrivacyRestricted,
+    /// The reader stopped unexpectedly. Details are intentionally not shown
+    /// outside the driver boundary.
+    Internal,
     Unknown,
 }
 

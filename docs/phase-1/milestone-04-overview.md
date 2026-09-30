@@ -15,7 +15,7 @@ Launch the app into a window whose single pane shows a 100,000-row synthetic lis
 - Wire `dual-pane-desktop` to `dual-pane-domain`, `dual-pane-application`, and `dual-pane-adapters`.
 - A CXX-Qt `QObject` list model written in Rust, shown by a `QTreeView` in the existing main window, with a status line that shows the pane's location, loading state, or error.
 - A pane session that owns the workspace, presenter, and runtime on the GUI thread and drains worker results in bounded slices.
-- A runtime with one worker thread, a cancellable job queue, per-request cancellation, and a coalesced GUI wake through `CxxQtThread::queue`.
+- A supervised single-worker runtime with a cancellable job queue, typed terminal cancellation, panic recovery, and a coalesced C++ queued GUI wake.
 - A synthetic listing source that returns 100,000 deterministic, sorted entries for any location and stops when cancelled.
 - Conversion from the launch working directory to a domain `Location` without lossy name conversion.
 - Moving `cxx-qt-lib` from a dev-dependency to a normal dependency of `dual-pane-desktop`, as approved.
@@ -32,13 +32,22 @@ Launch the app into a window whose single pane shows a 100,000-row synthetic lis
 
 The user decided these on 2026-09-30, recorded in the [phase changelog](changelog.md):
 
-1. **Model:** the list model is a Rust `QObject` built with CXX-Qt, subclassing `QAbstractListModel`. The worker wakes the GUI thread with `CxxQtThread::queue`. The pinned `cxx-qt` 0.10.0 source shows that `queue` posts through `QMetaObject::invokeMethod` with `Qt::QueuedConnection` and returns an error once the object is destroyed.
+1. **Model:** the list model is a Rust `QObject` built with CXX-Qt, subclassing `QAbstractListModel`. A C++ `QObject`-side scheduler posts coalesced queued drain events and suppresses late wakes during teardown.
 2. **`cxx-qt-lib`:** approved to move from `[dev-dependencies]` to `[dependencies]` of `dual-pane-desktop` at the same pinned `=0.10.0` (MIT OR Apache-2.0), for `QString`, `QModelIndex`, and `QVariant`. During implementation the user also approved bumping `cxx` from `=1.0.176` to `=1.0.202` to match CXX-Qt's code generator (see the [changelog](changelog.md)).
 3. **Data source:** a synthetic source of 100,000 rows runs in the app for this milestone. It is live code, not dead code; the next milestone deletes it when the real reader replaces it.
 4. **Start location:** the launch working directory. If it cannot be determined or represented, the pane starts at the root.
 5. **`tempfile`:** approved as a `dual-pane-desktop` dev-dependency for directory-reader tests, to be added in the next milestone with its first test.
 
 ## Completion checklist
+
+### Post-review corrections
+
+- [x] Every accepted runtime read produces exactly one typed terminal event (`ListingLoaded`, `ListingFailed`, or `ListingCancelled`), except teardown when the receiver is discarded. A shared per-job atomic terminal claim makes cancellation and queued completion mutually exclusive; current cancellation clears loading silently, and stale events are no-ops. Evidence: `cargo test -q -p dual-pane-application` and `cargo test -q -p dual-pane-desktop runtime` on 2026-09-30.
+- [x] A panicking source, failed worker creation, disconnected worker, or unavailable supervisor is reported as `ListingErrorKind::Internal` without exposing a panic payload. The supervisor remains alive and uses 100 ms exponential backoff capped at 5 s; completed work resets the delay, FIFO work survives restarts, and queued work remains cancellable. Evidence: `cargo test -q -p dual-pane-desktop runtime` on 2026-09-30.
+- [x] GUI draining is scheduled by a C++ queued-event scheduler: it invokes one Rust drain slice and only queues a follow-up after that call returns. Late wakes during teardown are harmless. Evidence: `make lint-cpp` and desktop model/runtime review on 2026-09-30.
+- [x] `PanePresenter` owns all status-line wording, including loading, location, ordinary errors, internal errors, startup failure, and silent cancellation. Evidence: `cargo test -q -p dual-pane-adapters` on 2026-09-30.
+- [x] `run_desktop` rejects a non-main thread, an existing `QApplication`, and every second invocation with a defined nonzero result before widget construction. Evidence: C++ launch-precondition guard review and manual launch evidence in the phase changelog.
+- [x] The planned repository tree lists `synthetic_listing.rs` and says P1-M5 removes it. Evidence: `docs/planned-repository-architecture.md`.
 
 - [x] `dual-pane-desktop` depends on the three inner crates and on `cxx-qt-lib = "=0.10.0"` as a normal dependency; the `[dev-dependencies]` entry for `cxx-qt-lib` is gone, and no other dependency changes except the approved `cxx = "=1.0.202"` bump. Evidence: `crates/dual-pane-desktop/Cargo.toml` and `git diff Cargo.lock`.
 - [x] Runtime tests prove that a read request runs on the worker and its result is delivered; that cancelling a queued request removes it before it runs; that cancelling a running request stops it without delivering a result; that results are delivered in completion order; and that many results cause only one pending GUI wake. Evidence: `cargo test -q -p dual-pane-desktop runtime`.

@@ -33,6 +33,10 @@ pub enum Event {
         token: RequestToken,
         kind: ListingErrorKind,
     },
+    /// A requested listing was stopped before it produced a result.
+    ListingCancelled {
+        token: RequestToken,
+    },
 }
 
 impl From<Command> for Input {

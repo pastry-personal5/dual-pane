@@ -8,6 +8,7 @@ namespace dual_pane_desktop {
 struct PaneStartup;
 
 [[nodiscard]] auto run_desktop(::rust::Box<PaneStartup> startup) -> int;
+void schedule_gui_drain();
 
 } // namespace dual_pane_desktop
 

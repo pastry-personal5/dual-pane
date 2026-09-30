@@ -49,6 +49,7 @@ impl Workspace {
             Input::Command(Command::GoToParent) => self.go_to_parent(),
             Input::Event(Event::ListingLoaded { token, entries }) => self.listing_loaded(token, entries),
             Input::Event(Event::ListingFailed { token, kind }) => self.listing_failed(token, kind),
+            Input::Event(Event::ListingCancelled { token }) => self.listing_cancelled(token),
         }
     }
 
@@ -116,6 +117,10 @@ impl Workspace {
             return Transition::default();
         };
         Transition { outputs: vec![Output::ListingFailed { error: ListingError::new(pending.location, kind) }], work: Vec::new() }
+    }
+
+    fn listing_cancelled(&mut self, token: RequestToken) -> Transition {
+        self.take_pending(token).map_or_else(Transition::default, |_| Transition { outputs: vec![Output::ListingCancelled], work: Vec::new() })
     }
 
     /// Ends the pending navigation if `token` identifies it.
