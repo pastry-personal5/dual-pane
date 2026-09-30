@@ -41,7 +41,7 @@ The root `Cargo.toml` becomes a virtual workspace with `crates/dual-pane-desktop
 
 ## Code-quality tooling
 
-Rust uses Clippy with warnings denied, as already required by [AGENTS.md](../../AGENTS.md). C++ uses `clang-tidy` with an explicit checked-in `.clang-tidy` profile: bug-prone, CERT, C++ Core Guidelines, modernize, performance, portability, and readability checks are enabled, and diagnostics from those checks are errors. Any exclusion must name the specific check and explain why CXX-Qt or Qt makes it inapplicable; a broad group-wide suppression is not allowed.
+Rust uses Clippy with warnings denied, as already required by [AGENTS.md](../../../../AGENTS.md). C++ uses `clang-tidy` with an explicit checked-in `.clang-tidy` profile: bug-prone, CERT, C++ Core Guidelines, modernize, performance, portability, and readability checks are enabled, and diagnostics from those checks are errors. Any exclusion must name the specific check and explain why CXX-Qt or Qt makes it inapplicable; a broad group-wide suppression is not allowed.
 
 `scripts/lint-cpp.sh` is the sole C++ lint entry point. It locates the same Qt installation selected by `QMAKE`/`PATH`, obtains only the include paths required to parse the handwritten `cpp/` files, and invokes `clang-tidy` on each handwritten source and header with C++17 arguments. It does not build, link, create a compilation database, or run a code generator. `clang-tidy` supports supplying compilation options after `--`, which keeps this Cargo-only repository independent of CMake and a generated compilation database.
 

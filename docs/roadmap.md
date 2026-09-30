@@ -6,4 +6,4 @@ Every phase, one line each: ID, title, status, and a link to its phase doc. This
 
 | Phase | Title | Status | Plan |
 |-------|-------|--------|------|
-| P1 | Foundations | Active | [phase.md](phase-1/phase.md) |
+| P1 | Foundations | Done | [phase.md](archive/phases/phase-1/phase.md) |

@@ -6,6 +6,10 @@ use crate::PaneViewModel;
 /// menu item, or key that produced it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiEvent {
+    /// Select the entry shown in `row`.
+    SelectRow {
+        row: usize,
+    },
     /// Open the entry shown in `row`.
     ActivateRow {
         row: usize,
@@ -27,7 +31,8 @@ impl InputController {
     /// event refers to a row that is not shown.
     pub fn command(&self, event: UiEvent, view: &PaneViewModel) -> Option<Command> {
         match event {
-            UiEvent::ActivateRow { row } => view.entry(row).map(|entry| Command::OpenEntry(entry.name().clone())),
+            UiEvent::SelectRow { row } => view.entry(row).map(|entry| Command::SelectEntry { row, name: entry.name().clone() }),
+            UiEvent::ActivateRow { row } => view.entry(row).map(|entry| Command::OpenEntry { row, name: entry.name().clone() }),
             UiEvent::GoToParent => Some(Command::GoToParent),
         }
     }

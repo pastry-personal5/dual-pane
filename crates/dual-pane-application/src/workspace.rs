@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dual_pane_domain::{Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken};
+use dual_pane_domain::{Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken, Selection};
 
 use crate::{Command, Event, Input, Output, WorkRequest};
 
@@ -23,6 +23,7 @@ pub struct Workspace {
 struct Pane {
     listing: Option<Listing>,
     pending: Option<PendingNavigation>,
+    selection: Selection,
 }
 
 #[derive(Debug)]
@@ -45,7 +46,8 @@ impl Workspace {
     pub fn handle(&mut self, input: Input) -> Transition {
         match input {
             Input::Command(Command::Navigate(location)) => self.navigate(location),
-            Input::Command(Command::OpenEntry(name)) => self.open_entry(&name),
+            Input::Command(Command::SelectEntry { row, name }) => self.select_entry(row, &name),
+            Input::Command(Command::OpenEntry { row, name }) => self.open_entry(row, &name),
             Input::Command(Command::GoToParent) => self.go_to_parent(),
             Input::Event(Event::ListingLoaded { token, entries }) => self.listing_loaded(token, entries),
             Input::Event(Event::ListingFailed { token, kind }) => self.listing_failed(token, kind),
@@ -68,6 +70,10 @@ impl Workspace {
         self.pane.pending.as_ref().map(|pending| &pending.location)
     }
 
+    pub fn selection(&self) -> &Selection {
+        &self.pane.selection
+    }
+
     fn navigate(&mut self, location: Location) -> Transition {
         // Restarting a read that is already under way would only delay it.
         if self.loading_location() == Some(&location) {
@@ -83,11 +89,21 @@ impl Workspace {
         Transition { outputs: vec![Output::LoadingStarted { location }], work }
     }
 
-    fn open_entry(&mut self, name: &EntryName) -> Transition {
+    fn select_entry(&mut self, row: usize, name: &EntryName) -> Transition {
+        let Some(entry) = self.pane.listing.as_ref().and_then(|listing| listing.entries.get(row)) else {
+            return Transition::default();
+        };
+        if entry.name() != name || !self.pane.selection.select(entry.name().clone()) {
+            return Transition::default();
+        }
+        Transition { outputs: vec![Output::SelectionChanged { selection: self.pane.selection.clone(), row: Some(row) }], work: Vec::new() }
+    }
+
+    fn open_entry(&mut self, row: usize, name: &EntryName) -> Transition {
         let Some(listing) = &self.pane.listing else {
             return Transition::default();
         };
-        match listing.entries.iter().find(|entry| entry.name() == name) {
+        match listing.entries.get(row).filter(|entry| entry.name() == name) {
             Some(entry) if entry.can_enter() => {
                 let target = listing.location.join(name);
                 self.navigate(target)
@@ -109,7 +125,11 @@ impl Workspace {
         };
         let location = pending.location;
         self.pane.listing = Some(Listing { location: location.clone(), entries: Arc::clone(&entries) });
-        Transition { outputs: vec![Output::ListingReplaced { location, entries }], work: Vec::new() }
+        let mut outputs = vec![Output::ListingReplaced { location, entries }];
+        if self.pane.selection.clear() {
+            outputs.push(Output::SelectionChanged { selection: self.pane.selection.clone(), row: None });
+        }
+        Transition { outputs, work: Vec::new() }
     }
 
     fn listing_failed(&mut self, token: RequestToken, kind: ListingErrorKind) -> Transition {

@@ -90,7 +90,7 @@ pub struct Transition {
 
 Result events carry no location: the token alone identifies the request and therefore its location. A gateway that reports a location in another spelling (another Unicode form, case, or a resolved link) therefore cannot strand a pending navigation or attribute an error to the wrong folder.
 
-Navigation replaces the whole listing. `Output::ListingReplaced` is the Phase 1 form of the [architecture's](../architecture.md#32-application--use-cases-and-application-state) listing output; insert, remove, and update deltas are added with same-location refresh in Phase 2. The directory-read request then gains the previous listing snapshot the architecture describes.
+Navigation replaces the whole listing. `Output::ListingReplaced` is the Phase 1 form of the [architecture's](../../../architecture.md#32-application--use-cases-and-application-state) listing output; insert, remove, and update deltas are added with same-location refresh in Phase 2. The directory-read request then gains the previous listing snapshot the architecture describes.
 
 ## Adapters
 
@@ -128,4 +128,4 @@ No test creates, alters, or deletes file-system entries, so no temporary-directo
 - The controller must not validate commands with file-manager policy, and the presenter must not hold behaviorally significant state.
 - Using lossy name text for identity, lookup, or navigation, a `Location` built from a native path inside an inner crate, or a native error type in an inner crate is rejected.
 - No change to `dual-pane-desktop`, and no speculative panes, tabs, selection, cursor, delta engine, filter, or file-operation types.
-- `unwrap()` and `expect()` are allowed only in tests, as [AGENTS.md](../../AGENTS.md#code-conventions) requires.
+- `unwrap()` and `expect()` are allowed only in tests, as [AGENTS.md](../../../../AGENTS.md#code-conventions) requires.

@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QModelIndex, QString, QVariant};
-use dual_pane_adapters::{PaneViewModel, reader_start_failure_status};
+use dual_pane_adapters::{PaneViewModel, UiEvent, reader_start_failure_status};
 use dual_pane_application::Command;
 
 use crate::pane_session::{DRAIN_SLICE, DRAIN_TIME_BUDGET, PaneSession, PaneStartup, ViewChange};
@@ -40,6 +40,7 @@ pub mod ffi {
         #[qobject]
         #[base = QAbstractListModel]
         #[qproperty(QString, status_text, cxx_name = "statusText", READ, NOTIFY)]
+        #[qproperty(i32, selected_row, cxx_name = "selectedRow", READ, NOTIFY)]
         type ListingModel = super::ListingModelRust;
 
         #[cxx_override]
@@ -63,6 +64,15 @@ pub mod ffi {
         /// Drains one slice. The C++ scheduler calls this and schedules the
         /// next slice only after this RustQt call has returned.
         fn drain(self: Pin<&mut ListingModel>) -> bool;
+
+        /// Submits one application-owned row selection.
+        fn select_row(self: Pin<&mut ListingModel>, row: i32);
+
+        /// Submits one application-owned row activation.
+        fn activate_row(self: Pin<&mut ListingModel>, row: i32);
+
+        /// Navigates to the logical parent of the shown location.
+        fn go_to_parent(self: Pin<&mut ListingModel>);
     }
 
     impl cxx_qt::Threading for ListingModel {}
@@ -72,13 +82,19 @@ pub mod ffi {
 const DISPLAY_ROLE: i32 = 0;
 
 /// The Rust state of the Qt list model for one pane.
-#[derive(Default)]
 pub struct ListingModelRust {
     status_text: QString,
+    selected_row: i32,
     session: Option<PaneSession>,
     /// What the view shows. It changes only inside a model reset, as Qt
     /// requires, even though the session updates first.
     shown: PaneViewModel,
+}
+
+impl Default for ListingModelRust {
+    fn default() -> Self {
+        Self { status_text: QString::default(), selected_row: -1, session: None, shown: PaneViewModel::default() }
+    }
 }
 
 impl ffi::ListingModel {
@@ -123,11 +139,41 @@ impl ffi::ListingModel {
         drained.more_pending
     }
 
+    fn select_row(mut self: Pin<&mut Self>, row: i32) {
+        let Some(row) = usize::try_from(row).ok() else {
+            return;
+        };
+        let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
+            return;
+        };
+        let change = session.submit_ui(UiEvent::SelectRow { row });
+        self.apply(change);
+    }
+
+    fn activate_row(mut self: Pin<&mut Self>, row: i32) {
+        let Some(row) = usize::try_from(row).ok() else {
+            return;
+        };
+        let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
+            return;
+        };
+        let change = session.submit_ui(UiEvent::ActivateRow { row });
+        self.apply(change);
+    }
+
+    fn go_to_parent(mut self: Pin<&mut Self>) {
+        let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
+            return;
+        };
+        let change = session.submit_ui(UiEvent::GoToParent);
+        self.apply(change);
+    }
+
     /// Notifies Qt of `change`, copying the session's view into `shown`.
     fn apply(mut self: Pin<&mut Self>, change: ViewChange) {
         let reset = match change {
             ViewChange::None => return,
-            ViewChange::Status => false,
+            ViewChange::Status | ViewChange::Selection => false,
             ViewChange::Reset => true,
         };
         let Some(view) = self.rust().session.as_ref().map(|session| session.view().clone()) else {
@@ -140,8 +186,17 @@ impl ffi::ListingModel {
         if reset {
             self.as_mut().end_reset_model();
         }
+        let selected_row = self.rust().shown.selected_row().and_then(|row| i32::try_from(row).ok()).unwrap_or(-1);
+        self.as_mut().set_selected_row(selected_row);
         let text = self.rust().shown.status_text().to_owned();
         self.set_status_text(QString::from(text.as_str()));
+    }
+
+    fn set_selected_row(mut self: Pin<&mut Self>, row: i32) {
+        if self.rust().selected_row != row {
+            self.as_mut().rust_mut().get_mut().selected_row = row;
+            self.selected_row_changed();
+        }
     }
 
     fn set_status_text(mut self: Pin<&mut Self>, text: QString) {

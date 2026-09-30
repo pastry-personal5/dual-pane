@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use dual_pane_adapters::{PanePresenter, RowKind, RowViewModel};
 use dual_pane_application::Output;
-use dual_pane_domain::{Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location};
+use dual_pane_domain::{Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, Selection};
 
 fn name(bytes: &[u8]) -> EntryName {
     EntryName::new(bytes.to_vec()).unwrap()
@@ -20,6 +20,25 @@ fn an_empty_pane_shows_nothing() {
     assert_eq!(presenter.view().error(), None);
     assert_eq!(presenter.view().status_text(), "");
     assert_eq!(presenter.view().row_count(), 0);
+    assert_eq!(presenter.view().selected_row(), None);
+}
+
+#[test]
+fn selection_changes_only_from_explicit_application_output() {
+    let mut presenter = PanePresenter::new();
+    presenter.apply(&Output::ListingReplaced { location: Location::root(), entries: Arc::from(vec![Entry::new(name(b"first"), EntryKind::File)]) });
+    let mut selection = Selection::default();
+    selection.select(name(b"first"));
+    presenter.apply(&Output::SelectionChanged { selection: selection.clone(), row: Some(0) });
+    assert_eq!(presenter.view().selection(), &selection);
+    assert_eq!(presenter.view().selected_row(), Some(0));
+
+    presenter.apply(&Output::ListingReplaced { location: location(&["next"]), entries: Arc::from(Vec::new()) });
+    assert_eq!(presenter.view().selection(), &selection);
+    assert_eq!(presenter.view().selected_row(), Some(0));
+
+    presenter.apply(&Output::SelectionChanged { selection: Selection::default(), row: None });
+    assert_eq!(presenter.view().selected_row(), None);
 }
 
 #[test]

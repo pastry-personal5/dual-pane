@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use dual_pane_adapters::{PanePresenter, PaneViewModel};
+use dual_pane_adapters::{InputController, PanePresenter, PaneViewModel, UiEvent};
 use dual_pane_application::{Input, Output, Workspace};
 use dual_pane_domain::Location;
 
@@ -25,6 +25,7 @@ pub struct PaneStartup {
 pub enum ViewChange {
     None,
     Status,
+    Selection,
     Reset,
 }
 
@@ -40,6 +41,7 @@ pub struct Drained {
 /// presenter, and the runner that carries out its work.
 pub struct PaneSession<R = Runtime> {
     workspace: Workspace,
+    controller: InputController,
     presenter: PanePresenter,
     runner: R,
     drain_slice: usize,
@@ -51,7 +53,7 @@ pub struct PaneSession<R = Runtime> {
 impl<R: WorkRunner> PaneSession<R> {
     pub fn new(runner: R, drain_slice: usize, drain_time_budget: Duration) -> Self {
         assert!(drain_slice > 0, "a drain must be able to handle at least one event");
-        Self { workspace: Workspace::new(), presenter: PanePresenter::new(), runner, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false }
+        Self { workspace: Workspace::new(), controller: InputController::new(), presenter: PanePresenter::new(), runner, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false }
     }
 
     /// Handles one input, dispatches the work it requests, and reports what
@@ -65,6 +67,7 @@ impl<R: WorkRunner> PaneSession<R> {
                 self.presenter.apply(output);
                 change = change.max(match output {
                     Output::ListingReplaced { .. } => ViewChange::Reset,
+                    Output::SelectionChanged { .. } => ViewChange::Selection,
                     Output::LoadingStarted { .. } | Output::ListingFailed { .. } | Output::ListingCancelled => ViewChange::Status,
                 });
             }
@@ -75,6 +78,15 @@ impl<R: WorkRunner> PaneSession<R> {
             }
         }
         change
+    }
+
+    /// Maps one widget-independent UI action through the input controller and
+    /// the same application path as every other input.
+    pub fn submit_ui(&mut self, event: UiEvent) -> ViewChange {
+        let Some(command) = self.controller.command(event, self.presenter.view()) else {
+            return ViewChange::None;
+        };
+        self.submit(command)
     }
 
     /// Handles delivered events within both the count and elapsed-time limits.
@@ -119,6 +131,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
+    use dual_pane_adapters::UiEvent;
     use dual_pane_application::{Command, Event, WorkRequest};
     use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken};
 
@@ -159,8 +172,19 @@ mod tests {
         Event::ListingLoaded { token, entries: entries(count) }
     }
 
+    fn listed(token: RequestToken, entries: Vec<Entry>) -> Event {
+        Event::ListingLoaded { token, entries: entries.into() }
+    }
+
     fn session(drain_slice: usize) -> PaneSession<FakeRunner> {
         PaneSession::new(FakeRunner::default(), drain_slice, Duration::from_secs(60))
+    }
+
+    fn showing(location: Location, entries: Vec<Entry>) -> PaneSession<FakeRunner> {
+        let mut session = session(DRAIN_SLICE);
+        session.submit(Command::Navigate(location));
+        session.submit(listed(RequestToken::first(), entries));
+        session
     }
 
     #[test]
@@ -253,5 +277,59 @@ mod tests {
         assert_eq!(session.drain(), Drained { change: ViewChange::None, more_pending: true });
         assert_eq!(session.drain(), Drained { change: ViewChange::Reset, more_pending: false });
         assert_eq!(session.view().row_count(), 2);
+    }
+
+    #[test]
+    fn row_selection_uses_the_controller_and_changes_only_selection() {
+        let exact = EntryName::new(b"a\xFF".to_vec()).unwrap();
+        let mut session = showing(Location::root(), vec![Entry::new(exact.clone(), EntryKind::File), Entry::new(name("second"), EntryKind::File)]);
+        assert_eq!(session.submit_ui(UiEvent::SelectRow { row: 0 }), ViewChange::Selection);
+        assert_eq!(session.view().selection().selected(), Some(&exact));
+        assert_eq!(session.view().selected_row(), Some(0));
+        assert_eq!(session.submit_ui(UiEvent::SelectRow { row: 0 }), ViewChange::None);
+        assert_eq!(session.submit_ui(UiEvent::SelectRow { row: 9 }), ViewChange::None);
+        assert_eq!(session.submit_ui(UiEvent::SelectRow { row: 1 }), ViewChange::Selection);
+        assert_eq!(session.view().selected_row(), Some(1));
+    }
+
+    #[test]
+    fn activation_enters_only_an_enterable_valid_row() {
+        let mut session = showing(location("home"), vec![Entry::new(name("folder"), EntryKind::Directory), Entry::new(name("file"), EntryKind::File)]);
+        session.runner.dispatched.clear();
+        assert_eq!(session.submit_ui(UiEvent::ActivateRow { row: 1 }), ViewChange::None);
+        assert_eq!(session.submit_ui(UiEvent::ActivateRow { row: 9 }), ViewChange::None);
+        assert!(session.runner.dispatched.is_empty());
+
+        assert_eq!(session.submit_ui(UiEvent::ActivateRow { row: 0 }), ViewChange::Status);
+        assert_eq!(session.runner.dispatched, [WorkRequest::ReadDirectory { token: RequestToken::first().next(), location: location("home").join(&name("folder")) }]);
+    }
+
+    #[test]
+    fn up_uses_the_logical_parent_and_is_a_no_op_at_root() {
+        let mut root = showing(Location::root(), vec![]);
+        root.runner.dispatched.clear();
+        assert_eq!(root.submit_ui(UiEvent::GoToParent), ViewChange::None);
+        assert!(root.runner.dispatched.is_empty());
+
+        let mut child = showing(location("home"), vec![]);
+        child.runner.dispatched.clear();
+        assert_eq!(child.submit_ui(UiEvent::GoToParent), ViewChange::Status);
+        assert_eq!(child.runner.dispatched, [WorkRequest::ReadDirectory { token: RequestToken::first().next(), location: Location::root() }]);
+    }
+
+    #[test]
+    fn navigation_failure_preserves_selection_and_success_clears_it() {
+        let mut session = showing(location("home"), vec![Entry::new(name("child"), EntryKind::Directory), Entry::new(name("file"), EntryKind::File)]);
+        session.submit_ui(UiEvent::SelectRow { row: 1 });
+        session.submit_ui(UiEvent::ActivateRow { row: 0 });
+        let child_token = RequestToken::first().next();
+        assert_eq!(session.submit(Event::ListingFailed { token: child_token, kind: ListingErrorKind::PrivacyRestricted }), ViewChange::Status);
+        assert_eq!(session.view().selected_row(), Some(1));
+        assert_eq!(session.view().row_count(), 2);
+
+        session.submit_ui(UiEvent::ActivateRow { row: 0 });
+        assert_eq!(session.submit(listed(child_token.next(), vec![Entry::new(name("inside"), EntryKind::File)])), ViewChange::Reset);
+        assert_eq!(session.view().selected_row(), None);
+        assert_eq!(session.view().row_count(), 1);
     }
 }

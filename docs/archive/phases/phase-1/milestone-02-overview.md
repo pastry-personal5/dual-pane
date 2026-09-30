@@ -12,7 +12,7 @@ Establish a reproducible Cargo-only Qt Widgets executable at `crates/dual-pane-d
 
 **In:**
 
-- Replace the temporary root package with the virtual workspace and the sole `dual-pane-desktop` binary package described in [planned-repository-architecture.md](../planned-repository-architecture.md).
+- Replace the temporary root package with the virtual workspace and the sole `dual-pane-desktop` binary package described in [planned-repository-architecture.md](../../../planned-repository-architecture.md).
 - Add a root `Makefile` with phony `build`, `run`, `test`, `fmt`, `fmt-check`, `lint-rust`, `lint-cpp`, and `check` targets. `lint-rust` runs Clippy; `lint-cpp` delegates to the dedicated C++ lint entry point; `check` runs formatting, both linters, and tests. The Makefile contains no compiler, linker, Qt-discovery, or project-generation logic.
 - Add repository-owned configuration for the Rust and C++ quality tools: Clippy for Rust; `clang-tidy` for handwritten C++; `rustfmt` and `clang-format` for formatting. Both linters fail the milestone gate on their configured diagnostics.
 - Do not impose a maximum character count per line. Clippy and `clang-tidy` have no line-length setting, so neither may enable a line-length diagnostic. `.clang-format` sets `ColumnLimit: 0`, LLVM's no-limit value. `rustfmt.toml` sets `max_width = 1000000` and `use_small_heuristics = "Max"`, the tested safe practical-unlimited value; a literal maximum integer crashes rustfmt, so it is deliberately not used.
@@ -33,7 +33,7 @@ Establish a reproducible Cargo-only Qt Widgets executable at `crates/dual-pane-d
 
 The requested root Makefile and the Rust/C++ quality-tool configuration are part of this milestone's approved scope. Implementation may start only after approval to add the direct Cargo dependencies required by the current CXX-Qt Cargo integration: `cxx`, `cxx-qt`, `cxx-qt-lib`, and build-dependency `cxx-qt-build`. The implementation change records their compatible exact version requirements and license review. It also records the installed `clang-tidy` and `clang-format` version used for the C++ gate; neither is a Cargo dependency. The change does not add a Qt download, static-Qt feature, CMake, or another compilation or project-generation system.
 
-The supported machine must provide Xcode Command Line Tools and Qt 6.11.2+ through a `qmake` selected by `QMAKE` or `PATH` (with `QT_VERSION_MAJOR=6` when necessary), as specified in [AGENTS.md](../../AGENTS.md). The build must use dynamically linked Qt under LGPLv3.
+The supported machine must provide Xcode Command Line Tools and Qt 6.11.2+ through a `qmake` selected by `QMAKE` or `PATH` (with `QT_VERSION_MAJOR=6` when necessary), as specified in [AGENTS.md](../../../../AGENTS.md). The build must use dynamically linked Qt under LGPLv3.
 
 ## Completion checklist
 
@@ -47,4 +47,4 @@ The supported machine must provide Xcode Command Line Tools and Qt 6.11.2+ throu
 - [x] `cargo build -p dual-pane-desktop` succeeds with a Qt 6.11.2+ installation selected through the documented `qmake` lookup. Evidence: command exited 0 on 2026-09-29 with `qmake -query QT_VERSION` reporting 6.11.2.
 - [x] Manual spike evidence is recorded for the implementation change: `make run` opens a native window titled `Dual Pane` with no file-manager controls or content, and closing it returns the process normally. Evidence: user confirmed the empty `Dual Pane` window and normal close/process return on 2026-09-29.
 - [x] `make check` and the equivalent direct commands — Rust and C++ formatter checks, `cargo clippy --all-targets -- -D warnings`, the configured `clang-tidy` entry point, and `cargo test` — pass from the workspace root. Evidence: all commands exited 0 on 2026-09-29.
-- [x] [AGENTS.md](../../AGENTS.md) and [README.md](../../README.md) accurately describe the workspace, Makefile targets, Rust/C++ tool prerequisites, and the no-line-length-limit configuration; [docs/README.md](../README.md) indexes both P1-M2 plan documents. Evidence: documentation updated with the P1-M2 commands and LLVM 23.1.2 prerequisite.
+- [x] [AGENTS.md](../../../../AGENTS.md) and [README.md](../../../../README.md) accurately describe the workspace, Makefile targets, Rust/C++ tool prerequisites, and the no-line-length-limit configuration; [docs/README.md](../../../README.md) indexes both P1-M2 plan documents. Evidence: documentation updated with the P1-M2 commands and LLVM 23.1.2 prerequisite.

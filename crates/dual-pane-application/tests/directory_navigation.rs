@@ -38,7 +38,7 @@ fn results_are_kept_in_the_order_they_arrive() {
 #[test]
 fn a_failed_read_keeps_the_previous_listing_and_reports_the_error() {
     let mut workspace = showing(location(&["home"]), vec![dir("secret")]);
-    let token = read_token(&workspace.handle(Command::OpenEntry(name("secret")).into()));
+    let token = read_token(&workspace.handle(Command::OpenEntry { row: 0, name: name("secret") }.into()));
     let transition = workspace.handle(failed(token, ListingErrorKind::PermissionDenied));
     assert_eq!(transition.outputs, [Output::ListingFailed { error: ListingError::new(location(&["home", "secret"]), ListingErrorKind::PermissionDenied) }]);
     assert_eq!(workspace.location(), Some(&location(&["home"])));
@@ -49,22 +49,22 @@ fn a_failed_read_keeps_the_previous_listing_and_reports_the_error() {
 #[test]
 fn opening_a_folder_navigates_into_it() {
     let mut workspace = showing(location(&["home"]), vec![dir("docs")]);
-    let transition = workspace.handle(Command::OpenEntry(name("docs")).into());
+    let transition = workspace.handle(Command::OpenEntry { row: 0, name: name("docs") }.into());
     assert_eq!(transition.outputs, [Output::LoadingStarted { location: location(&["home", "docs"]) }]);
 }
 
 #[test]
 fn opening_a_link_to_a_folder_navigates_through_the_link() {
     let mut workspace = showing(location(&["home"]), vec![link("shortcut", true)]);
-    let transition = workspace.handle(Command::OpenEntry(name("shortcut")).into());
+    let transition = workspace.handle(Command::OpenEntry { row: 0, name: name("shortcut") }.into());
     assert_eq!(transition.outputs, [Output::LoadingStarted { location: location(&["home", "shortcut"]) }]);
 }
 
 #[test]
 fn opening_anything_else_changes_nothing() {
     let mut workspace = showing(location(&["home"]), vec![file("a.txt"), link("file-link", false), dir("docs")]);
-    for target in ["a.txt", "file-link", "missing"] {
-        assert_eq!(workspace.handle(Command::OpenEntry(name(target)).into()), Transition::default());
+    for (row, target) in [(0, "a.txt"), (1, "file-link"), (2, "missing")] {
+        assert_eq!(workspace.handle(Command::OpenEntry { row, name: name(target) }.into()), Transition::default());
     }
     assert_eq!(workspace.loading_location(), None);
 }
@@ -72,7 +72,15 @@ fn opening_anything_else_changes_nothing() {
 #[test]
 fn opening_before_any_listing_changes_nothing() {
     let mut workspace = Workspace::new();
-    assert_eq!(workspace.handle(Command::OpenEntry(name("docs")).into()), Transition::default());
+    assert_eq!(workspace.handle(Command::OpenEntry { row: 0, name: name("docs") }.into()), Transition::default());
+}
+
+#[test]
+fn opening_requires_the_row_and_exact_name_to_match() {
+    let mut workspace = showing(location(&["home"]), vec![dir("first"), dir("second")]);
+    assert_eq!(workspace.handle(Command::OpenEntry { row: 0, name: name("second") }.into()), Transition::default());
+    assert_eq!(workspace.handle(Command::OpenEntry { row: 2, name: name("second") }.into()), Transition::default());
+    assert_eq!(workspace.loading_location(), None);
 }
 
 #[test]

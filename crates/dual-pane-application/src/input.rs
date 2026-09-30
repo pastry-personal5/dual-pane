@@ -14,8 +14,10 @@ pub enum Input {
 pub enum Command {
     /// Show the given location in the pane.
     Navigate(Location),
-    /// Open the named entry of the current listing.
-    OpenEntry(EntryName),
+    /// Select the entry at `row` if its exact name still matches.
+    SelectEntry { row: usize, name: EntryName },
+    /// Open the entry at `row` if its exact name still matches.
+    OpenEntry { row: usize, name: EntryName },
     /// Show the location that contains the current one.
     GoToParent,
 }

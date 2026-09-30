@@ -79,7 +79,7 @@ Keeping this logic out of the bridge makes the bounded-drain rule testable witho
 
 The source factory is an `Arc<dyn Fn() -> ListingSource + Send + Sync>`. Each produced `ListingSource` is a `Box<dyn Fn(&Location, &AtomicBool) -> Option<Result<Arc<[Entry]>, ListingErrorKind>> + Send>`, where `None` means cancelled. The runtime is thus independent of the source, the tests can create fresh blocking fakes, and the next milestone swaps in a factory for the real reader without changing the runtime.
 
-P1-M4 bounds execution to one active worker but retains the standard library's unbounded job and terminal-event channels. Finite admission capacity, typed saturation, lane circuits, and periodic recovery probes remain part of the explicitly post-P1-M4 planned execution model in [architecture.md](../architecture.md#52-planned-desktop-execution-model); this milestone does not claim that later queue model.
+P1-M4 bounds execution to one active worker but retains the standard library's unbounded job and terminal-event channels. Finite admission capacity, typed saturation, lane circuits, and periodic recovery probes remain part of the explicitly post-P1-M4 planned execution model in [architecture.md](../../../architecture.md#52-planned-desktop-execution-model); this milestone does not claim that later queue model.
 
 ## Synthetic source (`synthetic_listing.rs`)
 

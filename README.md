@@ -2,7 +2,7 @@
 
 Dual Pane is a super-fast file manager for macOS, written in Rust.
 
-> **Status: pre-alpha.** The app launches a native window whose single pane shows a 100,000-row synthetic listing, produced off the interface thread. The logic for listing a directory and changing directory in one pane is implemented and tested; reading real folders and changing directory in the window come next.
+> **Status: pre-alpha.** The native window shows one real directory in a dark, responsive pane. Pointer actions select an entry, enter folders and folder links, and go to the logical parent; directory reads stay off the interface thread, and access failures remain visible without replacing the last successful listing.
 
 ## Goals
 
@@ -28,7 +28,7 @@ CXX-Qt finds Qt through `qmake`. Either put Qt 6's `qmake` on your `PATH`, or po
 export QMAKE="$(brew --prefix qt)/bin/qmake"
 ```
 
-The stack spike requires Qt 6.11.2+ and dynamically links Qt Widgets through CXX-Qt. The quality scripts locate Homebrew LLVM automatically; set `CLANG_FORMAT` or `CLANG_TIDY` to override those binaries.
+The desktop requires Qt 6.11.2+ and dynamically links Qt Widgets through CXX-Qt. The quality scripts locate Homebrew LLVM automatically; set `CLANG_FORMAT` or `CLANG_TIDY` to override those binaries.
 
 ## Building and running
 

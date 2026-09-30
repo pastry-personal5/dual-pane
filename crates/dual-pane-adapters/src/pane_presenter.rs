@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dual_pane_application::Output;
-use dual_pane_domain::{Entry, EntryKind, ListingError, ListingErrorKind, Location};
+use dual_pane_domain::{Entry, EntryKind, ListingError, ListingErrorKind, Location, Selection};
 
 /// What a pane shows. Rows are formatted when requested, so updating the view
 /// model costs the same for any directory size.
@@ -12,6 +12,8 @@ pub struct PaneViewModel {
     error: Option<String>,
     status_text: String,
     entries: Arc<[Entry]>,
+    selection: Selection,
+    selected_row: Option<usize>,
 }
 
 /// One displayed row.
@@ -55,6 +57,14 @@ impl PaneViewModel {
         self.entries.len()
     }
 
+    pub fn selection(&self) -> &Selection {
+        &self.selection
+    }
+
+    pub fn selected_row(&self) -> Option<usize> {
+        self.selected_row
+    }
+
     pub fn row(&self, index: usize) -> Option<RowViewModel> {
         self.entry(index).map(|entry| RowViewModel { name: entry.name().to_text_lossy().into_owned(), kind: row_kind(entry.kind()) })
     }
@@ -92,6 +102,10 @@ impl PanePresenter {
                 self.view.loading = false;
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
+            }
+            Output::SelectionChanged { selection, row } => {
+                self.view.selection = selection.clone();
+                self.view.selected_row = *row;
             }
             Output::ListingFailed { error } => {
                 self.view.loading = false;

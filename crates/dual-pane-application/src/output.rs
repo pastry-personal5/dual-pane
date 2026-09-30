@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dual_pane_domain::{Entry, ListingError, Location};
+use dual_pane_domain::{Entry, ListingError, Location, Selection};
 
 /// What changed in the workspace, for presentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,6 +10,8 @@ pub enum Output {
     /// The pane now shows `location` with these entries, replacing the whole
     /// previous listing.
     ListingReplaced { location: Location, entries: Arc<[Entry]> },
+    /// The pane's validated single selection changed.
+    SelectionChanged { selection: Selection, row: Option<usize> },
     /// Loading failed; the pane keeps its previous location and listing.
     ListingFailed { error: ListingError },
     /// Loading ended because its request was cancelled. This is deliberately
