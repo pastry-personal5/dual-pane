@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dual_pane_application::Output;
-use dual_pane_domain::{Entry, EntryKind, ListingError, ListingErrorKind, Location, Selection};
+use dual_pane_domain::{Entry, EntryKind, ListingError, ListingErrorKind, Location, PaneSide, Selection};
 
 /// What a pane shows. Rows are formatted when requested, so updating the view
 /// model costs the same for any directory size.
@@ -14,6 +14,7 @@ pub struct PaneViewModel {
     entries: Arc<[Entry]>,
     selection: Selection,
     selected_row: Option<usize>,
+    listing_revision: u64,
 }
 
 /// One displayed row.
@@ -65,6 +66,11 @@ impl PaneViewModel {
         self.selected_row
     }
 
+    /// Changes only when this pane commits a replacement listing.
+    pub fn listing_revision(&self) -> u64 {
+        self.listing_revision
+    }
+
     pub fn row(&self, index: usize) -> Option<RowViewModel> {
         self.entry(index).map(|entry| RowViewModel { name: entry.name().to_text_lossy().into_owned(), kind: row_kind(entry.kind()) })
     }
@@ -75,14 +81,21 @@ impl PaneViewModel {
 }
 
 /// Keeps a [`PaneViewModel`] up to date from application outputs.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PanePresenter {
+    pane: PaneSide,
     view: PaneViewModel,
 }
 
+impl Default for PanePresenter {
+    fn default() -> Self {
+        Self::new(PaneSide::Left)
+    }
+}
+
 impl PanePresenter {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(pane: PaneSide) -> Self {
+        Self { pane, view: PaneViewModel::default() }
     }
 
     pub fn view(&self) -> &PaneViewModel {
@@ -90,33 +103,41 @@ impl PanePresenter {
     }
 
     pub fn apply(&mut self, output: &Output) {
+        let output_pane = match output {
+            Output::LoadingStarted { pane, .. } | Output::ListingReplaced { pane, .. } | Output::SelectionChanged { pane, .. } | Output::ListingFailed { pane, .. } | Output::ListingCancelled { pane } | Output::ActivePaneChanged { pane } => *pane,
+        };
+        if output_pane != self.pane {
+            return;
+        }
         match output {
             Output::LoadingStarted { .. } => {
                 self.view.loading = true;
                 self.view.error = None;
                 self.view.status_text = "Loading…".to_owned();
             }
-            Output::ListingReplaced { location, entries } => {
+            Output::ListingReplaced { location, entries, .. } => {
                 self.view.location_text = location_text(location);
                 self.view.entries = Arc::clone(entries);
                 self.view.loading = false;
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
+                self.view.listing_revision = self.view.listing_revision.wrapping_add(1);
             }
-            Output::SelectionChanged { selection, row } => {
+            Output::SelectionChanged { selection, row, .. } => {
                 self.view.selection = selection.clone();
                 self.view.selected_row = *row;
             }
-            Output::ListingFailed { error } => {
+            Output::ListingFailed { error, .. } => {
                 self.view.loading = false;
                 self.view.error = Some(error_message(error));
                 self.view.status_text = self.view.error.clone().unwrap_or_default();
             }
-            Output::ListingCancelled => {
+            Output::ListingCancelled { .. } => {
                 self.view.loading = false;
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
             }
+            Output::ActivePaneChanged { .. } => {}
         }
     }
 }

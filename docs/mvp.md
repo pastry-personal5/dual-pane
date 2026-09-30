@@ -13,9 +13,35 @@ This document is the single source of truth for the first usable Dual Pane relea
 - Restoring each pane's tabs, active tab, locations, sort/filter state, and active pane when the application relaunches.
 - Watching open locations and automatically refreshing a changed listing while preserving matching selection and cursor state.
 
+## Standard Layout
+
+The **Standard Layout** has a **Sidebar**, **Sidebar Splitter**, **Left Browser**, **Browser Divider**, and **Right Browser**. The Sidebar contains a **Drives Group** of **Drive Item**s and **Favorites Groups** of **Favorite Group**s containing **Favorite Item**s. Each Left or Right Browser has its respective **Navigation Pane** above its **Folder Pane**. A Navigation Pane will contain **Browser Tabs** (not rendered in P2-M3) and has a read-only **Path Edit Control** showing that Browser’s absolute path. A Folder Pane has **Folder Pane Toolbar Row #1** (the concise current folder name), **Folder Pane Toolbar Row #2** (the **Up Button**), a **Folder Items List**, and a **Browser Status Bar** below the list. The Sidebar Splitter and Browser Divider are three-pixel draggable strips using the inactive Browser color. Hovering either adds a gray border; pressing the primary mouse button to drag removes that border for the duration of the drag.
+
 ## Interaction
 
-Mouse and keyboard are equally supported ways to invoke the same application commands. Concrete key bindings remain to be designed and must not be copied from another file manager by default.
+Mouse and keyboard are equally supported ways to invoke the same application commands. Two-pane browsing begins with both panes at the launch working directory; the left pane is active and its list has keyboard focus. The active pane is the target for pane-specific commands.
+
+| Gesture | Result |
+|---|---|
+| Primary click in a row | Activate that pane and select the row. |
+| Primary double-click in a row | Activate that pane, select the row, and activate the row. |
+| Primary click in empty list space | Activate that pane and clear its selection. |
+| Primary click on a pane scrollbar | Activate that pane; leave its selection unchanged. |
+| Primary click on the Up control | Activate that pane and navigate to its parent. |
+| Modified primary click | Behaves as the corresponding unmodified primary click. |
+| Secondary or middle click | No-op. |
+| Keyboard focus entering a pane's list | Activate that pane. |
+| `Option+F` | Activate the other pane and move keyboard focus to its list, preserving both panes' selection and scroll position. |
+| Plain Tab | Reserved for macOS Full Keyboard Access; no file-manager command. The Up control is not in keyboard focus traversal. |
+| Exact Up, Down, Home, End, Page Up, or Page Down | Select a row in the active pane. At a boundary, movement is a no-op. With no selection, Home, Page Up, Up, and Down select the first row; End and Page Down select the last. Page Up and Page Down move by the number of fully visible rows, clamp at the boundary, and keep the selected row visible. With zero rows, all navigation is a no-op. |
+| Exact Left | Navigate the active pane to its parent; at the root, no-op. This works even when the list has no rows. |
+| Exact Right | Activate the selected row; without a selection or when the selected item cannot be entered, no-op. |
+| Modified movement key | No-op. |
+| Exact Return | Activate the selected row; without a selection, no-op. |
+| Exact Command-Up | Navigate the active pane to its parent; at the root, no-op. |
+| Any other key gesture, including modified Return or Command-Up | No-op. |
+
+These gestures invoke only the application-level commands to activate a pane, select a row, clear selection, activate a row, or navigate to a parent; the no-op gestures invoke none. In a key window, the active Folder Pane has a one-pixel `#2F6D9A` border and the Up control retains its neutral border. Active selected rows use `#2F6D9A` with white text; inactive-pane selected rows use `#1E4668` with white text. In an inactive application window, neither Folder Pane has an accent border and both selected rows use `#1E4668` with white text.
 
 Dragging items from one pane to the other copies them by default. Moving is an explicit operation.
 

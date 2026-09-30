@@ -24,14 +24,13 @@ See [README.md](README.md) for the user-facing overview, [docs/mvp.md](docs/mvp.
 - **Architecture and technical stack:** [architecture.md](docs/architecture.md).
 - **MVP scope:** [mvp.md](docs/mvp.md).
 - **Interaction model:** [mvp.md](docs/mvp.md).
+- **Concrete Phase 2 key bindings:** [mvp.md](docs/mvp.md#interaction).
 - **License:** Apache-2.0 for all project code.
 - **Development process:** work is organized in numbered phases (Phase 1, 2, 3, …). Each phase has numbered milestones (Milestone 1, 2, 3, …), and milestone numbering restarts in every phase. Milestone IDs look like `P1-M2`. See [docs/development-process.md](docs/development-process.md).
 
 ## Undecided — ask before inventing
 
-The product and architecture decisions above leave only the following item open.
-
-- **Concrete key bindings:** to be designed. Don't copy bindings from Total Commander, Midnight Commander, or another file manager by default.
+The product and architecture decisions above leave no open items.
 
 ## Environment setup
 

@@ -1,6 +1,6 @@
 # Phase 2: Two-Pane Browsing
 
-Status: Planned
+Status: Active
 Goal: Show two side-by-side panes, each browsing its own directory, and let the user navigate either pane independently.
 
 ## Exit criteria
@@ -13,17 +13,19 @@ Goal: Show two side-by-side panes, each browsing its own directory, and let the 
 ## Milestones
 
 ### P2-M1: Decide two-pane interaction details
-Status: Planned
+Status: Done
 Goal: Decide how users activate a pane and which keyboard bindings invoke pane focus and existing navigation commands.
 Plan: [overview](milestone-01-overview.md), [architecture](milestone-01-architecture.md)
 
 ### P2-M2: Model two independent panes
-Status: Planned
+Status: Done
 Goal: Extend the Qt-free workspace and application behavior to own two pane states and one active pane, with independent navigation, selection, and listing-result handling.
+Plan: [overview](milestone-02-overview.md), [architecture](milestone-02-architecture.md)
 
 ### P2-M3: Display and activate both panes
-Status: Planned
-Goal: Show two real listings, reflect the active pane, and route pointer and keyboard input through the agreed interaction model.
+Status: Done
+Goal: Show two real listings, display each Folder Pane Toolbar's current folder name, reflect the active pane, and route pointer and keyboard input through the agreed interaction model.
+Plan: [overview](milestone-03-overview.md), [architecture](milestone-03-architecture.md)
 
 ### P2-M4: Verify cross-pane independence and recovery
 Status: Planned

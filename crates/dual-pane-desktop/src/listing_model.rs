@@ -1,11 +1,12 @@
 use std::pin::Pin;
+use std::sync::{Mutex, OnceLock};
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QModelIndex, QString, QVariant};
 use dual_pane_adapters::{PaneViewModel, UiEvent, reader_start_failure_status};
-use dual_pane_application::Command;
+use dual_pane_domain::PaneSide;
 
-use crate::pane_session::{DRAIN_SLICE, DRAIN_TIME_BUDGET, PaneSession, PaneStartup, ViewChange};
+use crate::pane_session::{DRAIN_SLICE, DRAIN_TIME_BUDGET, PaneStartup, WorkspaceSession};
 use crate::runtime::Runtime;
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
@@ -21,188 +22,200 @@ pub mod ffi {
         include!(<QtCore/QAbstractListModel>);
         type QAbstractListModel;
     }
-
     extern "Rust" {
         type PaneStartup;
     }
-
     unsafe extern "C++" {
         include!("dual_pane_desktop/desktop_window.hpp");
-
-        /// Runs the Qt application with one pane until its window closes, and
-        /// returns the event loop's exit status.
         fn run_desktop(startup: Box<PaneStartup>) -> i32;
-        /// Posts a C++-owned queued drain event when the model is still alive.
         fn schedule_gui_drain();
     }
-
     unsafe extern "RustQt" {
         #[qobject]
         #[base = QAbstractListModel]
         #[qproperty(QString, status_text, cxx_name = "statusText", READ, NOTIFY)]
+        #[qproperty(QString, path_text, cxx_name = "pathText", READ, NOTIFY)]
+        #[qproperty(QString, folder_name, cxx_name = "folderName", READ, NOTIFY)]
         #[qproperty(i32, selected_row, cxx_name = "selectedRow", READ, NOTIFY)]
         type ListingModel = super::ListingModelRust;
-
         #[cxx_override]
         #[cxx_name = "rowCount"]
         fn row_count(self: &ListingModel, parent: &QModelIndex) -> i32;
-
         #[cxx_override]
         fn data(self: &ListingModel, index: &QModelIndex, role: i32) -> QVariant;
-
         #[inherit]
         #[cxx_name = "beginResetModel"]
         fn begin_reset_model(self: Pin<&mut ListingModel>);
-
         #[inherit]
         #[cxx_name = "endResetModel"]
         fn end_reset_model(self: Pin<&mut ListingModel>);
-
-        /// Starts the pane's worker and its first navigation.
         fn start(self: Pin<&mut ListingModel>, startup: Box<PaneStartup>);
-
-        /// Drains one slice. The C++ scheduler calls this and schedules the
-        /// next slice only after this RustQt call has returned.
+        fn set_right_pane(self: Pin<&mut ListingModel>);
+        fn refresh(self: Pin<&mut ListingModel>);
         fn drain(self: Pin<&mut ListingModel>) -> bool;
-
-        /// Submits one application-owned row selection.
+        fn activate_pane(self: Pin<&mut ListingModel>);
         fn select_row(self: Pin<&mut ListingModel>, row: i32);
-
-        /// Submits one application-owned row activation.
+        fn select_previous(self: Pin<&mut ListingModel>);
+        fn select_next(self: Pin<&mut ListingModel>);
+        fn clear_selection(self: Pin<&mut ListingModel>);
         fn activate_row(self: Pin<&mut ListingModel>, row: i32);
-
-        /// Navigates to the logical parent of the shown location.
+        fn activate_selected(self: Pin<&mut ListingModel>);
         fn go_to_parent(self: Pin<&mut ListingModel>);
     }
-
     impl cxx_qt::Threading for ListingModel {}
 }
 
-/// `Qt::DisplayRole`.
 const DISPLAY_ROLE: i32 = 0;
-
-/// The Rust state of the Qt list model for one pane.
-pub struct ListingModelRust {
-    status_text: QString,
-    selected_row: i32,
-    session: Option<PaneSession>,
-    /// What the view shows. It changes only inside a model reset, as Qt
-    /// requires, even though the session updates first.
-    shown: PaneViewModel,
+static SESSION: OnceLock<Mutex<Option<WorkspaceSession>>> = OnceLock::new();
+fn session() -> &'static Mutex<Option<WorkspaceSession>> {
+    SESSION.get_or_init(|| Mutex::new(None))
 }
 
+pub struct ListingModelRust {
+    status_text: QString,
+    path_text: QString,
+    folder_name: QString,
+    selected_row: i32,
+    pane: PaneSide,
+    shown: PaneViewModel,
+}
 impl Default for ListingModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), selected_row: -1, session: None, shown: PaneViewModel::default() }
+        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), selected_row: -1, pane: PaneSide::Left, shown: PaneViewModel::default() }
     }
 }
 
 impl ffi::ListingModel {
     fn row_count(&self, parent: &QModelIndex) -> i32 {
-        if parent.is_valid() {
-            return 0;
-        }
-        i32::try_from(self.rust().shown.row_count()).unwrap_or(i32::MAX)
+        if parent.is_valid() { 0 } else { i32::try_from(self.rust().shown.row_count()).unwrap_or(i32::MAX) }
     }
-
     fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
         if role != DISPLAY_ROLE {
             return QVariant::default();
         }
-        let row = usize::try_from(index.row()).ok().and_then(|row| self.rust().shown.row(row));
-        row.map_or_else(QVariant::default, |row| QVariant::from(&QString::from(row.name.as_str())))
+        usize::try_from(index.row()).ok().and_then(|row| self.rust().shown.row(row)).map_or_else(QVariant::default, |row| QVariant::from(&QString::from(row.name.as_str())))
     }
-
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<PaneStartup>) {
         let PaneStartup { location, source_factory } = *startup;
-        let wake = Box::new(ffi::schedule_gui_drain);
-        match Runtime::start(source_factory, wake) {
+        match Runtime::start(source_factory, Box::new(ffi::schedule_gui_drain)) {
             Ok(runtime) => {
-                let mut session = PaneSession::new(runtime, DRAIN_SLICE, DRAIN_TIME_BUDGET);
-                let change = session.submit(Command::Navigate(location));
-                self.as_mut().rust_mut().session = Some(session);
-                self.apply(change);
+                let mut guard = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut coordinator = WorkspaceSession::new(runtime, DRAIN_SLICE, DRAIN_TIME_BUDGET);
+                coordinator.start(location);
+                *guard = Some(coordinator);
+                drop(guard);
+                self.as_mut().refresh();
             }
-            Err(_error) => self.set_status_text(QString::from(reader_start_failure_status())),
+            Err(_) => self.set_status_text(QString::from(reader_start_failure_status())),
         }
     }
-
-    /// Handles one slice on the GUI thread. C++ owns rescheduling so no Qt
-    /// work is posted while this RustQt call holds its shared lock.
-    fn drain(mut self: Pin<&mut Self>) -> bool {
-        let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
-            return false;
-        };
-        let drained = session.drain();
-        self.as_mut().apply(drained.change);
-        drained.more_pending
+    fn set_right_pane(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().get_mut().pane = PaneSide::Right;
+        self.as_mut().refresh();
     }
-
-    fn select_row(mut self: Pin<&mut Self>, row: i32) {
-        let Some(row) = usize::try_from(row).ok() else {
+    fn refresh(mut self: Pin<&mut Self>) {
+        let pane = self.rust().pane;
+        let view = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|coordinator| coordinator.view(pane).clone());
+        let Some(view) = view else {
             return;
         };
-        let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
-            return;
-        };
-        let change = session.submit_ui(UiEvent::SelectRow { row });
-        self.apply(change);
-    }
-
-    fn activate_row(mut self: Pin<&mut Self>, row: i32) {
-        let Some(row) = usize::try_from(row).ok() else {
-            return;
-        };
-        let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
-            return;
-        };
-        let change = session.submit_ui(UiEvent::ActivateRow { row });
-        self.apply(change);
-    }
-
-    fn go_to_parent(mut self: Pin<&mut Self>) {
-        let Some(session) = self.as_mut().rust_mut().get_mut().session.as_mut() else {
-            return;
-        };
-        let change = session.submit_ui(UiEvent::GoToParent);
-        self.apply(change);
-    }
-
-    /// Notifies Qt of `change`, copying the session's view into `shown`.
-    fn apply(mut self: Pin<&mut Self>, change: ViewChange) {
-        let reset = match change {
-            ViewChange::None => return,
-            ViewChange::Status | ViewChange::Selection => false,
-            ViewChange::Reset => true,
-        };
-        let Some(view) = self.rust().session.as_ref().map(|session| session.view().clone()) else {
-            return;
-        };
-        if reset {
+        let listing_changed = self.rust().shown.listing_revision() != view.listing_revision();
+        if listing_changed {
             self.as_mut().begin_reset_model();
         }
         self.as_mut().rust_mut().get_mut().shown = view;
-        if reset {
+        if listing_changed {
             self.as_mut().end_reset_model();
         }
-        let selected_row = self.rust().shown.selected_row().and_then(|row| i32::try_from(row).ok()).unwrap_or(-1);
-        self.as_mut().set_selected_row(selected_row);
-        let text = self.rust().shown.status_text().to_owned();
-        self.set_status_text(QString::from(text.as_str()));
+        let selected = self.rust().shown.selected_row().and_then(|row| i32::try_from(row).ok()).unwrap_or(-1);
+        self.as_mut().set_selected_row(selected);
+        let status = self.rust().shown.status_text().to_owned();
+        self.as_mut().set_status_text(QString::from(status.as_str()));
+        let path = self.rust().shown.location_text().to_owned();
+        self.as_mut().set_path_text(QString::from(path.as_str()));
+        self.as_mut().set_folder_name(QString::from(path.rsplit('/').find(|part| !part.is_empty()).unwrap_or("/")));
     }
-
+    fn drain(mut self: Pin<&mut Self>) -> bool {
+        let more = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut().is_some_and(WorkspaceSession::drain);
+        self.as_mut().refresh();
+        more
+    }
+    fn activate_pane(self: Pin<&mut Self>) {
+        let pane = self.rust().pane;
+        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
+            coordinator.activate(pane);
+        }
+    }
+    fn select_row(mut self: Pin<&mut Self>, row: i32) {
+        if let Ok(row) = usize::try_from(row) {
+            self.as_mut().submit_ui(UiEvent::SelectRow { row });
+        }
+    }
+    fn select_previous(mut self: Pin<&mut Self>) {
+        self.as_mut().move_selection(crate::pane_session::SelectionMovement::Previous);
+    }
+    fn select_next(mut self: Pin<&mut Self>) {
+        self.as_mut().move_selection(crate::pane_session::SelectionMovement::Next);
+    }
+    fn clear_selection(mut self: Pin<&mut Self>) {
+        let pane = self.rust().pane;
+        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
+            coordinator.clear_selection(pane);
+        }
+        self.as_mut().refresh();
+    }
+    fn activate_row(mut self: Pin<&mut Self>, row: i32) {
+        if let Ok(row) = usize::try_from(row) {
+            self.as_mut().submit_ui(UiEvent::ActivateRow { row });
+        }
+    }
+    fn activate_selected(mut self: Pin<&mut Self>) {
+        let pane = self.rust().pane;
+        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
+            coordinator.activate_selection(pane);
+        }
+        self.as_mut().refresh();
+    }
+    fn go_to_parent(mut self: Pin<&mut Self>) {
+        self.as_mut().submit_ui(UiEvent::GoToParent);
+    }
+    fn submit_ui(mut self: Pin<&mut Self>, event: UiEvent) {
+        let pane = self.rust().pane;
+        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
+            coordinator.submit_ui(pane, event);
+        }
+        self.as_mut().refresh();
+    }
+    fn move_selection(mut self: Pin<&mut Self>, movement: crate::pane_session::SelectionMovement) {
+        let pane = self.rust().pane;
+        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
+            coordinator.move_selection(pane, movement);
+        }
+        self.as_mut().refresh();
+    }
     fn set_selected_row(mut self: Pin<&mut Self>, row: i32) {
         if self.rust().selected_row != row {
             self.as_mut().rust_mut().get_mut().selected_row = row;
             self.selected_row_changed();
         }
     }
-
     fn set_status_text(mut self: Pin<&mut Self>, text: QString) {
         if self.rust().status_text != text {
             self.as_mut().rust_mut().get_mut().status_text = text;
             self.status_text_changed();
+        }
+    }
+    fn set_path_text(mut self: Pin<&mut Self>, text: QString) {
+        if self.rust().path_text != text {
+            self.as_mut().rust_mut().get_mut().path_text = text;
+            self.path_text_changed();
+        }
+    }
+    fn set_folder_name(mut self: Pin<&mut Self>, text: QString) {
+        if self.rust().folder_name != text {
+            self.as_mut().rust_mut().get_mut().folder_name = text;
+            self.folder_name_changed();
         }
     }
 }

@@ -1,4 +1,5 @@
 use dual_pane_application::Command;
+use dual_pane_domain::PaneSide;
 
 use crate::PaneViewModel;
 
@@ -29,11 +30,11 @@ impl InputController {
 
     /// The command for `event` given what the pane shows, or `None` when the
     /// event refers to a row that is not shown.
-    pub fn command(&self, event: UiEvent, view: &PaneViewModel) -> Option<Command> {
+    pub fn command(&self, pane: PaneSide, event: UiEvent, view: &PaneViewModel) -> Option<Command> {
         match event {
-            UiEvent::SelectRow { row } => view.entry(row).map(|entry| Command::SelectEntry { row, name: entry.name().clone() }),
-            UiEvent::ActivateRow { row } => view.entry(row).map(|entry| Command::OpenEntry { row, name: entry.name().clone() }),
-            UiEvent::GoToParent => Some(Command::GoToParent),
+            UiEvent::SelectRow { row } => view.entry(row).map(|entry| Command::SelectEntry { pane, row, name: entry.name().clone() }),
+            UiEvent::ActivateRow { row } => view.entry(row).map(|entry| Command::OpenEntry { pane, row, name: entry.name().clone() }),
+            UiEvent::GoToParent => Some(Command::GoToParent { pane }),
         }
     }
 }

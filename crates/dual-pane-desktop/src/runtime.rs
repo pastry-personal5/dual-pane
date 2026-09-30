@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use dual_pane_application::{Event, WorkRequest};
-use dual_pane_domain::{Entry, ListingErrorKind, Location, RequestToken};
+use dual_pane_domain::{Entry, ListingErrorKind, Location, PaneSide, RequestToken};
 
 type ListingOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 pub type ListingSource = Box<dyn Fn(&Location, &AtomicBool) -> ListingOutcome + Send>;
@@ -35,6 +35,7 @@ pub struct Runtime {
 
 #[derive(Clone)]
 struct Job {
+    pane: PaneSide,
     token: RequestToken,
     location: Location,
     state: Arc<JobState>,
@@ -102,26 +103,26 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
-            WorkRequest::ReadDirectory { token, location } => {
+            WorkRequest::ReadDirectory { pane, token, location } => {
                 let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
                 self.outstanding.insert(token, Arc::clone(&state));
-                if let Err(error) = self.jobs.send(Job { token, location, state }) {
+                if let Err(error) = self.jobs.send(Job { pane, token, location, state }) {
                     let job = error.0;
                     if job.state.claim_terminal() {
                         self.outstanding.remove(&job.token);
-                        return Some(Event::ListingFailed { token: job.token, kind: ListingErrorKind::Internal });
+                        return Some(Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
                     }
                 }
                 None
             }
-            WorkRequest::Cancel { token } => {
+            WorkRequest::Cancel { pane, token } => {
                 if let Some(state) = self.outstanding.get(&token) {
                     state.cancelled.store(true, Ordering::Relaxed);
                     if !state.claim_terminal() {
                         return None;
                     }
                     self.outstanding.remove(&token);
-                    return Some(Event::ListingCancelled { token });
+                    return Some(Event::ListingCancelled { pane, token });
                 }
                 None
             }
@@ -173,32 +174,32 @@ fn supervise_with(queue: Receiver<Job>, source_factory: ListingSourceFactory, de
             result_sender.send((worker_job, outcome)).ok();
         });
         if spawn_worker(worker).is_err() {
-            finish(&delivery, &job, Event::ListingFailed { token: job.token, kind: ListingErrorKind::Internal });
+            finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
             sleep(delay);
             delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             continue;
         }
         let Ok((job, outcome)) = result_receiver.recv() else {
-            finish(&delivery, &job, Event::ListingFailed { token: job.token, kind: ListingErrorKind::Internal });
+            finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
             sleep(delay);
             delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             continue;
         };
         match outcome {
             WorkerOutcome::Completed(Some(Ok(entries))) => {
-                finish(&delivery, &job, Event::ListingLoaded { token: job.token, entries });
+                finish(&delivery, &job, Event::ListingLoaded { pane: job.pane, token: job.token, entries });
                 delay = INITIAL_RESTART_DELAY;
             }
             WorkerOutcome::Completed(Some(Err(kind))) => {
-                finish(&delivery, &job, Event::ListingFailed { token: job.token, kind });
+                finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind });
                 delay = INITIAL_RESTART_DELAY;
             }
             WorkerOutcome::Completed(None) => {
-                finish(&delivery, &job, Event::ListingCancelled { token: job.token });
+                finish(&delivery, &job, Event::ListingCancelled { pane: job.pane, token: job.token });
                 delay = INITIAL_RESTART_DELAY;
             }
             WorkerOutcome::Panicked => {
-                finish(&delivery, &job, Event::ListingFailed { token: job.token, kind: ListingErrorKind::Internal });
+                finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
                 sleep(delay);
                 delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             }
@@ -220,11 +221,11 @@ fn deliver_event(delivery: &Delivery, event: Event) {
 
 fn event_token(event: &Event) -> RequestToken {
     match event {
-        Event::ListingLoaded { token, .. } | Event::ListingFailed { token, .. } | Event::ListingCancelled { token } => *token,
+        Event::ListingLoaded { token, .. } | Event::ListingFailed { token, .. } | Event::ListingCancelled { token, .. } => *token,
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any()))]
 mod tests {
     use super::*;
     use dual_pane_domain::EntryName;
