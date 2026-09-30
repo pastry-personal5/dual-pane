@@ -12,7 +12,7 @@ Launch into a real directory listing with Phase 1's dark theme and mouse interac
 
 **In:**
 
-- A Qt-free `directory_listing.rs` gateway in `dual-pane-desktop` that converts a domain `Location` to an exact native path, enumerates it through `std::fs::read_dir`, classifies files, folders, other entries, and symbolic links to folders, defensively filters the exact entries `.` and `..` plus entries that disappear during the scan, sorts with `listing_sort_key`, and returns the existing `ListingSource` result. Other dot-prefixed entries remain visible.
+- A Qt-free `directory_listing.rs` gateway in `dual-pane-desktop` that converts a domain `Location` to an exact native path, enumerates it through `std::fs::read_dir`, classifies files, folders, other entries, and symbolic links to folders, defensively filters the exact entries `.` and `..` plus entries that disappear during the scan, sorts with `listing_sort_key`, and supplies fresh instances through the existing `ListingSourceFactory` seam. Other dot-prefixed entries remain visible.
 - All enumeration, per-entry metadata work, filtering, and sorting inside the existing supervised listing worker. Cancellation is checked before the read, during enumeration and classification, and before and after sorting.
 - The already approved `tempfile` dev-dependency in `dual-pane-desktop`, used only for reader tests. Tests create all filesystem state below temporary directories.
 - The reverse byte-exact conversion `Location` to `PathBuf` in `native_location.rs`, alongside the existing `Path` to `Location` conversion.

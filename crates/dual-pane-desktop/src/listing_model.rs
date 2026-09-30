@@ -5,7 +5,7 @@ use cxx_qt_lib::{QModelIndex, QString, QVariant};
 use dual_pane_adapters::{PaneViewModel, reader_start_failure_status};
 use dual_pane_application::Command;
 
-use crate::pane_session::{DRAIN_SLICE, PaneSession, PaneStartup, ViewChange};
+use crate::pane_session::{DRAIN_SLICE, DRAIN_TIME_BUDGET, PaneSession, PaneStartup, ViewChange};
 use crate::runtime::Runtime;
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
@@ -99,11 +99,11 @@ impl ffi::ListingModel {
 
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<PaneStartup>) {
-        let PaneStartup { location, source } = *startup;
+        let PaneStartup { location, source_factory } = *startup;
         let wake = Box::new(ffi::schedule_gui_drain);
-        match Runtime::start(source, wake) {
+        match Runtime::start(source_factory, wake) {
             Ok(runtime) => {
-                let mut session = PaneSession::new(runtime, DRAIN_SLICE);
+                let mut session = PaneSession::new(runtime, DRAIN_SLICE, DRAIN_TIME_BUDGET);
                 let change = session.submit(Command::Navigate(location));
                 self.as_mut().rust_mut().session = Some(session);
                 self.apply(change);

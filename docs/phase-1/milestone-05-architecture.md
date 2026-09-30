@@ -2,7 +2,7 @@
 
 Status: Proposal
 
-P1-M5 supplies the real filesystem gateway that P1-M4's `ListingSource` seam was built to receive, adds application-owned single selection, and connects selection and navigation to a dark Qt pane. It does not move policy outward or replace the worker runtime: native paths and errors stay in `dual-pane-desktop`, selection and navigation state stay in `Workspace`, and hover plus widgets remain C++/CXX-Qt concerns.
+P1-M5 supplies the real filesystem gateway that P1-M4's `ListingSourceFactory` seam was built to receive, adds application-owned single selection, and connects selection and navigation to a dark Qt pane. It does not move policy outward or replace the worker runtime: native paths and errors stay in `dual-pane-desktop`, selection and navigation state stay in `Workspace`, and hover plus widgets remain C++/CXX-Qt concerns.
 
 ## Target boundary
 
@@ -177,7 +177,7 @@ This path is non-blocking, creates no nested event loop, and permits an immediat
 
 ## Startup and shutdown
 
-`main.rs` keeps the current start-location rule but replaces `SyntheticListing` with the real reader function in `PaneStartup`. There is no row-count configuration or demo data. Runtime startup, coalesced GUI wake-up, terminal-event accounting, panic recovery, and shutdown remain unchanged.
+`main.rs` keeps the current start-location rule but replaces the synthetic source factory in `PaneStartup` with one that creates a fresh real reader for each job. There is no row-count configuration or demo data. Runtime startup, coalesced GUI wake-up, terminal-event accounting, panic recovery, and shutdown remain unchanged.
 
 Dropping the window still detaches the scheduler before model destruction. Dropping the runtime marks outstanding reads cancelled and never joins a worker from the GUI thread.
 
