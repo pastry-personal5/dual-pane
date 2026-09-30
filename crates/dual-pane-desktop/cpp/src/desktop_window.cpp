@@ -28,27 +28,26 @@ class DrainScheduler final : public QObject {
     explicit DrainScheduler(ListingModel *model) : model_(model) {}
 
     void schedule() {
+        // Wakes come from the listing worker while drain_one runs on the GUI
+        // thread. The atomic exchange coalesces them without a cross-thread
+        // access to ordinary state.
+        if (scheduled_.exchange(true)) {
+            return;
+        }
         // NOLINTNEXTLINE(readability-redundant-lambda-parameter-list)
-        QMetaObject::invokeMethod(this, [this]() -> void {
-            if (scheduled_) {
-                return;
-            }
-            scheduled_ = true;
-            drain_one(); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this]() -> void { drain_one(); }, Qt::QueuedConnection);
     }
 
   private:
     void drain_one() {
-        scheduled_ = false;
+        scheduled_.store(false);
         if (model_ != nullptr && model_->drain()) {
-            // NOLINTNEXTLINE(readability-redundant-lambda-parameter-list)
-            QMetaObject::invokeMethod(this, [this]() -> void { drain_one(); }, Qt::QueuedConnection);
-            scheduled_ = true;
+            schedule();
         }
     }
 
     ListingModel *model_;
-    bool scheduled_ = false;
+    std::atomic_bool scheduled_ = false;
 };
 
 struct SchedulerState {
