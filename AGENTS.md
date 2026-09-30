@@ -6,7 +6,7 @@ This file is the **single source of agent instructions**. Do not create `CLAUDE.
 
 ## Project
 
-`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. It is in the **pre-alpha** stage: the desktop crate shows one dark, mouse-driven pane that reads real directories on a worker, while the Qt-free domain, application, and adapter crates own and test listing, selection, navigation, and error behavior. Phase 1 is complete; the application does not have its second pane or file operations yet.
+`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. Version 1.0.0 has just been released: the desktop app shows one dark, mouse-driven pane that reads real directories on a worker, while the Qt-free domain, application, and adapter crates own and test listing, selection, navigation, and error behavior. The second pane and file operations are not included yet.
 
 See [README.md](README.md) for the user-facing overview, [docs/mvp.md](docs/mvp.md) for product scope, and [docs/architecture.md](docs/architecture.md) for architecture. Design and process docs are indexed at [docs/README.md](docs/README.md).
 

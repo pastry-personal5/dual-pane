@@ -11,6 +11,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [mvp.md](mvp.md) | Active MVP product scope, interaction rules, file-operation behavior, session recovery, and exclusions. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and which phase is active. |
+| [release-notes/1.0.0.md](release-notes/1.0.0.md) | Concise release notes for version 1.0.0. |
 | [archive/phases/phase-1/phase.md](archive/phases/phase-1/phase.md) | Completed Phase 1 goal, exit criteria, and milestones. |
 | [archive/phases/phase-1/milestone-02-overview.md](archive/phases/phase-1/milestone-02-overview.md) | Archived P1-M2 scope, checklist, and evidence for the Cargo/Qt Widgets stack spike. |
 | [archive/phases/phase-1/milestone-02-architecture.md](archive/phases/phase-1/milestone-02-architecture.md) | Archived P1-M2 workspace, bridge, Qt window, and implementation plan. |

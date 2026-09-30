@@ -2,7 +2,7 @@
 
 Dual Pane is a super-fast file manager for macOS, written in Rust.
 
-> **Status: pre-alpha.** The native window shows one real directory in a dark, responsive pane. Pointer actions select an entry, enter folders and folder links, and go to the logical parent; directory reads stay off the interface thread, and access failures remain visible without replacing the last successful listing.
+> **Version 1.0.0 has just been released.** The native window shows one real directory in a dark, responsive pane. Pointer actions select an entry, enter folders and folder links, and go to the logical parent; directory reads stay off the interface thread, and access failures remain visible without replacing the last successful listing.
 
 ## Goals
 

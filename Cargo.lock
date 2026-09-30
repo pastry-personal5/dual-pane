@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "dual-pane-adapters"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "dual-pane-application",
  "dual-pane-domain",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "dual-pane-application"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "dual-pane-domain",
  "proptest",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "dual-pane-desktop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "dual-pane-domain"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "unicode-normalization",
