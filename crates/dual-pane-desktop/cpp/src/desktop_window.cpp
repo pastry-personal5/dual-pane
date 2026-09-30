@@ -135,6 +135,11 @@ class ListingView final : public QTreeView {
         if (event->button() == Qt::LeftButton) {
             const auto index = indexAt(event->position().toPoint());
             if (index.isValid()) {
+                // A native double-click normally includes the first click's
+                // release, but make the ordering explicit for every event
+                // path: activation always follows application-owned
+                // selection of the same validated row.
+                model_->select_row(index.row());
                 model_->activate_row(index.row());
             }
         }
@@ -144,12 +149,14 @@ class ListingView final : public QTreeView {
   private:
     void synchronize_selection() {
         const auto row = model_->getSelectedRow();
-        const auto index = model_->index(row, 0);
-        if (row >= 0 && index.isValid()) {
-            selectionModel()->select(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-        } else {
-            selectionModel()->clearSelection();
+        if (row >= 0) {
+            const auto index = model_->index(row, 0);
+            if (index.isValid()) {
+                selectionModel()->select(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                return;
+            }
         }
+        selectionModel()->clearSelection();
     }
 
     ListingModel *model_;

@@ -1,8 +1,8 @@
 # Roadmap
 
-Status: Active
+Status: Done
 
-Every phase, one line each: ID, title, status, and a link to its phase doc. This is the only place that says which phase is active. See [development-process.md](development-process.md) for how phases and milestones work.
+Every phase, one line each: ID, title, status, and a link to its phase doc. There is no active phase while every listed phase is done. See [development-process.md](development-process.md) for how phases and milestones work.
 
 | Phase | Title | Status | Plan |
 |-------|-------|--------|------|
