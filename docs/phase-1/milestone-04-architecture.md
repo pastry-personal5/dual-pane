@@ -1,0 +1,104 @@
+# P1-M4 architecture: Qt listing model and worker delivery
+
+Status: Done
+
+P1-M4 builds the desktop ring's delivery path: a Rust Qt list model, a pane session that owns the application state on the GUI thread, and a bounded worker runtime. Everything except the synthetic listing source is kept by the next milestone, which only swaps the source for the real directory reader.
+
+## Target boundary
+
+```text
+crates/dual-pane-desktop/
+├── Cargo.toml                  # + inner crates, cxx-qt-lib moves to [dependencies]
+├── build.rs                    # registers listing_model.rs; keeps Widgets
+├── src/
+│   ├── main.rs                 # composition root: start location, source, run
+│   ├── listing_model.rs        # CXX-Qt bridge: ListingModel QObject, run_desktop
+│   ├── pane_session.rs         # Qt-free: workspace + presenter + runtime, bounded drain
+│   ├── runtime.rs              # Qt-free: worker thread, job queue, cancellation, wake
+│   ├── synthetic_listing.rs    # Qt-free: 100,000 sorted entries, cancellable
+│   └── native_location.rs      # Qt-free: Path ↔ Location without lossy names
+└── cpp/
+    ├── include/dual_pane_desktop/desktop_window.hpp
+    └── src/desktop_window.cpp  # QApplication, QMainWindow, QTreeView, status line
+```
+
+`desktop_bridge.rs` and the `extern "C"` entry point are removed: the bridge declares `run_desktop(Box<PaneStartup>)` in an `extern "C++"` block and CXX-Qt generates its call wrapper. That requires `cxx` and CXX-Qt's `cxx-gen` to share a patch version, because cxx embeds it in bridge symbol names; `cxx` is pinned to `=1.0.202` for that reason.
+
+`synthetic_listing.rs` is the only module the next milestone deletes. Every other module keeps its role.
+
+## Composition and startup
+
+1. `main.rs` computes the start location: `std::env::current_dir()` converted by `native_location::location_from_path`, or `Location::root()` if either step fails. It builds a `PaneStartup` holding that location and the listing source (a `SyntheticListing` with `rows = 100_000`) and calls `run_desktop(Box<PaneStartup>)`. It maps the returned status to the process exit code.
+2. The C++ `run_desktop` creates `QApplication`, a `QMainWindow` titled `Dual Pane`, a `ListingModel`, a `QTreeView` with uniform row heights, no root decoration, and no header, and a status `QLabel`, all on the stack in that order so each is destroyed before the window that holds it. It sets the model on the view, connects the model's `statusText` change to the label, calls `model->start(std::move(startup))`, shows the window, and enters the event loop. C++ owns every Qt object's lifetime.
+3. `ListingModel::start` creates the `PaneSession` from the startup value and a wake function built from `self.qt_thread()`, then submits `Command::Navigate(start)`.
+
+`main.rs` stays the only place that chooses concrete sources and the start location. `ListingModel::start` wires only what needs the live `QObject`: its thread handle.
+
+## Listing model (`listing_model.rs`)
+
+A `#[cxx_qt::bridge]` declares `ListingModel` as `#[qobject] #[base = QAbstractListModel]` with `impl cxx_qt::Threading`. Its Rust struct holds `Option<PaneSession>` and a `status_text: QString` property.
+
+| Member | Behavior |
+|---|---|
+| `rowCount(parent)` override | `0` for a valid parent; otherwise the presenter view's `row_count()`, saturated to `i32`. |
+| `data(index, role)` override | For `Qt::DisplayRole`, the row's display name as a `QString`, formatted on demand; otherwise an empty `QVariant`. |
+| `beginResetModel` / `endResetModel` | `#[inherit]` calls used for `ListingReplaced`. A reset is constant-time for a list model; the view requests only visible rows. |
+| `start(Box<PaneStartup>)` invokable | Creates the session and submits the start navigation. |
+| `drain()` | Called only by queued wake closures on the GUI thread. Asks the session to drain one slice, applies the reported model change and status text, and queues another `drain` through its own thread handle if the session reports more pending results, so input and painting run between slices. |
+
+`queue` errors after the `QObject` is destroyed are ignored with `.ok()`, as the CXX-Qt documentation recommends; the worker has no other way to reach the GUI.
+
+## Pane session (`pane_session.rs`)
+
+`PaneSession` is Qt-free and lives on the GUI thread. It owns `Workspace`, `PanePresenter`, and a `WorkRunner`: the `Runtime` in the app, or a deterministic fake in tests. `WorkRunner` has two methods, `dispatch(WorkRequest)` and `take_events(max)`, which returns the events and whether more remain.
+
+- `submit(input)` runs `Workspace::handle`, applies every output to the presenter, dispatches every work request to the runtime, and returns a `ViewChange` (`None`, `Status`, or `Reset`) describing what the Qt model must notify.
+- `drain()` takes at most `DRAIN_SLICE` (32) delivered events from the runtime, submits each, and returns the combined `ViewChange` plus whether more events remain.
+- It also exposes the presenter view, and `status_text` formats a view's status line (the error message, loading, or the location path).
+- The Qt model keeps its own copy of the view (cheap, because entries are shared through an `Arc`) and replaces it only between `beginResetModel` and `endResetModel`, so Qt never sees data change outside a reset.
+
+Keeping this logic out of the bridge makes the bounded-drain rule testable without Qt.
+
+## Runtime (`runtime.rs`)
+
+`Runtime` owns one named worker thread, `listing-worker`. That is the Phase 1 capacity; the queue design allows more workers later without changing callers.
+
+| Part | Design |
+|---|---|
+| Job queue | `std::sync::mpsc` channel of jobs `{ token, location, cancelled: Arc<AtomicBool> }`. |
+| Cancellation | A map from `RequestToken` to its flag. `WorkRequest::Cancel` sets the flag and forgets it; taking a delivered event also forgets its token, so the map stays bounded. The worker skips a job whose flag is already set and passes the flag to the source, which checks it at least every 1,024 entries. A cancelled job delivers nothing: the workspace has already moved on. |
+| Results | A second channel carries application `Event`s from the worker to the GUI thread. |
+| Wake | After sending a result, the worker calls the wake function only if an `AtomicBool` "wake pending" flag was clear. `drain` clears the flag before reading, so no result is left without a wake. |
+| Shutdown | Dropping the runtime closes the job channel and sets every outstanding flag. The GUI thread never joins or waits for the worker; the worker exits after its current job. |
+
+The listing source is a `Box<dyn Fn(&Location, &AtomicBool) -> Option<Result<Arc<[Entry]>, ListingErrorKind>> + Send>`, where `None` means cancelled. The runtime is thus independent of the source, the tests can use a blocking fake source, and the next milestone swaps in the real reader without changing the runtime.
+
+## Synthetic source (`synthetic_listing.rs`)
+
+`SyntheticListing { rows }` ignores the location and builds `rows` entries on the worker. The names are deterministic, such as `Folder 00040` for every tenth row and `Item 00042.txt` otherwise. It sorts them with `sort_by_cached_key(listing_sort_key)` and returns them as `Arc<[Entry]>`. It checks cancellation before allocating, while building, and before sorting.
+
+## Location conversion (`native_location.rs`)
+
+`location_from_path(&Path) -> Option<Location>` accepts only absolute paths made of root and normal components. It converts each component's `OsStr` bytes (`std::os::unix::ffi::OsStrExt`) into an `EntryName` without lossy conversion. It rejects `.`, `..`, and relative paths. The next milestone adds the reverse conversion with its first user.
+
+## Tests
+
+- Unit tests live in `#[cfg(test)]` modules of the Qt-free files and run under the desktop crate's normal `cargo test`. They use fake sources and wake counters, never Qt objects or real user paths.
+- The Qt model and window are proven by the manual launch evidence in the [overview](milestone-04-overview.md#completion-checklist).
+
+## Implementation sequence
+
+1. Move `cxx-qt-lib` to `[dependencies]`, add the inner-crate path dependencies, and verify with a minimal `ListingModel` that CXX-Qt 0.10.0 generates the `run_desktop` wrapper, `#[base = QAbstractListModel]`, `#[cxx_override]`, `#[inherit]`, and `Threading`. Record the outcome, including any fallback, in the changelog.
+2. Add `native_location.rs`, `synthetic_listing.rs`, and `runtime.rs` with their tests.
+3. Add `pane_session.rs` with its tests.
+4. Complete `listing_model.rs` and the C++ window, remove `desktop_bridge.rs` and the old C ABI, and update `build.rs`.
+5. Run the manual launch, then the dead-code, stray-file, and naming checks, then `make check` and the direct commands once.
+6. Update AGENTS.md, README.md, `planned-repository-architecture.md`, and `phase.md`, and check the completed items.
+
+## Constraints and rejection criteria
+
+- The GUI thread never generates, sorts, or reads listings; never joins or waits for the worker; and handles at most `DRAIN_SLICE` events per event-loop turn.
+- Workers never touch Qt objects, the presenter, or the workspace; they reach the GUI only through the wake function.
+- No Qt or CXX-Qt type appears outside `listing_model.rs` and the C++ shim; the other desktop modules stay Qt-free.
+- No unbounded thread creation, no busy waiting, and no `unwrap()` or `expect()` on I/O outside tests.
+- No leftover code: the old bridge is removed, no `#[allow(dead_code)]` is added, and nothing is kept "for later" except what the next milestone uses unchanged.

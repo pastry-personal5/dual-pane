@@ -6,7 +6,7 @@ This file is the **single source of agent instructions**. Do not create `CLAUDE.
 
 ## Project
 
-`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. It is in the **pre-alpha** stage: the desktop crate shows an empty Qt Widgets window, and the Qt-free domain, application, and adapter crates implement and test the logic for one-pane listing and directory changes. Nothing reads real directories or shows a listing yet.
+`dual-pane` is a dual-pane (two-panel) file manager for macOS, written in Rust with a Qt 6 Widgets UI. It is in the **pre-alpha** stage: the desktop crate shows one pane with a 100,000-row synthetic listing, delivered from a worker thread through a Rust Qt list model, and the Qt-free domain, application, and adapter crates implement and test the logic for one-pane listing and directory changes. Nothing reads real directories yet.
 
 See [README.md](README.md) for the user-facing overview, [docs/mvp.md](docs/mvp.md) for product scope, and [docs/architecture.md](docs/architecture.md) for architecture. Design and process docs are indexed at [docs/README.md](docs/README.md).
 
@@ -50,12 +50,12 @@ P1-M2 requires Qt 6.11.2+ and dynamically links its Widgets framework through CX
 
 ```sh
 make build                                   # Cargo build
-make run                                     # launch the empty Qt Widgets window
+make run                                     # launch the one-pane Qt Widgets window
 make test                                    # Cargo tests
 make fmt                                     # Rust and C++ formatters
 make fmt-check                               # formatter checks
 make lint-rust                               # Clippy with warnings denied
-make lint-cpp                                # configured clang-tidy
+make lint-cpp                                # builds the desktop crate, then configured clang-tidy
 make check                                   # full formatter, linter, and test gate
 ```
 

@@ -69,8 +69,11 @@ enum NameToken {
     /// A run of ASCII digits with leading zeros removed, so the numeric value
     /// is compared by length and then digit by digit, without overflow.
     Number(Box<str>),
-    /// The lowercase form of one character that is not an ASCII digit.
-    Text(Box<str>),
+    /// The lowercase form of one character that is not an ASCII digit. A
+    /// lowercase form has at most three characters; the rest is padded with
+    /// NUL, which no name contains, so it compares like the lowercase text
+    /// without allocating.
+    Text([char; 3]),
 }
 
 impl Ord for NameToken {
@@ -78,10 +81,10 @@ impl Ord for NameToken {
         match (self, other) {
             (Self::Number(x), Self::Number(y)) => x.len().cmp(&y.len()).then_with(|| x.cmp(y)),
             (Self::Text(x), Self::Text(y)) => x.cmp(y),
-            // Text never starts with an ASCII digit, so "0" stands for every
+            // Text never starts with an ASCII digit, so '0' stands for every
             // number and a number never equals text.
-            (Self::Number(_), Self::Text(y)) => "0".cmp(y),
-            (Self::Text(x), Self::Number(_)) => (**x).cmp("0"),
+            (Self::Number(_), Self::Text(y)) => '0'.cmp(&y[0]),
+            (Self::Text(x), Self::Number(_)) => x[0].cmp(&'0'),
         }
     }
 }
@@ -102,7 +105,11 @@ fn name_tokens(text: &str) -> Vec<NameToken> {
             tokens.push(NameToken::Number(digits.trim_start_matches('0').into()));
             rest = tail;
         } else {
-            tokens.push(NameToken::Text(first.to_lowercase().collect::<String>().into()));
+            let mut lowercase = ['\0'; 3];
+            for (slot, character) in lowercase.iter_mut().zip(first.to_lowercase()) {
+                *slot = character;
+            }
+            tokens.push(NameToken::Text(lowercase));
             rest = &rest[first.len_utf8()..];
         }
     }

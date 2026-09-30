@@ -40,6 +40,15 @@ sdk_path=$(xcrun --show-sdk-path)
 
 cd "$repository_root"
 
+# The shim includes headers that CXX-Qt generates while building the desktop crate. Cargo reports
+# that crate's build-script output directory, which holds them under `cxxqtbuild/include`.
+desktop_out_dir=$(cargo build -q -p dual-pane-desktop --message-format=json | sed -n 's/^{"reason":"build-script-executed","package_id":"[^"]*dual-pane-desktop#[^"]*".*"out_dir":"\([^"]*\)"}$/\1/p' | tail -n 1)
+generated_headers="$desktop_out_dir/cxxqtbuild/include"
+if [ -z "$desktop_out_dir" ] || [ ! -d "$generated_headers" ]; then
+    echo "CXX-Qt generated headers were not found; check that 'cargo build -p dual-pane-desktop' succeeds" >&2
+    exit 1
+fi
+
 for source in crates/dual-pane-desktop/cpp/include/dual_pane_desktop/desktop_window.hpp crates/dual-pane-desktop/cpp/src/desktop_window.cpp; do
-    "$clang_tidy" --config-file="$repository_root/.clang-tidy" --warnings-as-errors='*' "$source" -- -std=c++17 -isysroot "$sdk_path" -I"$repository_root/crates/dual-pane-desktop/cpp/include" -isystem "$qt_headers" -F "$qt_libraries" -iframework "$qt_libraries"
+    "$clang_tidy" --config-file="$repository_root/.clang-tidy" --warnings-as-errors='*' "$source" -- -std=c++17 -isysroot "$sdk_path" -I"$repository_root/crates/dual-pane-desktop/cpp/include" -isystem "$generated_headers" -isystem "$qt_headers" -F "$qt_libraries" -iframework "$qt_libraries"
 done

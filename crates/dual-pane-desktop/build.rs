@@ -5,7 +5,7 @@ fn main() {
     // not change CXX-Qt's generated sources, linkage, or compiler configuration.
     unsafe {
         CxxQtBuilder::new()
-            .file("src/desktop_bridge.rs")
+            .file("src/listing_model.rs")
             .cpp_file("cpp/src/desktop_window.cpp")
             .qt_module("Widgets")
             .cc_builder(|builder| {

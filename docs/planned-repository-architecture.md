@@ -48,7 +48,11 @@ This is the target tree once each crate and its first representative test have e
 │       ├── Cargo.toml
 │       ├── build.rs                    # created with the CXX-Qt bridge
 │       ├── src/
-│       │   └── main.rs                 # composition root and executable entry point
+│       │   ├── main.rs                 # composition root and executable entry point
+│       │   ├── listing_model.rs        # CXX-Qt bridge: Qt list model and run_desktop
+│       │   ├── pane_session.rs         # Qt-free: workspace, presenter, bounded drain
+│       │   ├── runtime.rs              # Qt-free: worker thread, cancellation, GUI wake
+│       │   └── native_location.rs      # Qt-free: Path to Location conversion
 │       ├── cpp/                        # created with C++ Qt shim source
 │           ├── include/dual_pane_desktop/
 │           └── src/
