@@ -37,4 +37,4 @@ Notes: `make check` passed after `cxx` was bumped to 1.0.202 to match CXX-Qt's c
 ### P1-M5: Real directory browsing in one pane
 Status: Planned
 Goal: Replace the synthetic listing with real directories and let a person change directory, completing the Phase 1 exit criteria.
-Plan: [overview](milestone-05-overview.md) (partial; the architecture doc is written before implementation)
+Plan: [overview](milestone-05-overview.md), [architecture](milestone-05-architecture.md)

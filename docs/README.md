@@ -18,5 +18,6 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-03-architecture.md](phase-1/milestone-03-architecture.md) | P1-M3 domain types, `Workspace::handle` inputs and outputs, adapters, tests, and implementation sequence. |
 | [phase-1/milestone-04-overview.md](phase-1/milestone-04-overview.md) | P1-M4 scope, decisions, and completion checklist for the Qt listing model and worker delivery. |
 | [phase-1/milestone-04-architecture.md](phase-1/milestone-04-architecture.md) | P1-M4 list model, pane session, runtime, synthetic source, and implementation sequence. |
-| [phase-1/milestone-05-overview.md](phase-1/milestone-05-overview.md) | Partial P1-M5 plan: real directory browsing, and removing P1-M4's demo code. |
+| [phase-1/milestone-05-overview.md](phase-1/milestone-05-overview.md) | P1-M5 scope, GUI behavior, decisions, and completion checklist for real one-pane directory browsing. |
+| [phase-1/milestone-05-architecture.md](phase-1/milestone-05-architecture.md) | P1-M5 directory gateway, selection state, dark Qt mouse UI, error mapping, tests, and implementation sequence. |
 | [archive/](archive/README.md) | Finished or superseded docs. Skip unless you need history. |
