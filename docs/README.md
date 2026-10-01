@@ -11,6 +11,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [mvp.md](mvp.md) | Active MVP product scope, interaction rules, file-operation behavior, session recovery, and exclusions. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and which phase is active. |
+| [phase-3/phase.md](phase-3/phase.md) | Planned Phase 3 goal, exit criteria, and milestone sequence for tabs, file operations, session recovery, and watching. |
 | [archive/phases/phase-2/phase.md](archive/phases/phase-2/phase.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |
 | [archive/phases/phase-2/milestone-01-overview.md](archive/phases/phase-2/milestone-01-overview.md) | Completed P2-M1 interaction-decision scope and acceptance evidence. |
 | [archive/phases/phase-2/milestone-01-architecture.md](archive/phases/phase-2/milestone-01-architecture.md) | Completed P2-M1 documentation-only approach and implementation boundary. |
