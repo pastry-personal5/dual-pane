@@ -4,8 +4,8 @@
 //! boundary. They reshape data for a screen but make no file-manager
 //! decisions of their own.
 
+mod browser_presenter;
 mod input_controller;
-mod pane_presenter;
 
+pub use browser_presenter::{BrowserPresenter, BrowserViewModel, RowKind, RowViewModel, reader_start_failure_status};
 pub use input_controller::{InputController, UiEvent};
-pub use pane_presenter::{PanePresenter, PaneViewModel, RowKind, RowViewModel, reader_start_failure_status};

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use dual_pane_application::Output;
-use dual_pane_domain::{Entry, EntryKind, ListingError, ListingErrorKind, Location, PaneSide, Selection};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, Selection};
 
-/// What a pane shows. Rows are formatted when requested, so updating the view
+/// What a Browser shows. Rows are formatted when requested, so updating the view
 /// model costs the same for any directory size.
 #[derive(Debug, Clone, Default)]
-pub struct PaneViewModel {
+pub struct BrowserViewModel {
     location_text: String,
     loading: bool,
     error: Option<String>,
@@ -14,7 +14,7 @@ pub struct PaneViewModel {
     entries: Arc<[Entry]>,
     selection: Selection,
     selected_row: Option<usize>,
-    listing_revision: u64,
+    folder_items_revision: u64,
 }
 
 /// One displayed row.
@@ -34,7 +34,7 @@ pub enum RowKind {
     Other,
 }
 
-impl PaneViewModel {
+impl BrowserViewModel {
     /// The shown location as a path, or empty before the first listing.
     pub fn location_text(&self) -> &str {
         &self.location_text
@@ -66,9 +66,9 @@ impl PaneViewModel {
         self.selected_row
     }
 
-    /// Changes only when this pane commits a replacement listing.
-    pub fn listing_revision(&self) -> u64 {
-        self.listing_revision
+    /// Changes only when this browser commits a replacement listing.
+    pub fn folder_items_revision(&self) -> u64 {
+        self.folder_items_revision
     }
 
     pub fn row(&self, index: usize) -> Option<RowViewModel> {
@@ -80,33 +80,33 @@ impl PaneViewModel {
     }
 }
 
-/// Keeps a [`PaneViewModel`] up to date from application outputs.
+/// Keeps a [`BrowserViewModel`] up to date from application outputs.
 #[derive(Debug)]
-pub struct PanePresenter {
-    pane: PaneSide,
-    view: PaneViewModel,
+pub struct BrowserPresenter {
+    browser: BrowserSide,
+    view: BrowserViewModel,
 }
 
-impl Default for PanePresenter {
+impl Default for BrowserPresenter {
     fn default() -> Self {
-        Self::new(PaneSide::Left)
+        Self::new(BrowserSide::Left)
     }
 }
 
-impl PanePresenter {
-    pub fn new(pane: PaneSide) -> Self {
-        Self { pane, view: PaneViewModel::default() }
+impl BrowserPresenter {
+    pub fn new(browser: BrowserSide) -> Self {
+        Self { browser, view: BrowserViewModel::default() }
     }
 
-    pub fn view(&self) -> &PaneViewModel {
+    pub fn view(&self) -> &BrowserViewModel {
         &self.view
     }
 
     pub fn apply(&mut self, output: &Output) {
-        let output_pane = match output {
-            Output::LoadingStarted { pane, .. } | Output::ListingReplaced { pane, .. } | Output::SelectionChanged { pane, .. } | Output::ListingFailed { pane, .. } | Output::ListingCancelled { pane } | Output::ActivePaneChanged { pane } => *pane,
+        let output_browser = match output {
+            Output::LoadingStarted { browser, .. } | Output::FolderItemsReplaced { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser } | Output::ActiveBrowserChanged { browser } => *browser,
         };
-        if output_pane != self.pane {
+        if output_browser != self.browser {
             return;
         }
         match output {
@@ -115,34 +115,34 @@ impl PanePresenter {
                 self.view.error = None;
                 self.view.status_text = "Loading…".to_owned();
             }
-            Output::ListingReplaced { location, entries, .. } => {
+            Output::FolderItemsReplaced { location, entries, .. } => {
                 self.view.location_text = location_text(location);
                 self.view.entries = Arc::clone(entries);
                 self.view.loading = false;
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
-                self.view.listing_revision = self.view.listing_revision.wrapping_add(1);
+                self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
             }
             Output::SelectionChanged { selection, row, .. } => {
                 self.view.selection = selection.clone();
                 self.view.selected_row = *row;
             }
-            Output::ListingFailed { error, .. } => {
+            Output::FolderItemsFailed { error, .. } => {
                 self.view.loading = false;
                 self.view.error = Some(error_message(error));
                 self.view.status_text = self.view.error.clone().unwrap_or_default();
             }
-            Output::ListingCancelled { .. } => {
+            Output::FolderItemsCancelled { .. } => {
                 self.view.loading = false;
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
             }
-            Output::ActivePaneChanged { .. } => {}
+            Output::ActiveBrowserChanged { .. } => {}
         }
     }
 }
 
-/// Safe wording for failures before a pane session can be created.
+/// Safe wording for failures before a browser session can be created.
 pub fn reader_start_failure_status() -> &'static str {
     "Dual Pane couldn’t start reading folders."
 }

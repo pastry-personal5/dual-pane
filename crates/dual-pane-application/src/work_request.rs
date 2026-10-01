@@ -1,4 +1,4 @@
-use dual_pane_domain::{Location, PaneSide, RequestToken};
+use dual_pane_domain::{BrowserSide, Location, RequestToken};
 
 /// Outside work the workspace needs. A runtime carries it out and submits the
 /// result as an [`Event`](crate::Event) carrying the same token.
@@ -6,7 +6,7 @@ use dual_pane_domain::{Location, PaneSide, RequestToken};
 pub enum WorkRequest {
     /// Read the directory at `location` and return its entries in listing
     /// order.
-    ReadDirectory { pane: PaneSide, token: RequestToken, location: Location },
+    ReadDirectory { browser: BrowserSide, token: RequestToken, location: Location },
     /// The request with `token` is no longer needed.
-    Cancel { pane: PaneSide, token: RequestToken },
+    Cancel { browser: BrowserSide, token: RequestToken },
 }

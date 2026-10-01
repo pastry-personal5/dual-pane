@@ -1,5 +1,5 @@
 #include "dual_pane_desktop/desktop_window.hpp"
-#include "dual-pane-desktop/src/listing_model.cxxqt.h"
+#include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
 
 #include <QtCore/QEvent>
 #include <QtCore/QItemSelectionModel>
@@ -83,10 +83,10 @@ auto style_sheet() -> QString {
       QLabel, QLineEdit { color:%3; background:%2; }
       QLineEdit { border:1px solid %4; padding:4px; }
       QFrame#folderPane { background:%1; border:1px solid %4; }
-      QFrame#folderPane[paneActive="true"][windowActive="true"] { border:1px solid %5; }
+      QFrame#folderPane[browserActive="true"][windowActive="true"] { border:1px solid %5; }
       QTreeView { background:%2; color:%3; border:0; outline:none; }
       QTreeView::item:selected { background:%6; color:white; }
-      QTreeView[paneActive="true"][windowActive="true"]::item:selected { background:%5; color:white; }
+      QTreeView[browserActive="true"][windowActive="true"]::item:selected { background:%5; color:white; }
       QToolButton { background:%2; color:%3; border:1px solid %4; padding:4px; }
       QSplitter::handle { background:%4; }
     )")
@@ -164,9 +164,9 @@ class ThinSplitter final : public QSplitter {
     QString handle_accessible_name_;
 };
 
-class ListingView final : public QTreeView {
+class FolderItemsList final : public QTreeView {
   public:
-    explicit ListingView(ListingModel *model) : model_(model) {
+    explicit FolderItemsList(FolderItemsListModel *model) : model_(model) {
         setModel(model_);
         setFocusPolicy(Qt::StrongFocus);
         setSelectionMode(QAbstractItemView::SingleSelection);
@@ -177,25 +177,25 @@ class ListingView final : public QTreeView {
         setHeaderHidden(true);
         verticalScrollBar()->installEventFilter(this);
         horizontalScrollBar()->installEventFilter(this);
-        connect(model_, &ListingModel::selectedRowChanged, this, [this] { synchronize_selection(); });
+        connect(model_, &FolderItemsListModel::selectedRowChanged, this, [this] { synchronize_selection(); });
     }
 
     void setActivationHandler(std::function<void()> handler) { activation_handler_ = std::move(handler); }
-    void activatePane() {
+    void activateBrowser() {
         if (!hasFocus())
             setFocus(Qt::MouseFocusReason);
-        activate_pane();
+        activate_browser();
     }
 
   protected:
     auto selectionCommand(const QModelIndex &, const QEvent *) const -> QItemSelectionModel::SelectionFlags override { return QItemSelectionModel::NoUpdate; }
     void focusInEvent(QFocusEvent *event) override {
         QTreeView::focusInEvent(event);
-        activate_pane();
+        activate_browser();
     }
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() == Qt::LeftButton) {
-            activatePane();
+            activateBrowser();
             const auto index = indexAt(event->position().toPoint());
             if (index.isValid())
                 model_->select_row(index.row());
@@ -290,12 +290,12 @@ class ListingView final : public QTreeView {
         if ((watched == verticalScrollBar() || watched == horizontalScrollBar()) && event->type() == QEvent::MouseButtonPress) {
             const auto *mouse_event = dynamic_cast<QMouseEvent *>(event);
             if (mouse_event != nullptr && mouse_event->button() == Qt::LeftButton)
-                activatePane();
+                activateBrowser();
         }
         return QTreeView::eventFilter(watched, event);
     }
-    void activate_pane() {
-        model_->activate_pane();
+    void activate_browser() {
+        model_->activate_browser();
         if (activation_handler_)
             activation_handler_();
     }
@@ -306,7 +306,7 @@ class ListingView final : public QTreeView {
         else
             selectionModel()->clearSelection();
     }
-    ListingModel *model_;
+    FolderItemsListModel *model_;
     std::function<void()> activation_handler_;
 };
 
@@ -316,19 +316,19 @@ void repolish(QWidget *widget) {
     widget->update();
 }
 
-class PaneHighlightController final : public QObject {
+class BrowserHighlightController final : public QObject {
   public:
-    PaneHighlightController(QWidget *window, QFrame *left_folder, ListingView *left_view, QFrame *right_folder, ListingView *right_view) : window_(window), left_folder_(left_folder), left_view_(left_view), right_folder_(right_folder), right_view_(right_view), active_view_(left_view) {
+    BrowserHighlightController(QWidget *window, QFrame *left_folder, FolderItemsList *left_view, QFrame *right_folder, FolderItemsList *right_view) : window_(window), left_folder_(left_folder), left_view_(left_view), right_folder_(right_folder), right_view_(right_view), active_view_(left_view) {
         window_->installEventFilter(this);
         apply(window_->isActiveWindow());
     }
 
-    void activate(ListingView *view) {
+    void activate(FolderItemsList *view) {
         active_view_ = view;
         apply(window_->isActiveWindow());
     }
 
-    [[nodiscard]] auto other_view() const -> ListingView * { return active_view_ == left_view_ ? right_view_ : left_view_; }
+    [[nodiscard]] auto other_view() const -> FolderItemsList * { return active_view_ == left_view_ ? right_view_ : left_view_; }
 
   private:
     auto eventFilter(QObject *watched, QEvent *event) -> bool override {
@@ -344,10 +344,10 @@ class PaneHighlightController final : public QObject {
         apply_to(right_folder_, right_view_, active_view_ == right_view_, window_active);
     }
 
-    static void apply_to(QFrame *folder, ListingView *view, bool pane_active, bool window_active) {
-        folder->setProperty("paneActive", pane_active);
+    static void apply_to(QFrame *folder, FolderItemsList *view, bool browser_active, bool window_active) {
+        folder->setProperty("browserActive", browser_active);
         folder->setProperty("windowActive", window_active);
-        view->setProperty("paneActive", pane_active);
+        view->setProperty("browserActive", browser_active);
         view->setProperty("windowActive", window_active);
         repolish(folder);
         repolish(view);
@@ -355,15 +355,15 @@ class PaneHighlightController final : public QObject {
 
     QWidget *window_;
     QFrame *left_folder_;
-    ListingView *left_view_;
+    FolderItemsList *left_view_;
     QFrame *right_folder_;
-    ListingView *right_view_;
-    ListingView *active_view_;
+    FolderItemsList *right_view_;
+    FolderItemsList *active_view_;
 };
 
 class DrainScheduler final : public QObject {
   public:
-    DrainScheduler(ListingModel *left, ListingModel *right) : left_(left), right_(right) {}
+    DrainScheduler(FolderItemsListModel *left, FolderItemsListModel *right) : left_(left), right_(right) {}
     void schedule() {
         if (!scheduled_.exchange(true))
             QMetaObject::invokeMethod(this, [this] { drain_one(); }, Qt::QueuedConnection);
@@ -377,8 +377,8 @@ class DrainScheduler final : public QObject {
         if (right_ != nullptr)
             right_->refresh();
     }
-    ListingModel *left_;
-    ListingModel *right_;
+    FolderItemsListModel *left_;
+    FolderItemsListModel *right_;
     std::atomic_bool scheduled_ = false;
 };
 struct SchedulerState {
@@ -394,41 +394,46 @@ auto has_run() -> std::atomic_bool & {
     return value;
 }
 
-auto browser(ListingModel *model, QWidget *parent, ListingView **out_view, QFrame **out_folder) -> QWidget * {
+auto browser(FolderItemsListModel *model, QWidget *parent, FolderItemsList **out_view, QFrame **out_folder) -> QWidget * {
     auto *root = new QWidget(parent);
     root->setObjectName(QStringLiteral("browser"));
     auto *layout = new QVBoxLayout(root);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     auto *path = new QLineEdit(root);
+    path->setObjectName(QStringLiteral("pathEditControl"));
     path->setReadOnly(true);
     path->setFocusPolicy(Qt::NoFocus);
     path->setAttribute(Qt::WA_TransparentForMouseEvents);
-    path->setAccessibleName(QStringLiteral("Path"));
+    path->setAccessibleName(QStringLiteral("Path Edit Control"));
     auto *folder = new QFrame(root);
     folder->setObjectName(QStringLiteral("folderPane"));
     auto *folder_layout = new QVBoxLayout(folder);
     folder_layout->setContentsMargins(0, 0, 0, 0);
     folder_layout->setSpacing(0);
     auto *title = new QLabel(folder);
-    title->setObjectName(QStringLiteral("folderName"));
+    title->setObjectName(QStringLiteral("folderPaneToolbarRow1"));
     auto *up = new QToolButton(folder);
+    up->setObjectName(QStringLiteral("upButton"));
     up->setText(QStringLiteral("Up"));
-    up->setAccessibleName(QStringLiteral("Up"));
+    up->setAccessibleName(QStringLiteral("Up Button"));
     up->setFocusPolicy(Qt::NoFocus);
-    auto *view = new ListingView(model);
+    auto *view = new FolderItemsList(model);
+    view->setObjectName(QStringLiteral("folderItemsList"));
+    view->setAccessibleName(QStringLiteral("Folder Items List"));
     auto *status = new QLabel(folder);
-    status->setObjectName(QStringLiteral("status"));
+    status->setObjectName(QStringLiteral("browserStatusBar"));
+    status->setAccessibleName(QStringLiteral("Browser Status Bar"));
     layout->addWidget(path);
     folder_layout->addWidget(title);
     folder_layout->addWidget(up);
     folder_layout->addWidget(view, 1);
     folder_layout->addWidget(status);
     layout->addWidget(folder, 1);
-    QObject::connect(model, &ListingModel::pathTextChanged, root, [path, model] { path->setText(model->getPathText()); });
-    QObject::connect(model, &ListingModel::folderNameChanged, root, [title, model] { title->setText(model->getFolderName()); });
-    QObject::connect(model, &ListingModel::statusTextChanged, root, [status, model] { status->setText(model->getStatusText()); });
-    QObject::connect(up, &QToolButton::clicked, model, [model, view] { view->activatePane(); model->go_to_parent(); });
+    QObject::connect(model, &FolderItemsListModel::pathTextChanged, root, [path, model] { path->setText(model->getPathText()); });
+    QObject::connect(model, &FolderItemsListModel::folderNameChanged, root, [title, model] { title->setText(model->getFolderName()); });
+    QObject::connect(model, &FolderItemsListModel::statusTextChanged, root, [status, model] { status->setText(model->getStatusText()); });
+    QObject::connect(up, &QToolButton::clicked, model, [model, view] { view->activateBrowser(); model->go_to_parent(); });
     *out_view = view;
     *out_folder = folder;
     return root;
@@ -441,7 +446,7 @@ void schedule_gui_drain() {
     if (state.scheduler != nullptr)
         state.scheduler->schedule();
 }
-auto run_desktop(::rust::Box<PaneStartup> startup) -> int {
+auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     constexpr int launch_precondition_failed = 2;
     if (pthread_main_np() == 0 || QApplication::instance() != nullptr || QCoreApplication::instance() != nullptr || has_run().exchange(true))
         return launch_precondition_failed;
@@ -450,8 +455,8 @@ auto run_desktop(::rust::Box<PaneStartup> startup) -> int {
     char *argv[] = {name, nullptr};
     QApplication app(argc, argv);
     QMainWindow window;
-    ListingModel left_model, right_model;
-    right_model.set_right_pane();
+    FolderItemsListModel left_model, right_model;
+    right_model.set_right_browser();
     DrainScheduler scheduler(&left_model, &right_model);
     ThinSplitter standard_layout(SplitterKind::Sidebar);
     auto *sidebar = new QWidget(&standard_layout);
@@ -464,7 +469,7 @@ auto run_desktop(::rust::Box<PaneStartup> startup) -> int {
         side_layout->addWidget(new QLabel(QString::fromLatin1(item), sidebar));
     side_layout->addStretch();
     auto *split = new ThinSplitter(SplitterKind::Browser, &standard_layout);
-    ListingView *left_view = nullptr, *right_view = nullptr;
+    FolderItemsList *left_view = nullptr, *right_view = nullptr;
     QFrame *left_folder = nullptr, *right_folder = nullptr;
     split->addWidget(browser(&left_model, split, &left_view, &left_folder));
     split->addWidget(browser(&right_model, split, &right_view, &right_folder));
@@ -474,11 +479,11 @@ auto run_desktop(::rust::Box<PaneStartup> startup) -> int {
     window.setWindowTitle(QStringLiteral("Dual Pane"));
     window.resize(initial_window_width, initial_window_height);
     window.setStyleSheet(style_sheet());
-    PaneHighlightController pane_highlighter(&window, left_folder, left_view, right_folder, right_view);
-    left_view->setActivationHandler([&pane_highlighter, left_view] { pane_highlighter.activate(left_view); });
-    right_view->setActivationHandler([&pane_highlighter, right_view] { pane_highlighter.activate(right_view); });
+    BrowserHighlightController browser_highlighter(&window, left_folder, left_view, right_folder, right_view);
+    left_view->setActivationHandler([&browser_highlighter, left_view] { browser_highlighter.activate(left_view); });
+    right_view->setActivationHandler([&browser_highlighter, right_view] { browser_highlighter.activate(right_view); });
     auto *shortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::Key_F), &window);
-    QObject::connect(shortcut, &QShortcut::activated, &window, [&pane_highlighter] { pane_highlighter.other_view()->setFocus(); });
+    QObject::connect(shortcut, &QShortcut::activated, &window, [&browser_highlighter] { browser_highlighter.other_view()->setFocus(); });
     auto *close_shortcut = new QShortcut(QKeySequence::Close, &window);
     QObject::connect(close_shortcut, &QShortcut::activated, &window, [&window] { window.close(); });
     auto *quit_shortcut = new QShortcut(QKeySequence::Quit, &window);

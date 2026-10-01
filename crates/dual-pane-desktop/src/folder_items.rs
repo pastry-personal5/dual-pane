@@ -8,11 +8,11 @@ use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, Location, 
 
 use crate::native_location::path_from_location;
 
-type ListingOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
+type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 
 /// Reads one complete directory snapshot, or returns cancellation or one
 /// classified terminal failure. The runtime invokes this only on its worker.
-pub fn read(location: &Location, cancelled: &AtomicBool) -> ListingOutcome {
+pub fn read(location: &Location, cancelled: &AtomicBool) -> FolderItemsOutcome {
     if is_cancelled(cancelled) {
         return None;
     }

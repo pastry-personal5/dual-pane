@@ -1,6 +1,6 @@
 # MVP scope
 
-Status: Active
+Status: Superseded by [product-behavior.md](../product-behavior.md) and the UX documents.
 
 This document is the single source of truth for the first usable Dual Pane release. It defines product scope and user-visible behavior; [architecture.md](architecture.md) defines the technical boundaries that implement it.
 

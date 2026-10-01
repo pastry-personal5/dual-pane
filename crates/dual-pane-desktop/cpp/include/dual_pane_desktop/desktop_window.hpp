@@ -1,15 +1,15 @@
-#ifndef DUAL_PANE_DESKTOP_DESKTOP_WINDOW_HPP
-#define DUAL_PANE_DESKTOP_DESKTOP_WINDOW_HPP
+#ifndef dual_pane_DESKTOP_DESKTOP_WINDOW_HPP
+#define dual_pane_DESKTOP_DESKTOP_WINDOW_HPP
 
 #include "rust/cxx.h"
 
 namespace dual_pane_desktop {
 
-struct PaneStartup;
+struct BrowserStartup;
 
-[[nodiscard]] auto run_desktop(::rust::Box<PaneStartup> startup) -> int;
+[[nodiscard]] auto run_desktop(::rust::Box<BrowserStartup> startup) -> int;
 void schedule_gui_drain();
 
 } // namespace dual_pane_desktop
 
-#endif // DUAL_PANE_DESKTOP_DESKTOP_WINDOW_HPP
+#endif // dual_pane_DESKTOP_DESKTOP_WINDOW_HPP

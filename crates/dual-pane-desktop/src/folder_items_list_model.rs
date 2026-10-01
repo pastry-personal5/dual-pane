@@ -3,10 +3,10 @@ use std::sync::{Mutex, OnceLock};
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QModelIndex, QString, QVariant};
-use dual_pane_adapters::{PaneViewModel, UiEvent, reader_start_failure_status};
-use dual_pane_domain::PaneSide;
+use dual_pane_adapters::{BrowserViewModel, UiEvent, reader_start_failure_status};
+use dual_pane_domain::BrowserSide;
 
-use crate::pane_session::{DRAIN_SLICE, DRAIN_TIME_BUDGET, PaneStartup, WorkspaceSession};
+use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, WorkspaceSession};
 use crate::runtime::Runtime;
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
@@ -23,11 +23,11 @@ pub mod ffi {
         type QAbstractListModel;
     }
     extern "Rust" {
-        type PaneStartup;
+        type BrowserStartup;
     }
     unsafe extern "C++" {
         include!("dual_pane_desktop/desktop_window.hpp");
-        fn run_desktop(startup: Box<PaneStartup>) -> i32;
+        fn run_desktop(startup: Box<BrowserStartup>) -> i32;
         fn schedule_gui_drain();
     }
     unsafe extern "RustQt" {
@@ -37,32 +37,32 @@ pub mod ffi {
         #[qproperty(QString, path_text, cxx_name = "pathText", READ, NOTIFY)]
         #[qproperty(QString, folder_name, cxx_name = "folderName", READ, NOTIFY)]
         #[qproperty(i32, selected_row, cxx_name = "selectedRow", READ, NOTIFY)]
-        type ListingModel = super::ListingModelRust;
+        type FolderItemsListModel = super::FolderItemsListModelRust;
         #[cxx_override]
         #[cxx_name = "rowCount"]
-        fn row_count(self: &ListingModel, parent: &QModelIndex) -> i32;
+        fn row_count(self: &FolderItemsListModel, parent: &QModelIndex) -> i32;
         #[cxx_override]
-        fn data(self: &ListingModel, index: &QModelIndex, role: i32) -> QVariant;
+        fn data(self: &FolderItemsListModel, index: &QModelIndex, role: i32) -> QVariant;
         #[inherit]
         #[cxx_name = "beginResetModel"]
-        fn begin_reset_model(self: Pin<&mut ListingModel>);
+        fn begin_reset_model(self: Pin<&mut FolderItemsListModel>);
         #[inherit]
         #[cxx_name = "endResetModel"]
-        fn end_reset_model(self: Pin<&mut ListingModel>);
-        fn start(self: Pin<&mut ListingModel>, startup: Box<PaneStartup>);
-        fn set_right_pane(self: Pin<&mut ListingModel>);
-        fn refresh(self: Pin<&mut ListingModel>);
-        fn drain(self: Pin<&mut ListingModel>) -> bool;
-        fn activate_pane(self: Pin<&mut ListingModel>);
-        fn select_row(self: Pin<&mut ListingModel>, row: i32);
-        fn select_previous(self: Pin<&mut ListingModel>);
-        fn select_next(self: Pin<&mut ListingModel>);
-        fn clear_selection(self: Pin<&mut ListingModel>);
-        fn activate_row(self: Pin<&mut ListingModel>, row: i32);
-        fn activate_selected(self: Pin<&mut ListingModel>);
-        fn go_to_parent(self: Pin<&mut ListingModel>);
+        fn end_reset_model(self: Pin<&mut FolderItemsListModel>);
+        fn start(self: Pin<&mut FolderItemsListModel>, startup: Box<BrowserStartup>);
+        fn set_right_browser(self: Pin<&mut FolderItemsListModel>);
+        fn refresh(self: Pin<&mut FolderItemsListModel>);
+        fn drain(self: Pin<&mut FolderItemsListModel>) -> bool;
+        fn activate_browser(self: Pin<&mut FolderItemsListModel>);
+        fn select_row(self: Pin<&mut FolderItemsListModel>, row: i32);
+        fn select_previous(self: Pin<&mut FolderItemsListModel>);
+        fn select_next(self: Pin<&mut FolderItemsListModel>);
+        fn clear_selection(self: Pin<&mut FolderItemsListModel>);
+        fn activate_row(self: Pin<&mut FolderItemsListModel>, row: i32);
+        fn activate_selected(self: Pin<&mut FolderItemsListModel>);
+        fn go_to_parent(self: Pin<&mut FolderItemsListModel>);
     }
-    impl cxx_qt::Threading for ListingModel {}
+    impl cxx_qt::Threading for FolderItemsListModel {}
 }
 
 const DISPLAY_ROLE: i32 = 0;
@@ -71,21 +71,21 @@ fn session() -> &'static Mutex<Option<WorkspaceSession>> {
     SESSION.get_or_init(|| Mutex::new(None))
 }
 
-pub struct ListingModelRust {
+pub struct FolderItemsListModelRust {
     status_text: QString,
     path_text: QString,
     folder_name: QString,
     selected_row: i32,
-    pane: PaneSide,
-    shown: PaneViewModel,
+    browser: BrowserSide,
+    shown: BrowserViewModel,
 }
-impl Default for ListingModelRust {
+impl Default for FolderItemsListModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), selected_row: -1, pane: PaneSide::Left, shown: PaneViewModel::default() }
+        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), selected_row: -1, browser: BrowserSide::Left, shown: BrowserViewModel::default() }
     }
 }
 
-impl ffi::ListingModel {
+impl ffi::FolderItemsListModel {
     fn row_count(&self, parent: &QModelIndex) -> i32 {
         if parent.is_valid() { 0 } else { i32::try_from(self.rust().shown.row_count()).unwrap_or(i32::MAX) }
     }
@@ -96,8 +96,8 @@ impl ffi::ListingModel {
         usize::try_from(index.row()).ok().and_then(|row| self.rust().shown.row(row)).map_or_else(QVariant::default, |row| QVariant::from(&QString::from(row.name.as_str())))
     }
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
-    fn start(mut self: Pin<&mut Self>, startup: Box<PaneStartup>) {
-        let PaneStartup { location, source_factory } = *startup;
+    fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
+        let BrowserStartup { location, source_factory } = *startup;
         match Runtime::start(source_factory, Box::new(ffi::schedule_gui_drain)) {
             Ok(runtime) => {
                 let mut guard = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -110,22 +110,22 @@ impl ffi::ListingModel {
             Err(_) => self.set_status_text(QString::from(reader_start_failure_status())),
         }
     }
-    fn set_right_pane(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().get_mut().pane = PaneSide::Right;
+    fn set_right_browser(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().get_mut().browser = BrowserSide::Right;
         self.as_mut().refresh();
     }
     fn refresh(mut self: Pin<&mut Self>) {
-        let pane = self.rust().pane;
-        let view = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|coordinator| coordinator.view(pane).clone());
+        let browser = self.rust().browser;
+        let view = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|coordinator| coordinator.view(browser).clone());
         let Some(view) = view else {
             return;
         };
-        let listing_changed = self.rust().shown.listing_revision() != view.listing_revision();
-        if listing_changed {
+        let folder_items_changed = self.rust().shown.folder_items_revision() != view.folder_items_revision();
+        if folder_items_changed {
             self.as_mut().begin_reset_model();
         }
         self.as_mut().rust_mut().get_mut().shown = view;
-        if listing_changed {
+        if folder_items_changed {
             self.as_mut().end_reset_model();
         }
         let selected = self.rust().shown.selected_row().and_then(|row| i32::try_from(row).ok()).unwrap_or(-1);
@@ -141,10 +141,10 @@ impl ffi::ListingModel {
         self.as_mut().refresh();
         more
     }
-    fn activate_pane(self: Pin<&mut Self>) {
-        let pane = self.rust().pane;
+    fn activate_browser(self: Pin<&mut Self>) {
+        let browser = self.rust().browser;
         if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.activate(pane);
+            coordinator.activate(browser);
         }
     }
     fn select_row(mut self: Pin<&mut Self>, row: i32) {
@@ -153,15 +153,15 @@ impl ffi::ListingModel {
         }
     }
     fn select_previous(mut self: Pin<&mut Self>) {
-        self.as_mut().move_selection(crate::pane_session::SelectionMovement::Previous);
+        self.as_mut().move_selection(crate::browser_session::SelectionMovement::Previous);
     }
     fn select_next(mut self: Pin<&mut Self>) {
-        self.as_mut().move_selection(crate::pane_session::SelectionMovement::Next);
+        self.as_mut().move_selection(crate::browser_session::SelectionMovement::Next);
     }
     fn clear_selection(mut self: Pin<&mut Self>) {
-        let pane = self.rust().pane;
+        let browser = self.rust().browser;
         if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.clear_selection(pane);
+            coordinator.clear_selection(browser);
         }
         self.as_mut().refresh();
     }
@@ -171,9 +171,9 @@ impl ffi::ListingModel {
         }
     }
     fn activate_selected(mut self: Pin<&mut Self>) {
-        let pane = self.rust().pane;
+        let browser = self.rust().browser;
         if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.activate_selection(pane);
+            coordinator.activate_selection(browser);
         }
         self.as_mut().refresh();
     }
@@ -181,16 +181,16 @@ impl ffi::ListingModel {
         self.as_mut().submit_ui(UiEvent::GoToParent);
     }
     fn submit_ui(mut self: Pin<&mut Self>, event: UiEvent) {
-        let pane = self.rust().pane;
+        let browser = self.rust().browser;
         if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.submit_ui(pane, event);
+            coordinator.submit_ui(browser, event);
         }
         self.as_mut().refresh();
     }
-    fn move_selection(mut self: Pin<&mut Self>, movement: crate::pane_session::SelectionMovement) {
-        let pane = self.rust().pane;
+    fn move_selection(mut self: Pin<&mut Self>, movement: crate::browser_session::SelectionMovement) {
+        let browser = self.rust().browser;
         if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.move_selection(pane, movement);
+            coordinator.move_selection(browser, movement);
         }
         self.as_mut().refresh();
     }

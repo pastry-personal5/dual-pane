@@ -2,12 +2,12 @@
 
 Status: Active
 
-This document turns the four-crate boundary in [architecture.md](architecture.md) into a repository layout and naming convention. It defines the eventual workspace target and the P1-M2 migration direction; it does not itself create the crates.
+This document turns the four-crate boundary in [architecture.md](architecture.md) into a repository layout and naming convention. It records the current workspace layout and the rules for its future evolution; it does not itself create crates or decide product behavior.
 
 ## Directory layout rules
 
 - The repository root is a virtual Cargo workspace. It owns workspace-wide Cargo configuration, shared development tooling, top-level documentation, and repository metadata; it contains no Rust package or executable source.
-- The current root package and `src/main.rs` are a temporary scaffold, not an exception to this target. P1-M2 will replace that package with the virtual workspace and move the executable responsibility to `crates/dual-pane-desktop/`; no root-level `src/` or `tests/` directory remains after that conversion.
+- The repository root is not a Rust package. The executable responsibility belongs to `crates/dual-pane-desktop/`; no root-level `src/` or `tests/` directory exists.
 - All Rust packages live directly below `crates/`. There is no shared `common`, `core`, `util`, or catch-all crate: code belongs in the innermost ring that owns its policy, or in the outer component that owns its technology.
 - A crate owns its source, crate-local tests, and any implementation detail that must not cross its public boundary. Tests that exercise public behavior from outside the crate live in that crate's `tests/` directory.
 - A test directory or fixture is created only with its first test. The tree below shows the eventual homes of representative test sources; it does not authorize empty directories or speculative test files.
@@ -15,9 +15,9 @@ This document turns the four-crate boundary in [architecture.md](architecture.md
 - Application fixtures and test helpers remain local to the test suite that needs them unless more than one crate needs the same framework-neutral fixture. A shared test helper must still obey the dependency rule; do not create a production utility crate merely to share tests.
 - New directories are created only when they give a real ownership or build boundary. In particular, do not pre-create empty module, adapter, driver, resource, or test directories.
 
-## Target directory layout
+## Repository layout and future examples
 
-This is the target tree once each crate and its first representative test have earned a reason to exist. Entries ending in `/` are directories. Omitted directories do not exist until their owning crate needs them.
+This tree shows the current crate boundaries and representative future homes. Entries ending in `/` are directories. Omitted directories do not exist until their owning crate needs them.
 
 ```text
 .
@@ -49,10 +49,10 @@ This is the target tree once each crate and its first representative test have e
 │       ├── build.rs                    # created with the CXX-Qt bridge
 │       ├── src/
 │       │   ├── main.rs                 # composition root and executable entry point
-│       │   ├── listing_model.rs        # CXX-Qt bridge: Qt list model and run_desktop
-│       │   ├── pane_session.rs         # Qt-free: workspace, presenter, bounded drain
-│       │   ├── runtime.rs              # Qt-free: pane-local listing workers, cancellation, GUI wake
-│       │   ├── directory_listing.rs    # Qt-free: native directory reader and error mapping
+│       │   ├── folder_items_list_model.rs # CXX-Qt bridge: Qt list model and run_desktop
+│       │   ├── browser_session.rs      # Qt-free: workspace, presenter, bounded drain
+│       │   ├── runtime.rs              # Qt-free: Browser-local directory-read workers, cancellation, GUI wake
+│       │   ├── folder_items.rs         # Qt-free: native directory reader and error mapping
 │       │   └── native_location.rs      # Qt-free: byte-exact Path and Location conversion
 │       ├── cpp/                        # created with C++ Qt shim source
 │           ├── include/dual_pane_desktop/
@@ -67,7 +67,7 @@ This is the target tree once each crate and its first representative test have e
 
 `dual-pane-desktop` may add `src/lib.rs` only when a meaningful desktop component needs integration or smoke-test access without starting the executable. `main.rs` remains the sole composition root; it may call a narrowly scoped desktop library entry point but must not become a second wiring location.
 
-P1-M2 is intentionally smaller than this target tree. Its plan creates the virtual workspace, `dual-pane-desktop`, and only the bridge or C++ files needed to show the empty Qt window. It does not create the three inner crates merely to make the tree look complete. The plan must also state whether the spike's evidence is a desktop unit test, a desktop library-backed smoke test, or manual launch evidence before it creates a test target.
+P1-M2 established the virtual workspace and `dual-pane-desktop`; later milestones added the inner crates and native directory browsing. Future additions follow these ownership rules and add tests with their new boundary rather than creating speculative files or directories.
 
 ## Crate rules
 
@@ -93,11 +93,11 @@ These rules apply to every crate:
 ## File and module naming rules
 
 - Rust package directories and Cargo package names use lowercase kebab-case: `dual-pane-application`. Rust source files, modules, functions, variables, and test names use `snake_case`. Rust types and traits use `PascalCase`; constants use `SCREAMING_SNAKE_CASE`.
-- `lib.rs`, `main.rs`, and `build.rs` are the only special Rust filenames. Otherwise, a module named `directory_listing` starts as `src/directory_listing.rs`. If it grows children, retain that entry file and place children below `src/directory_listing/` (for example, `src/directory_listing/request.rs`); do not use `mod.rs` for new modules.
+- `lib.rs`, `main.rs`, and `build.rs` are the only special Rust filenames. Otherwise, a module named `folder_items` starts as `src/folder_items.rs`. If it grows children, retain that entry file and place children below `src/folder_items/` (for example, `src/folder_items/request.rs`); do not use `mod.rs` for new modules.
 - Test source names describe the behavior or boundary under test, not an implementation ticket or generic category: for example, `tests/stale_listing_results.rs` rather than `tests/test1.rs` or `tests/misc.rs`. Test fixtures use the same `snake_case` convention.
 - C++ source and header filenames use `snake_case` with `.cpp` and `.hpp` extensions. Headers live under `cpp/include/dual_pane_desktop/`; implementation files live under `cpp/src/`. C++ names that bridge Qt may follow Qt's required naming and macro conventions, but native types never appear in an inner Rust crate's public API.
 - Documentation filenames use lowercase kebab-case, except the established uppercase repository files `README.md`, `AGENTS.md`, `LICENSE`, and Cargo's conventional filenames. Phase and milestone filenames continue to follow [development-process.md](development-process.md).
-- File names state the owned concept, not a technology that happens to implement it. Use `directory_listing.rs` or `settings_gateway.rs` where that is the owned role; reserve names such as `qt_*`, `macos_*`, or `cxx_*` for desktop-only files that truly bind that technology.
+- File names state the owned concept, not a technology that happens to implement it. Use `folder_items.rs` or `settings_gateway.rs` where that is the owned role; reserve names such as `qt_*`, `macos_*`, or `cxx_*` for desktop-only files that truly bind that technology.
 
 ## Test source layout and boundary rules
 
@@ -120,6 +120,6 @@ Test-only dependencies are dependencies for architecture purposes. A crate's `[d
 
 ## Change sequence
 
-When P1-M2 is planned and implemented, it will convert the current root package into the virtual workspace, retire the root `src/main.rs`, and create only the workspace manifest and desktop crate needed for the Qt window. P1-M3 added the three inner library crates with the one-pane listing behavior and its tests. The desktop crate does not depend on them until a later milestone wires the Qt window to them. Their package names and dependency directions are fixed by this document and [architecture.md](architecture.md). Each milestone that adds or extends a crate boundary adds the tests and fixtures that prove its new boundary rather than deferring test placement to a later cleanup.
+Each milestone that adds or extends a crate boundary adds the tests and fixtures that prove its new boundary rather than deferring test placement to a later cleanup. Package names and dependency directions are fixed by this document and [architecture.md](architecture.md).
 
 The conversion must preserve the architecture's verification rule: inner-crate tests run without Qt or macOS facilities, while Qt and native integration tests remain desktop-owned. The P1-M2 checklist must name the exact test or launch evidence for the stack spike and must not mark the milestone complete until the repository-wide gate in [AGENTS.md](../AGENTS.md) passes.

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dual_pane_domain::{Entry, EntryName, ListingErrorKind, Location, PaneSide, RequestToken};
+use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingErrorKind, Location, RequestToken};
 
 /// Everything the workspace reacts to, processed one at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,32 +12,32 @@ pub enum Input {
 /// A request made by a person or by the composition root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    ActivatePane {
-        pane: PaneSide,
+    ActivateBrowser {
+        browser: BrowserSide,
     },
-    /// Show the given location in the pane.
+    /// Show the given location in the browser.
     Navigate {
-        pane: PaneSide,
+        browser: BrowserSide,
         location: Location,
     },
     /// Select the entry at `row` if its exact name still matches.
     SelectEntry {
-        pane: PaneSide,
+        browser: BrowserSide,
         row: usize,
         name: EntryName,
     },
     ClearSelection {
-        pane: PaneSide,
+        browser: BrowserSide,
     },
     /// Open the entry at `row` if its exact name still matches.
     OpenEntry {
-        pane: PaneSide,
+        browser: BrowserSide,
         row: usize,
         name: EntryName,
     },
     /// Show the location that contains the current one.
     GoToParent {
-        pane: PaneSide,
+        browser: BrowserSide,
     },
 }
 
@@ -46,19 +46,19 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// A directory read succeeded. `entries` are already in listing order.
-    ListingLoaded {
-        pane: PaneSide,
+    FolderItemsLoaded {
+        browser: BrowserSide,
         token: RequestToken,
         entries: Arc<[Entry]>,
     },
-    ListingFailed {
-        pane: PaneSide,
+    FolderItemsFailed {
+        browser: BrowserSide,
         token: RequestToken,
         kind: ListingErrorKind,
     },
     /// A requested listing was stopped before it produced a result.
-    ListingCancelled {
-        pane: PaneSide,
+    FolderItemsCancelled {
+        browser: BrowserSide,
         token: RequestToken,
     },
 }

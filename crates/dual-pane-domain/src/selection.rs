@@ -1,6 +1,6 @@
 use crate::EntryName;
 
-/// The exact entry selected in one pane, if any.
+/// The exact entry selected in one browser, if any.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection(Option<EntryName>);
 

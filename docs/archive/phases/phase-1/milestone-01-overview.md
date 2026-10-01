@@ -16,7 +16,7 @@ Draft a target architecture for the project, check it against Clean Architecture
 
 **Out:**
 - Any code. This milestone produces no crate, no `build.rs`, no C++.
-- Product scope and behavior, now defined in [mvp.md](../../../mvp.md).
+- Product scope and behavior, now defined in [mvp.md](../../mvp.md).
 - Planning P1-M2 or any later milestone in detail.
 
 ## Completion checklist

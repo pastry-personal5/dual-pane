@@ -14,7 +14,7 @@ Goal: One pane lists a directory's folders and files and lets a person change di
 Status: Done
 Goal: Draft and review a target architecture for the project, check it against Clean Architecture's dependency rule, and resolve enough open questions to unblock P1-M2.
 Plan: [overview](milestone-01-overview.md), [architecture](milestone-01-architecture.md)
-Notes: Produced [architecture.md](../../../architecture.md). The current product scope is [mvp.md](../../../mvp.md).
+Notes: Produced [architecture.md](../../../architecture.md). The current product scope is [mvp.md](../../mvp.md).
 
 ### P1-M2: Stack spike
 Status: Done

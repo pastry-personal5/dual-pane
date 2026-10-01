@@ -1,39 +1,39 @@
 use std::sync::Arc;
 
-use dual_pane_domain::{Entry, ListingError, Location, PaneSide, Selection};
+use dual_pane_domain::{BrowserSide, Entry, ListingError, Location, Selection};
 
 /// What changed in the workspace, for presentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
-    ActivePaneChanged {
-        pane: PaneSide,
+    ActiveBrowserChanged {
+        browser: BrowserSide,
     },
-    /// The pane started loading `location`; its current listing stays shown.
+    /// The browser started loading `location`; its current listing stays shown.
     LoadingStarted {
-        pane: PaneSide,
+        browser: BrowserSide,
         location: Location,
     },
-    /// The pane now shows `location` with these entries, replacing the whole
+    /// The browser now shows `location` with these entries, replacing the whole
     /// previous listing.
-    ListingReplaced {
-        pane: PaneSide,
+    FolderItemsReplaced {
+        browser: BrowserSide,
         location: Location,
         entries: Arc<[Entry]>,
     },
-    /// The pane's validated single selection changed.
+    /// The browser's validated single selection changed.
     SelectionChanged {
-        pane: PaneSide,
+        browser: BrowserSide,
         selection: Selection,
         row: Option<usize>,
     },
-    /// Loading failed; the pane keeps its previous location and listing.
-    ListingFailed {
-        pane: PaneSide,
+    /// Loading failed; the browser keeps its previous location and listing.
+    FolderItemsFailed {
+        browser: BrowserSide,
         error: ListingError,
     },
     /// Loading ended because its request was cancelled. This is deliberately
     /// distinct from an error so presenters can keep it silent.
-    ListingCancelled {
-        pane: PaneSide,
+    FolderItemsCancelled {
+        browser: BrowserSide,
     },
 }

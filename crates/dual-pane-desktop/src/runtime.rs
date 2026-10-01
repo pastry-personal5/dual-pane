@@ -8,11 +8,11 @@ use std::thread;
 use std::time::Duration;
 
 use dual_pane_application::{Event, WorkRequest};
-use dual_pane_domain::{Entry, ListingErrorKind, Location, PaneSide, RequestToken};
+use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, RequestToken};
 
-type ListingOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
-pub type ListingSource = Box<dyn Fn(&Location, &AtomicBool) -> ListingOutcome + Send>;
-pub type ListingSourceFactory = Arc<dyn Fn() -> ListingSource + Send + Sync>;
+type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
+pub type FolderItemsSource = Box<dyn Fn(&Location, &AtomicBool) -> FolderItemsOutcome + Send>;
+pub type FolderItemsSourceFactory = Arc<dyn Fn() -> FolderItemsSource + Send + Sync>;
 pub type Wake = Box<dyn Fn() + Send>;
 type WorkerTask = Box<dyn FnOnce() + Send>;
 
@@ -23,7 +23,7 @@ pub trait WorkRunner {
     fn take_events(&mut self, max: usize) -> (Vec<Event>, bool);
 }
 
-/// One supervised listing queue per pane. Each worker owns one job; a panic is
+/// One supervised listing queue per browser. Each worker owns one job; a panic is
 /// contained, reported safely, and followed by a replacement after backoff.
 pub struct Runtime {
     left_jobs: JobSender,
@@ -31,12 +31,12 @@ pub struct Runtime {
     events: Receiver<Event>,
     next_event: Option<Event>,
     wake_pending: Arc<AtomicBool>,
-    outstanding: HashMap<RequestToken, (PaneSide, Arc<JobState>)>,
+    outstanding: HashMap<RequestToken, (BrowserSide, Arc<JobState>)>,
 }
 
 #[derive(Clone)]
 struct Job {
-    pane: PaneSide,
+    browser: BrowserSide,
     token: RequestToken,
     location: Location,
     state: Arc<JobState>,
@@ -125,7 +125,7 @@ struct Delivery {
 }
 
 enum WorkerOutcome {
-    Completed(ListingOutcome),
+    Completed(FolderItemsOutcome),
     Panicked,
 }
 
@@ -135,19 +135,19 @@ const MAX_RESTART_DELAY: Duration = Duration::from_secs(5);
 static INSTALL_PANIC_HOOK: Once = Once::new();
 
 impl Runtime {
-    pub fn start(source_factory: ListingSourceFactory, wake: Wake) -> io::Result<Self> {
-        Self::start_with(source_factory, wake, |pane, queue, source_factory, delivery| thread::Builder::new().name(format!("listing-supervisor-{pane:?}")).spawn(move || supervise(queue, source_factory, delivery)).map(|_| ()))
+    pub fn start(source_factory: FolderItemsSourceFactory, wake: Wake) -> io::Result<Self> {
+        Self::start_with(source_factory, wake, |browser, queue, source_factory, delivery| thread::Builder::new().name(format!("listing-supervisor-{browser:?}")).spawn(move || supervise(queue, source_factory, delivery)).map(|_| ()))
     }
 
-    fn start_with(source_factory: ListingSourceFactory, wake: Wake, mut spawn: impl FnMut(PaneSide, JobReceiver, ListingSourceFactory, Delivery) -> io::Result<()>) -> io::Result<Self> {
+    fn start_with(source_factory: FolderItemsSourceFactory, wake: Wake, mut spawn: impl FnMut(BrowserSide, JobReceiver, FolderItemsSourceFactory, Delivery) -> io::Result<()>) -> io::Result<Self> {
         install_panic_hook();
         let (left_jobs, left_queue) = job_queue();
         let (right_jobs, right_queue) = job_queue();
         let (event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
         let delivery = Delivery { events: event_sender, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(wake)) };
-        spawn(PaneSide::Left, left_queue, Arc::clone(&source_factory), delivery.clone())?;
-        if let Err(error) = spawn(PaneSide::Right, right_queue, source_factory, delivery) {
+        spawn(BrowserSide::Left, left_queue, Arc::clone(&source_factory), delivery.clone())?;
+        if let Err(error) = spawn(BrowserSide::Right, right_queue, source_factory, delivery) {
             drop(left_jobs);
             return Err(error);
         }
@@ -156,8 +156,8 @@ impl Runtime {
 
     fn receive(&mut self) -> Option<Event> {
         let event = self.next_event.take().or_else(|| self.events.try_recv().ok())?;
-        let (pane, token) = event_address(&event);
-        if self.outstanding.get(&token).is_some_and(|(owner, _)| *owner == pane) {
+        let (browser, token) = event_address(&event);
+        if self.outstanding.get(&token).is_some_and(|(owner, _)| *owner == browser) {
             self.outstanding.remove(&token);
         }
         Some(event)
@@ -181,24 +181,24 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
-            WorkRequest::ReadDirectory { pane, token, location } => {
+            WorkRequest::ReadDirectory { browser, token, location } => {
                 let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-                self.outstanding.insert(token, (pane, Arc::clone(&state)));
-                let jobs = match pane {
-                    PaneSide::Left => &self.left_jobs,
-                    PaneSide::Right => &self.right_jobs,
+                self.outstanding.insert(token, (browser, Arc::clone(&state)));
+                let jobs = match browser {
+                    BrowserSide::Left => &self.left_jobs,
+                    BrowserSide::Right => &self.right_jobs,
                 };
-                if let Err(job) = jobs.send(Job { pane, token, location, state })
+                if let Err(job) = jobs.send(Job { browser, token, location, state })
                     && job.state.claim_terminal()
                 {
                     self.outstanding.remove(&job.token);
-                    return Some(Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
+                    return Some(Event::FolderItemsFailed { browser: job.browser, token: job.token, kind: ListingErrorKind::Internal });
                 }
                 None
             }
-            WorkRequest::Cancel { pane, token } => {
+            WorkRequest::Cancel { browser, token } => {
                 if let Some((owner, state)) = self.outstanding.get(&token) {
-                    if *owner != pane {
+                    if *owner != browser {
                         return None;
                     }
                     state.cancelled.store(true, Ordering::Relaxed);
@@ -206,7 +206,7 @@ impl WorkRunner for Runtime {
                         return None;
                     }
                     self.outstanding.remove(&token);
-                    return Some(Event::ListingCancelled { pane, token });
+                    return Some(Event::FolderItemsCancelled { browser, token });
                 }
                 None
             }
@@ -231,11 +231,11 @@ impl Drop for Runtime {
     }
 }
 
-fn supervise(queue: impl IntoIterator<Item = Job>, source_factory: ListingSourceFactory, delivery: Delivery) {
+fn supervise(queue: impl IntoIterator<Item = Job>, source_factory: FolderItemsSourceFactory, delivery: Delivery) {
     supervise_with(queue, source_factory, delivery, |worker| thread::Builder::new().name(WORKER_THREAD_NAME.to_owned()).spawn(worker).map(|_| ()), thread::sleep);
 }
 
-fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factory: ListingSourceFactory, delivery: Delivery, mut spawn_worker: impl FnMut(WorkerTask) -> io::Result<()>, mut sleep: impl FnMut(Duration)) {
+fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factory: FolderItemsSourceFactory, delivery: Delivery, mut spawn_worker: impl FnMut(WorkerTask) -> io::Result<()>, mut sleep: impl FnMut(Duration)) {
     let mut delay = INITIAL_RESTART_DELAY;
     for job in queue {
         if job.state.cancelled.load(Ordering::Relaxed) {
@@ -258,32 +258,32 @@ fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factory: ListingS
             result_sender.send((worker_job, outcome)).ok();
         });
         if spawn_worker(worker).is_err() {
-            finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
+            finish(&delivery, &job, Event::FolderItemsFailed { browser: job.browser, token: job.token, kind: ListingErrorKind::Internal });
             sleep(delay);
             delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             continue;
         }
         let Ok((job, outcome)) = result_receiver.recv() else {
-            finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
+            finish(&delivery, &job, Event::FolderItemsFailed { browser: job.browser, token: job.token, kind: ListingErrorKind::Internal });
             sleep(delay);
             delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             continue;
         };
         match outcome {
             WorkerOutcome::Completed(Some(Ok(entries))) => {
-                finish(&delivery, &job, Event::ListingLoaded { pane: job.pane, token: job.token, entries });
+                finish(&delivery, &job, Event::FolderItemsLoaded { browser: job.browser, token: job.token, entries });
                 delay = INITIAL_RESTART_DELAY;
             }
             WorkerOutcome::Completed(Some(Err(kind))) => {
-                finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind });
+                finish(&delivery, &job, Event::FolderItemsFailed { browser: job.browser, token: job.token, kind });
                 delay = INITIAL_RESTART_DELAY;
             }
             WorkerOutcome::Completed(None) => {
-                finish(&delivery, &job, Event::ListingCancelled { pane: job.pane, token: job.token });
+                finish(&delivery, &job, Event::FolderItemsCancelled { browser: job.browser, token: job.token });
                 delay = INITIAL_RESTART_DELAY;
             }
             WorkerOutcome::Panicked => {
-                finish(&delivery, &job, Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
+                finish(&delivery, &job, Event::FolderItemsFailed { browser: job.browser, token: job.token, kind: ListingErrorKind::Internal });
                 sleep(delay);
                 delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             }
@@ -303,9 +303,9 @@ fn deliver_event(delivery: &Delivery, event: Event) {
     }
 }
 
-fn event_address(event: &Event) -> (PaneSide, RequestToken) {
+fn event_address(event: &Event) -> (BrowserSide, RequestToken) {
     match event {
-        Event::ListingLoaded { pane, token, .. } | Event::ListingFailed { pane, token, .. } | Event::ListingCancelled { pane, token, .. } => (*pane, *token),
+        Event::FolderItemsLoaded { browser, token, .. } | Event::FolderItemsFailed { browser, token, .. } | Event::FolderItemsCancelled { browser, token, .. } => (*browser, *token),
     }
 }
 
@@ -325,19 +325,19 @@ mod tests {
         (0..index).fold(RequestToken::first(), |token, _| token.next())
     }
     fn read(index: usize, name: &str) -> WorkRequest {
-        pane_read(PaneSide::Left, index, name)
+        browser_read(BrowserSide::Left, index, name)
     }
-    fn pane_read(pane: PaneSide, index: usize, name: &str) -> WorkRequest {
-        WorkRequest::ReadDirectory { pane, token: token(index), location: location(name) }
+    fn browser_read(browser: BrowserSide, index: usize, name: &str) -> WorkRequest {
+        WorkRequest::ReadDirectory { browser, token: token(index), location: location(name) }
     }
-    fn source_factory(source: impl Fn(&Location, &AtomicBool) -> ListingOutcome + Send + Sync + 'static) -> ListingSourceFactory {
+    fn source_factory(source: impl Fn(&Location, &AtomicBool) -> FolderItemsOutcome + Send + Sync + 'static) -> FolderItemsSourceFactory {
         let source = Arc::new(source);
         Arc::new(move || {
             let source = Arc::clone(&source);
             Box::new(move |location, cancelled| source(location, cancelled))
         })
     }
-    fn runtime(source_factory: ListingSourceFactory) -> (Runtime, Receiver<()>) {
+    fn runtime(source_factory: FolderItemsSourceFactory) -> (Runtime, Receiver<()>) {
         let (sender, receiver) = mpsc::channel();
         (
             Runtime::start(
@@ -358,8 +358,8 @@ mod tests {
         events
             .iter()
             .filter_map(|event| match event {
-                Event::ListingLoaded { token, .. } => Some(*token),
-                Event::ListingFailed { .. } | Event::ListingCancelled { .. } => None,
+                Event::FolderItemsLoaded { token, .. } => Some(*token),
+                Event::FolderItemsFailed { .. } | Event::FolderItemsCancelled { .. } => None,
             })
             .collect()
     }
@@ -377,7 +377,7 @@ mod tests {
         let gate_receiver = Arc::new(Mutex::new(gate_receiver));
         let (wake_sender, wakes) = mpsc::channel();
         let wake_count = Arc::new(AtomicUsize::new(0));
-        let source_factory: ListingSourceFactory = Arc::new(move || {
+        let source_factory: FolderItemsSourceFactory = Arc::new(move || {
             let call_sender = call_sender.clone();
             let gate_receiver = Arc::clone(&gate_receiver);
             Box::new(move |location, _cancelled| {
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "alpha")), None);
         assert_eq!(probe.next_call(), (location("alpha"), Some("listing-worker".to_owned())));
         probe.wait_for_wake();
-        assert_eq!(runner.take_events(8), (vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }], false));
+        assert_eq!(runner.take_events(8), (vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(0), entries: Arc::from([]) }], false));
     }
 
     #[test]
@@ -420,25 +420,25 @@ mod tests {
         let (mut runner, probe) = start_probe("blocked");
         assert_eq!(runner.dispatch(read(0, "blocked")), None);
         assert_eq!(probe.next_call().0, location("blocked"));
-        assert_eq!(runner.dispatch(pane_read(PaneSide::Right, 1, "right")), None);
+        assert_eq!(runner.dispatch(browser_read(BrowserSide::Right, 1, "right")), None);
         assert_eq!(probe.next_call().0, location("right"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, token: token(1), entries: Arc::from([]) }]);
         probe.gate.send(()).unwrap();
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(0), entries: Arc::from([]) }]);
     }
 
     #[test]
-    fn wrong_pane_cancellation_cannot_claim_another_panes_read() {
+    fn wrong_browser_cancellation_cannot_claim_another_browsers_read() {
         let (mut runner, probe) = start_probe("blocked");
         runner.dispatch(read(0, "blocked"));
         assert_eq!(probe.next_call().0, location("blocked"));
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Right, token: token(0) }), None);
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Right, token: token(0) }), None);
         assert!(!runner.outstanding.get(&token(0)).unwrap().1.cancelled.load(Ordering::Relaxed));
-        runner.dispatch(pane_read(PaneSide::Right, 1, "right"));
+        runner.dispatch(browser_read(BrowserSide::Right, 1, "right"));
         assert_eq!(probe.next_call().0, location("right"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, token: token(1), entries: Arc::from([]) }]);
         probe.gate.send(()).unwrap();
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(0), entries: Arc::from([]) }]);
     }
 
     #[test]
@@ -446,19 +446,19 @@ mod tests {
         let (mut runner, probe) = start_probe("blocked");
         runner.dispatch(read(0, "blocked"));
         assert_eq!(probe.next_call().0, location("blocked"));
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(0) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(0) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, token: token(0) }), Some(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: token(0) }));
         runner.dispatch(read(1, "replacement"));
-        runner.dispatch(pane_read(PaneSide::Right, 2, "right"));
+        runner.dispatch(browser_read(BrowserSide::Right, 2, "right"));
         assert_eq!(probe.next_call().0, location("right"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(2), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, token: token(2), entries: Arc::from([]) }]);
         probe.gate.send(()).unwrap();
         assert_eq!(probe.next_call().0, location("replacement"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(1), entries: Arc::from([]) }]);
         assert!(runner.take_events(8).0.is_empty());
     }
 
     #[test]
-    fn failure_and_panic_recovery_stay_in_their_pane() {
+    fn failure_and_panic_recovery_stay_in_their_browser() {
         let (gate, release) = mpsc::channel::<()>();
         let release = Arc::new(Mutex::new(release));
         let (started_sender, started) = mpsc::channel();
@@ -476,23 +476,23 @@ mod tests {
             }
         });
         let (mut runner, wakes) = runtime(source_factory);
-        runner.dispatch(pane_read(PaneSide::Right, 0, "right-blocked"));
+        runner.dispatch(browser_read(BrowserSide::Right, 0, "right-blocked"));
         started.recv_timeout(TIMEOUT).unwrap();
         runner.dispatch(read(1, "left-failed"));
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(1), kind: ListingErrorKind::PermissionDenied }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(1), kind: ListingErrorKind::PermissionDenied }]);
         runner.dispatch(read(2, "left-panic"));
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(2), kind: ListingErrorKind::Internal }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(2), kind: ListingErrorKind::Internal }]);
         runner.dispatch(read(3, "left-recovered"));
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(3), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(3), entries: Arc::from([]) }]);
         gate.send(()).unwrap();
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(0), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, token: token(0), entries: Arc::from([]) }]);
     }
 
     #[test]
     fn startup_closes_first_queue_when_second_supervisor_fails() {
         let (observed, closed) = mpsc::channel();
-        let result = Runtime::start_with(source_factory(|_, _| Some(Ok(Arc::from([])))), Box::new(|| {}), move |pane, queue, _, _| {
-            if pane == PaneSide::Right {
+        let result = Runtime::start_with(source_factory(|_, _| Some(Ok(Arc::from([])))), Box::new(|| {}), move |browser, queue, _, _| {
+            if browser == BrowserSide::Right {
                 return Err(io::Error::other("right supervisor unavailable"));
             }
             let observed = observed.clone();
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "blocked")), None);
         assert_eq!(probe.next_call().0, location("blocked"));
         assert_eq!(runner.dispatch(read(1, "queued")), None);
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(1) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, token: token(1) }), Some(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: token(1) }));
         probe.gate.send(()).unwrap();
         assert_eq!(runner.dispatch(read(2, "later")), None);
         assert_eq!(probe.next_call().0, location("later"));
@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(probe.next_call().0, location("blocked"));
         for index in 1..=20 {
             if index > 1 {
-                assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(index - 1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(index - 1) }));
+                assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, token: token(index - 1) }), Some(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: token(index - 1) }));
             }
             assert_eq!(runner.dispatch(read(index, &format!("item {index}"))), None);
         }
@@ -555,7 +555,7 @@ mod tests {
         runner.dispatch(read(0, "blocked"));
         assert_eq!(probe.next_call().0, location("blocked"));
         assert_eq!(runner.dispatch(read(1, "pending")), None);
-        assert_eq!(runner.dispatch(read(2, "extra")), Some(Event::ListingFailed { pane: PaneSide::Left, token: token(2), kind: ListingErrorKind::Internal }));
+        assert_eq!(runner.dispatch(read(2, "extra")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(2), kind: ListingErrorKind::Internal }));
         assert_eq!(runner.outstanding.len(), 2);
         probe.gate.send(()).unwrap();
         assert_eq!(probe.next_call().0, location("pending"));
@@ -626,8 +626,8 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "running")), None);
         started.recv_timeout(TIMEOUT).unwrap();
         assert_eq!(runner.dispatch(read(1, "queued")), None);
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(1) }));
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(0) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(0) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, token: token(1) }), Some(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: token(1) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, token: token(0) }), Some(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: token(0) }));
         assert!(wakes.recv_timeout(Duration::from_millis(100)).is_err());
     }
 
@@ -635,7 +635,7 @@ mod tests {
     fn a_source_reported_cancellation_is_terminal() {
         let (mut runner, wakes) = runtime(source_factory(|_, _| None));
         assert_eq!(runner.dispatch(read(0, "stopped")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingCancelled { pane: PaneSide::Left, token: token(0) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsCancelled { browser: BrowserSide::Left, token: token(0) }]);
     }
 
     #[test]
@@ -644,9 +644,9 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "complete")), None);
         wakes.recv_timeout(TIMEOUT).unwrap();
 
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(0) }), None);
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, token: token(0) }), None);
 
-        assert_eq!(runner.take_events(32), (vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }], false));
+        assert_eq!(runner.take_events(32), (vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(0), entries: Arc::from([]) }], false));
     }
 
     #[test]
@@ -657,7 +657,7 @@ mod tests {
         let wake_pending = Arc::new(AtomicBool::new(false));
         let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, events, next_event: None, wake_pending, outstanding: HashMap::new() };
 
-        assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }));
+        assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());
     }
 
@@ -666,7 +666,7 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..3 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { pane: PaneSide::Left, token: token(index), location: location("item"), state }).unwrap();
+            jobs.send(Job { browser: BrowserSide::Left, token: token(index), location: location("item"), state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
@@ -693,13 +693,13 @@ mod tests {
             |_| {},
         );
 
-        assert_eq!(events.into_iter().collect::<Vec<_>>(), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }, Event::ListingFailed { pane: PaneSide::Left, token: token(1), kind: ListingErrorKind::Internal }, Event::ListingLoaded { pane: PaneSide::Left, token: token(2), entries: Arc::from([]) },]);
+        assert_eq!(events.into_iter().collect::<Vec<_>>(), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(0), kind: ListingErrorKind::Internal }, Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(1), kind: ListingErrorKind::Internal }, Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(2), entries: Arc::from([]) },]);
     }
 
     #[test]
     fn panic_fails_then_a_replacement_worker_processes_fifo_work() {
         let created = Arc::new(AtomicUsize::new(0));
-        let source_factory: ListingSourceFactory = Arc::new({
+        let source_factory: FolderItemsSourceFactory = Arc::new({
             let created = Arc::clone(&created);
             move || {
                 let instance = created.fetch_add(1, Ordering::SeqCst);
@@ -713,16 +713,16 @@ mod tests {
         });
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(1), entries: Arc::from([]) }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
     #[test]
     fn source_creation_is_inside_the_worker_panic_boundary() {
         let created = Arc::new(AtomicUsize::new(0));
-        let source_factory: ListingSourceFactory = Arc::new({
+        let source_factory: FolderItemsSourceFactory = Arc::new({
             let created = Arc::clone(&created);
             move || {
                 if created.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -733,9 +733,9 @@ mod tests {
         });
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(1), entries: Arc::from([]) }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -749,7 +749,7 @@ mod tests {
         }
 
         let created = Arc::new(AtomicUsize::new(0));
-        let source_factory: ListingSourceFactory = Arc::new({
+        let source_factory: FolderItemsSourceFactory = Arc::new({
             let created = Arc::clone(&created);
             move || {
                 let instance = created.fetch_add(1, Ordering::SeqCst);
@@ -763,9 +763,9 @@ mod tests {
         });
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, token: token(1), entries: Arc::from([]) }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -774,9 +774,9 @@ mod tests {
         let source_factory = source_factory(|_, _| panic!("worker failure"));
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "cancelled")), None);
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(1) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, token: token(1) }), Some(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: token(1) }));
     }
 
     #[test]
@@ -784,7 +784,7 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..11 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { pane: PaneSide::Left, token: token(index), location: location("item"), state }).unwrap();
+            jobs.send(Job { browser: BrowserSide::Left, token: token(index), location: location("item"), state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
@@ -813,10 +813,10 @@ mod tests {
         let events = events.into_iter().collect::<Vec<_>>();
         assert_eq!(events.len(), 11);
         assert_eq!(event_address(&events[8]).1, token(8));
-        assert!(matches!(events[8], Event::ListingLoaded { .. }));
+        assert!(matches!(events[8], Event::FolderItemsLoaded { .. }));
         assert_eq!(event_address(&events[9]).1, token(9));
-        assert!(matches!(events[9], Event::ListingFailed { kind: ListingErrorKind::Internal, .. }));
+        assert!(matches!(events[9], Event::FolderItemsFailed { kind: ListingErrorKind::Internal, .. }));
         assert_eq!(event_address(&events[10]).1, token(10));
-        assert!(matches!(events[10], Event::ListingLoaded { .. }));
+        assert!(matches!(events[10], Event::FolderItemsLoaded { .. }));
     }
 }
