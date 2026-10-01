@@ -3,8 +3,9 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::UNIX_EPOCH;
 
-use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, Location, listing_sort_key};
+use dual_pane_domain::{Entry, EntryKind, EntryMetadata, EntryName, ListingErrorKind, Location, SortSpec, sort_entries};
 
 use crate::native_location::path_from_location;
 
@@ -12,7 +13,7 @@ type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 
 /// Reads one complete directory snapshot, or returns cancellation or one
 /// classified terminal failure. The runtime invokes this only on its worker.
-pub fn read(location: &Location, cancelled: &AtomicBool) -> FolderItemsOutcome {
+pub fn read(location: &Location, sort: SortSpec, cancelled: &AtomicBool) -> FolderItemsOutcome {
     if is_cancelled(cancelled) {
         return None;
     }
@@ -25,7 +26,7 @@ pub fn read(location: &Location, cancelled: &AtomicBool) -> FolderItemsOutcome {
         Ok(entries) => entries,
         Err(kind) => return Some(Err(kind)),
     };
-    sort_entries(entries, cancelled).map(Ok)
+    sort_entries_for_read(entries, sort, cancelled).map(Ok)
 }
 
 fn collect_entries<T>(items: impl IntoIterator<Item = io::Result<T>>, cancelled: &AtomicBool, mut classify: impl FnMut(T, &AtomicBool) -> Option<Result<Option<Entry>, ListingErrorKind>>) -> Option<Result<Vec<Entry>, ListingErrorKind>> {
@@ -76,25 +77,19 @@ fn classify_dir_entry(entry: DirEntry, cancelled: &AtomicBool) -> Option<Result<
     } else {
         classify_kind(own_kind, Ok(NativeKind::Other))
     };
-    Some(Ok(Some(Entry::new(name, kind))))
+    let metadata = entry.metadata().ok().map(|metadata| EntryMetadata::new(metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|duration| i64::try_from(duration.as_secs()).ok()), Some(metadata.len()))).unwrap_or_default();
+    Some(Ok(Some(Entry::with_metadata(name, kind, metadata))))
 }
 
-fn sort_entries(entries: Vec<Entry>, cancelled: &AtomicBool) -> Option<Arc<[Entry]>> {
+fn sort_entries_for_read(mut entries: Vec<Entry>, sort: SortSpec, cancelled: &AtomicBool) -> Option<Arc<[Entry]>> {
     if is_cancelled(cancelled) {
         return None;
     }
-    let mut keyed = Vec::with_capacity(entries.len());
-    for entry in entries {
-        if is_cancelled(cancelled) {
-            return None;
-        }
-        keyed.push((listing_sort_key(&entry), entry));
-    }
-    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+    sort_entries(&mut entries, sort);
     if is_cancelled(cancelled) {
         return None;
     }
-    Some(keyed.into_iter().map(|(_, entry)| entry).collect())
+    Some(entries.into())
 }
 
 fn entry_name(bytes: &[u8]) -> Result<Option<EntryName>, ListingErrorKind> {
@@ -193,9 +188,9 @@ mod tests {
         let _socket = UnixListener::bind(&socket_path).unwrap();
 
         let location = location_from_path(temporary.path()).unwrap();
-        let entries = read(&location, &AtomicBool::new(false)).unwrap().unwrap();
+        let entries = read(&location, SortSpec::default(), &AtomicBool::new(false)).unwrap().unwrap();
 
-        assert!(entries.windows(2).all(|pair| listing_sort_key(&pair[0]) < listing_sort_key(&pair[1])));
+        assert!(entries.windows(2).all(|pair| dual_pane_domain::listing_sort_key(&pair[0]) < dual_pane_domain::listing_sort_key(&pair[1])));
         let kind = |bytes: &[u8]| entries.iter().find(|entry| entry.name().as_bytes() == bytes).map(Entry::kind);
         assert_eq!(kind(b"folder2"), Some(EntryKind::Directory));
         assert_eq!(kind(b"file2"), Some(EntryKind::File));
@@ -247,7 +242,7 @@ mod tests {
 
     #[test]
     fn cancellation_is_checked_before_and_during_collection() {
-        assert_eq!(read(&Location::root(), &AtomicBool::new(true)), None);
+        assert_eq!(read(&Location::root(), SortSpec::default(), &AtomicBool::new(true)), None);
         let cancelled = AtomicBool::new(false);
         let result = collect_entries([Ok(1_u8), Ok(2_u8)], &cancelled, |value, flag| {
             if value == 1 {
@@ -271,11 +266,11 @@ mod tests {
     fn missing_and_non_directory_locations_fail_without_rows() {
         let temporary = tempdir().unwrap();
         let missing = location_from_path(&temporary.path().join("missing")).unwrap();
-        assert_eq!(read(&missing, &AtomicBool::new(false)), Some(Err(ListingErrorKind::ItemMissing)));
+        assert_eq!(read(&missing, SortSpec::default(), &AtomicBool::new(false)), Some(Err(ListingErrorKind::ItemMissing)));
 
         let file_path = temporary.path().join("file");
         File::create(&file_path).unwrap();
         let file = location_from_path(&file_path).unwrap();
-        assert_eq!(read(&file, &AtomicBool::new(false)), Some(Err(ListingErrorKind::NotADirectory)));
+        assert_eq!(read(&file, SortSpec::default(), &AtomicBool::new(false)), Some(Err(ListingErrorKind::NotADirectory)));
     }
 }

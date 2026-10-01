@@ -1,8 +1,8 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 
 use unicode_normalization::UnicodeNormalization;
 
-use crate::EntryName;
+use crate::{EntryName, SortDirection, SortField, SortSpec};
 
 /// What kind of object a directory entry is, as classified by the platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,11 +18,38 @@ pub enum EntryKind {
 pub struct Entry {
     name: EntryName,
     kind: EntryKind,
+    metadata: EntryMetadata,
+}
+
+/// Direct, non-recursive metadata supplied by a directory reader. Missing
+/// values stay unknown; sorting never triggers another filesystem read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EntryMetadata {
+    modified_unix_seconds: Option<i64>,
+    size_bytes: Option<u64>,
+}
+
+impl EntryMetadata {
+    pub const fn new(modified_unix_seconds: Option<i64>, size_bytes: Option<u64>) -> Self {
+        Self { modified_unix_seconds, size_bytes }
+    }
+
+    pub const fn modified_unix_seconds(self) -> Option<i64> {
+        self.modified_unix_seconds
+    }
+
+    pub const fn size_bytes(self) -> Option<u64> {
+        self.size_bytes
+    }
 }
 
 impl Entry {
     pub fn new(name: EntryName, kind: EntryKind) -> Self {
-        Self { name, kind }
+        Self::with_metadata(name, kind, EntryMetadata::default())
+    }
+
+    pub fn with_metadata(name: EntryName, kind: EntryKind, metadata: EntryMetadata) -> Self {
+        Self { name, kind, metadata }
     }
 
     pub fn name(&self) -> &EntryName {
@@ -31,6 +58,10 @@ impl Entry {
 
     pub fn kind(&self) -> EntryKind {
         self.kind
+    }
+
+    pub fn metadata(&self) -> EntryMetadata {
+        self.metadata
     }
 
     /// Whether opening this entry navigates into it: a directory, or a
@@ -61,6 +92,36 @@ pub struct ListingSortKey {
 pub fn listing_sort_key(entry: &Entry) -> ListingSortKey {
     let text: String = entry.name.to_text_lossy().nfc().collect();
     ListingSortKey { group: u8::from(!entry.can_enter()), name: name_tokens(&text), exact: entry.name.as_bytes().into() }
+}
+
+/// Sorts entries according to one location-shared choice. Folders and links to
+/// folders always lead; unavailable metadata follows known values. Every field
+/// falls back to natural Name ascending so the order remains deterministic.
+pub fn sort_entries(entries: &mut [Entry], spec: SortSpec) {
+    match (spec.field(), spec.direction()) {
+        (SortField::Name, SortDirection::Ascending) => entries.sort_by_cached_key(listing_sort_key),
+        (SortField::Name, SortDirection::Descending) => entries.sort_by_cached_key(|entry| (u8::from(!entry.can_enter()), Reverse(listing_sort_key(entry)))),
+        (field, direction) => entries.sort_by_cached_key(|entry| {
+            let value: Option<i128> = match field {
+                SortField::Type => Some(i128::from(type_key(entry))),
+                SortField::Modified => entry.metadata.modified_unix_seconds.map(i128::from),
+                SortField::Size => entry.metadata.size_bytes.map(i128::from),
+                SortField::Name => unreachable!("Name is handled above"),
+            };
+            let ordered_value = value.map_or(0, |value| if direction == SortDirection::Descending { -value } else { value });
+            (u8::from(!entry.can_enter()), u8::from(value.is_none()), ordered_value, listing_sort_key(entry))
+        }),
+    }
+}
+
+fn type_key(entry: &Entry) -> u8 {
+    match entry.kind {
+        EntryKind::Directory => 0,
+        EntryKind::File => 1,
+        EntryKind::Symlink { points_to_directory: true } => 2,
+        EntryKind::Symlink { points_to_directory: false } => 3,
+        EntryKind::Other => 4,
+    }
 }
 
 /// A unit of natural ordering.

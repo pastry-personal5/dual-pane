@@ -1,26 +1,57 @@
 use crate::EntryName;
 
-/// The exact entry selected in one browser, if any.
+/// Exact entry identities selected in one tab. Ordering is insertion order and
+/// has no presentation meaning.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Selection(Option<EntryName>);
+pub struct Selection(Vec<EntryName>);
 
 impl Selection {
     pub fn selected(&self) -> Option<&EntryName> {
-        self.0.as_ref()
+        self.0.first()
     }
 
     /// Selects `name` and reports whether the selection changed.
     pub fn select(&mut self, name: EntryName) -> bool {
-        if self.0.as_ref() == Some(&name) {
+        if self.0.len() == 1 && self.0.first() == Some(&name) {
             return false;
         }
-        self.0 = Some(name);
+        self.0 = vec![name];
         true
     }
 
     /// Clears the selection and reports whether it was non-empty.
     pub fn clear(&mut self) -> bool {
-        self.0.take().is_some()
+        let changed = !self.0.is_empty();
+        self.0.clear();
+        changed
+    }
+
+    pub fn entries(&self) -> &[EntryName] {
+        &self.0
+    }
+    pub fn contains(&self, name: &EntryName) -> bool {
+        self.0.contains(name)
+    }
+    pub fn toggle(&mut self, name: EntryName) -> bool {
+        if let Some(index) = self.0.iter().position(|item| item == &name) {
+            self.0.remove(index);
+        } else {
+            self.0.push(name);
+        }
+        true
+    }
+    pub fn replace(&mut self, entries: Vec<EntryName>) -> bool {
+        if self.0 == entries {
+            false
+        } else {
+            self.0 = entries;
+            true
+        }
+    }
+    pub fn retain(&mut self, mut keep: impl FnMut(&EntryName) -> bool) -> bool {
+        let old = self.0.len();
+        self.0.retain(|entry| keep(entry));
+        old != self.0.len()
     }
 }
 

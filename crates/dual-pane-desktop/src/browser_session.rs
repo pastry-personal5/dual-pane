@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, InputController, UiEvent};
@@ -6,6 +7,7 @@ use dual_pane_application::{Command, Input, Workspace};
 use dual_pane_domain::{BrowserSide, Location};
 
 use crate::runtime::{FolderItemsSourceFactory, Runtime, WorkRunner};
+use crate::settings_storage::{SettingsJob, SettingsResult, SettingsWorker};
 
 /// How many delivered events one drain handles, so input and painting run
 /// between slices.
@@ -24,6 +26,9 @@ pub(crate) enum SelectionMovement {
 /// listings.
 pub struct BrowserStartup {
     pub location: Location,
+    pub home: Location,
+    pub screenshots_exists: bool,
+    pub settings_path: PathBuf,
     pub source_factory: FolderItemsSourceFactory,
 }
 
@@ -35,6 +40,7 @@ pub struct WorkspaceSession<R = Runtime> {
     left: BrowserPresenter,
     right: BrowserPresenter,
     runner: R,
+    settings_worker: Option<SettingsWorker>,
     drain_slice: usize,
     drain_time_budget: Duration,
     buffered_events: VecDeque<dual_pane_application::Event>,
@@ -42,9 +48,17 @@ pub struct WorkspaceSession<R = Runtime> {
 }
 
 impl<R: WorkRunner> WorkspaceSession<R> {
-    pub fn new(runner: R, drain_slice: usize, drain_time_budget: Duration) -> Self {
+    #[cfg(test)]
+    pub fn new(runner: R, home: Location, drain_slice: usize, drain_time_budget: Duration) -> Self {
+        Self::with_settings(runner, home, false, None, drain_slice, drain_time_budget)
+    }
+
+    pub fn with_settings(runner: R, home: Location, screenshots_exists: bool, settings_worker: Option<SettingsWorker>, drain_slice: usize, drain_time_budget: Duration) -> Self {
         assert!(drain_slice > 0, "a drain must be able to handle at least one event");
-        Self { workspace: Workspace::new(), controller: InputController::new(), left: BrowserPresenter::new(BrowserSide::Left), right: BrowserPresenter::new(BrowserSide::Right), runner, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false }
+        if let Some(worker) = &settings_worker {
+            worker.submit(SettingsJob::Load);
+        }
+        Self { workspace: Workspace::with_context(home, screenshots_exists), controller: InputController::new(), left: BrowserPresenter::new(BrowserSide::Left), right: BrowserPresenter::new(BrowserSide::Right), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false }
     }
 
     pub fn start(&mut self, location: Location) {
@@ -61,7 +75,15 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                 self.right.apply(output);
             }
             for request in transition.work {
-                if let Some(event) = self.runner.dispatch(request) {
+                if let dual_pane_application::WorkRequest::SaveSettings { revision, snapshot } = request {
+                    if let Some(worker) = &self.settings_worker {
+                        if !worker.submit(SettingsJob::Save { revision, snapshot }) {
+                            inputs.push_back(dual_pane_application::Event::SettingsSaveFailed { revision }.into());
+                        }
+                    } else {
+                        inputs.push_back(dual_pane_application::Event::SettingsSaveFailed { revision }.into());
+                    }
+                } else if let Some(event) = self.runner.dispatch(request) {
                     inputs.push_back(event.into());
                 }
             }
@@ -98,9 +120,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             (Some(row), SelectionMovement::Previous) => row - 1,
             (Some(row), SelectionMovement::Next) => row.saturating_add(1).min(row_count - 1),
         };
-        if selected != Some(target) {
-            self.submit_ui(browser, UiEvent::SelectRow { row: target });
-        }
+        self.submit_ui(browser, UiEvent::SelectRow { row: target });
     }
 
     pub(crate) fn activate_selection(&mut self, browser: BrowserSide) {
@@ -110,6 +130,15 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     }
 
     pub fn drain(&mut self) -> bool {
+        if let Some(worker) = &self.settings_worker {
+            for result in worker.take_results() {
+                match result {
+                    SettingsResult::Loaded(snapshot) => self.submit(dual_pane_application::Event::SettingsLoaded { snapshot }),
+                    SettingsResult::Saved { revision } => self.submit(dual_pane_application::Event::SettingsSaved { revision }),
+                    SettingsResult::Failed(_) | SettingsResult::Reset { .. } => self.submit(dual_pane_application::Event::SettingsSaveFailed { revision: 0 }),
+                }
+            }
+        }
         let started = Instant::now();
         if self.buffered_events.is_empty() {
             let (events, more) = self.runner.take_events(self.drain_slice);
@@ -147,7 +176,7 @@ mod tests {
     use std::sync::Arc;
 
     use dual_pane_application::{Command, Event, WorkRequest};
-    use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken, Selection};
+    use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken, Selection, SortSpec, TabId};
 
     use super::*;
 
@@ -199,12 +228,12 @@ mod tests {
 
     #[test]
     fn loading_failure_cancellation_and_late_results_preserve_the_other_browser() {
-        let mut session = WorkspaceSession::new(FakeRunner::default(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(path("base"));
         assert_view(&session, BrowserSide::Left, ("", &[], None, "Loading…", true, 0));
         assert_view(&session, BrowserSide::Right, ("", &[], None, "Loading…", true, 0));
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
         session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 });
         session.submit_ui(BrowserSide::Right, UiEvent::SelectRow { row: 0 });
         assert_view(&session, BrowserSide::Left, ("/base", &["left"], Some("left"), "/base", false, 1));
@@ -214,34 +243,34 @@ mod tests {
         let older = RequestToken::first().next().next();
         session.submit(Command::Navigate { browser: BrowserSide::Left, location: path("missing") });
         let missing = older.next();
-        assert_eq!(session.runner.dispatched[3], WorkRequest::Cancel { browser: BrowserSide::Left, token: older });
-        session.submit(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: older });
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, token: older, entries: Arc::from(vec![entry("late")]) });
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, token: missing, entries: Arc::from(vec![entry("wrong")]) });
+        assert_eq!(session.runner.dispatched[3], WorkRequest::Cancel { browser: BrowserSide::Left, tab: TabId::new(0), token: older });
+        session.submit(Event::FolderItemsCancelled { browser: BrowserSide::Left, tab: TabId::new(0), token: older });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: older, entries: Arc::from(vec![entry("late")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: missing, entries: Arc::from(vec![entry("wrong")]) });
         assert_view(&session, BrowserSide::Left, ("/base", &["left"], Some("left"), "Loading…", true, 1));
         assert_view(&session, BrowserSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
 
-        session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, token: missing, kind: ListingErrorKind::ItemMissing });
+        session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: missing, kind: ListingErrorKind::ItemMissing });
         assert_view(&session, BrowserSide::Left, ("/base", &["left"], Some("left"), "“/missing” no longer exists.", false, 1));
         assert_view(&session, BrowserSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
         session.submit(Command::Navigate { browser: BrowserSide::Left, location: path("cancelled") });
         let cancelled = missing.next();
-        session.submit(Event::FolderItemsCancelled { browser: BrowserSide::Left, token: cancelled });
+        session.submit(Event::FolderItemsCancelled { browser: BrowserSide::Left, tab: TabId::new(0), token: cancelled });
         assert_view(&session, BrowserSide::Left, ("/base", &["left"], Some("left"), "/base", false, 1));
         assert_view(&session, BrowserSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
 
         session.submit(Command::Navigate { browser: BrowserSide::Left, location: path("final") });
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, token: cancelled.next(), entries: Arc::from(vec![entry("fresh")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: cancelled.next(), entries: Arc::from(vec![entry("fresh")]) });
         assert_view(&session, BrowserSide::Left, ("/final", &["fresh"], None, "/final", false, 2));
         assert_view(&session, BrowserSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
     }
 
     #[test]
     fn bounded_drain_applies_one_browsers_result_without_touching_the_other() {
-        let mut session = WorkspaceSession::new(FakeRunner::default(), 1, DRAIN_TIME_BUDGET);
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), 1, DRAIN_TIME_BUDGET);
         session.start(path("base"));
-        session.runner.delivered.push_back(Event::FolderItemsLoaded { browser: BrowserSide::Right, token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
-        session.runner.delivered.push_back(Event::FolderItemsLoaded { browser: BrowserSide::Left, token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
+        session.runner.delivered.push_back(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
+        session.runner.delivered.push_back(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
         assert!(session.drain());
         assert_view(&session, BrowserSide::Left, ("", &[], None, "Loading…", true, 0));
         assert_view(&session, BrowserSide::Right, ("/base", &["right"], None, "/base", false, 1));
@@ -252,20 +281,20 @@ mod tests {
 
     #[test]
     fn start_dispatches_distinct_reads_for_both_browsers() {
-        let mut session = WorkspaceSession::new(FakeRunner::default(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(Location::root());
-        assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, token: RequestToken::first(), location: Location::root() }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, token: RequestToken::first().next(), location: Location::root() }]);
+        assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), location: Location::root(), sort: SortSpec::default() }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), location: Location::root(), sort: SortSpec::default() }]);
     }
 
     #[test]
     fn folder_items_revisions_and_selection_are_browser_local() {
-        let mut session = WorkspaceSession::new(FakeRunner::default(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(Location::root());
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
         assert_eq!(session.view(BrowserSide::Left).folder_items_revision(), 1);
         assert_eq!(session.view(BrowserSide::Right).folder_items_revision(), 0);
 
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
         session.submit_ui(BrowserSide::Right, UiEvent::SelectRow { row: 0 });
         assert_eq!(session.view(BrowserSide::Left).folder_items_revision(), 1);
         assert_eq!(session.view(BrowserSide::Right).folder_items_revision(), 1);
@@ -275,13 +304,13 @@ mod tests {
 
     #[test]
     fn vertical_arrow_movement_obeys_empty_unselected_and_boundary_cases() {
-        let mut session = WorkspaceSession::new(FakeRunner::default(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(Location::root());
 
         session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
         assert_eq!(session.view(BrowserSide::Left).selected_row(), None);
 
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, token: RequestToken::first(), entries: Arc::from(vec![entry("first"), entry("second"), entry("third")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("first"), entry("second"), entry("third")]) });
         session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
         assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
         session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
@@ -294,19 +323,78 @@ mod tests {
     }
 
     #[test]
+    fn movement_at_a_boundary_collapses_a_range_selection() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(Location::root());
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("first"), entry("second")]) });
+        session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 });
+        session.submit(Command::SelectAll { browser: BrowserSide::Left });
+        assert_eq!(session.view(BrowserSide::Left).selection().entries().len(), 2);
+        session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
+        assert_eq!(session.view(BrowserSide::Left).selection().entries(), &[EntryName::new("first").unwrap()]);
+        assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
+    }
+
+    #[test]
     fn horizontal_arrow_actions_navigate_the_addressed_browser() {
         let folder = EntryName::new("folder").unwrap();
         let location = Location::root().join(&EntryName::new("parent").unwrap());
-        let mut session = WorkspaceSession::new(FakeRunner::default(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(location.clone());
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, token: RequestToken::first(), entries: Arc::from(vec![entry("folder")]) });
-        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, token: RequestToken::first().next(), entries: Arc::from(vec![entry("folder")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("folder")]) });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), entries: Arc::from(vec![entry("folder")]) });
         session.runner.dispatched.clear();
 
         session.submit_ui(BrowserSide::Left, UiEvent::GoToParent);
         session.submit_ui(BrowserSide::Right, UiEvent::SelectRow { row: 0 });
         session.activate_selection(BrowserSide::Right);
 
-        assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, token: RequestToken::first().next().next(), location: Location::root() }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, token: RequestToken::first().next().next().next(), location: location.join(&folder) }]);
+        assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first().next().next(), location: Location::root(), sort: SortSpec::default() }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next().next().next(), location: location.join(&folder), sort: SortSpec::default() }]);
+    }
+
+    #[test]
+    fn switching_tabs_restores_the_visible_listing_and_ignores_inactive_results() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("first"));
+        let first = session.workspace.active_tab(BrowserSide::Left);
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, token: RequestToken::first(), entries: Arc::from(vec![entry("one")]) });
+        session.submit(Command::NewTab { browser: BrowserSide::Left });
+        let second = session.workspace.active_tab(BrowserSide::Left);
+        assert_ne!(first, second);
+        assert_view(&session, BrowserSide::Left, ("", &[], None, "Loading…", true, 2));
+
+        session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: first });
+        assert_view(&session, BrowserSide::Left, ("/first", &["one"], None, "/first", false, 3));
+        let token = match session.runner.dispatched.last() {
+            Some(WorkRequest::ReadDirectory { token, .. }) => *token,
+            _ => panic!("new tab read"),
+        };
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: second, token, entries: Arc::from(vec![entry("two")]) });
+        assert_view(&session, BrowserSide::Left, ("/first", &["one"], None, "/first", false, 3));
+
+        session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: second });
+        assert_view(&session, BrowserSide::Left, ("/first", &["two"], None, "/first", false, 4));
+
+        session.submit(Command::Refresh { browser: BrowserSide::Left });
+        let refresh = match session.runner.dispatched.last() {
+            Some(WorkRequest::ReadDirectory { token, .. }) => *token,
+            _ => panic!("refresh read"),
+        };
+        session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: second, token: refresh, kind: ListingErrorKind::PermissionDenied });
+        session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: first });
+        session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: second });
+        assert_view(&session, BrowserSide::Left, ("/first", &["two"], None, "You don’t have permission to open “/first”.", false, 6));
+    }
+
+    #[test]
+    fn closing_the_final_tab_reads_the_supplied_home() {
+        let home = path("synthetic-home");
+        let mut session = WorkspaceSession::new(FakeRunner::default(), home.clone(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("start"));
+        let old = session.workspace.active_tab(BrowserSide::Left);
+        session.submit(Command::CloseTab { browser: BrowserSide::Left, tab: old });
+        let new = session.workspace.active_tab(BrowserSide::Left);
+        assert_ne!(old, new);
+        assert!(matches!(session.runner.dispatched.last(), Some(WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, location, .. }) if *tab == new && *location == home));
     }
 }

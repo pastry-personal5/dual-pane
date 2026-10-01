@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dual_pane_application::Output;
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, Selection};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, Selection, TabId};
 
 /// What a Browser shows. Rows are formatted when requested, so updating the view
 /// model costs the same for any directory size.
@@ -14,6 +14,7 @@ pub struct BrowserViewModel {
     entries: Arc<[Entry]>,
     selection: Selection,
     selected_row: Option<usize>,
+    scroll_hint: Option<(EntryName, i32)>,
     folder_items_revision: u64,
 }
 
@@ -66,6 +67,10 @@ impl BrowserViewModel {
         self.selected_row
     }
 
+    pub fn scroll_hint(&self) -> Option<&(EntryName, i32)> {
+        self.scroll_hint.as_ref()
+    }
+
     /// Changes only when this browser commits a replacement listing.
     pub fn folder_items_revision(&self) -> u64 {
         self.folder_items_revision
@@ -84,6 +89,7 @@ impl BrowserViewModel {
 #[derive(Debug)]
 pub struct BrowserPresenter {
     browser: BrowserSide,
+    active_tab: Option<TabId>,
     view: BrowserViewModel,
 }
 
@@ -95,7 +101,7 @@ impl Default for BrowserPresenter {
 
 impl BrowserPresenter {
     pub fn new(browser: BrowserSide) -> Self {
-        Self { browser, view: BrowserViewModel::default() }
+        Self { browser, active_tab: None, view: BrowserViewModel::default() }
     }
 
     pub fn view(&self) -> &BrowserViewModel {
@@ -104,25 +110,50 @@ impl BrowserPresenter {
 
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
-            Output::LoadingStarted { browser, .. } | Output::FolderItemsReplaced { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser } | Output::ActiveBrowserChanged { browser } => *browser,
+            Output::LoadingStarted { browser, .. } | Output::FolderItemsReplaced { browser, .. } | Output::FolderItemsRowsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } => *browser,
+            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } => return,
         };
         if output_browser != self.browser {
             return;
         }
         match output {
+            Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => self.active_tab = Some(*tab),
+            Output::LoadingStarted { tab, .. } | Output::FolderItemsReplaced { tab, .. } | Output::FolderItemsRowsChanged { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
+                if self.active_tab.is_some_and(|active| active != *tab) {
+                    return;
+                }
+                self.active_tab = Some(*tab);
+            }
+            Output::ActiveBrowserChanged { .. } => {}
+            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } => {}
+        }
+        match output {
+            Output::TabViewChanged { location, entries, selection, row, scroll_hint, loading, error, .. } => {
+                self.view.location_text = location.as_ref().map_or_else(String::new, location_text);
+                self.view.entries = Arc::clone(entries);
+                self.view.selection = selection.clone();
+                self.view.selected_row = *row;
+                self.view.scroll_hint = scroll_hint.clone();
+                self.view.loading = *loading;
+                self.view.error = error.as_ref().map(error_message);
+                self.view.status_text = if *loading { "Loading…".to_owned() } else { self.view.error.clone().unwrap_or_else(|| self.view.location_text.clone()) };
+                self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
+            }
             Output::LoadingStarted { .. } => {
                 self.view.loading = true;
                 self.view.error = None;
                 self.view.status_text = "Loading…".to_owned();
             }
-            Output::FolderItemsReplaced { location, entries, .. } => {
+            Output::FolderItemsReplaced { location, entries, scroll_hint, .. } => {
                 self.view.location_text = location_text(location);
                 self.view.entries = Arc::clone(entries);
+                self.view.scroll_hint = scroll_hint.clone();
                 self.view.loading = false;
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
                 self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
             }
+            Output::FolderItemsRowsChanged { .. } => {}
             Output::SelectionChanged { selection, row, .. } => {
                 self.view.selection = selection.clone();
                 self.view.selected_row = *row;
@@ -137,7 +168,7 @@ impl BrowserPresenter {
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
             }
-            Output::ActiveBrowserChanged { .. } => {}
+            Output::ActiveBrowserChanged { .. } | Output::ActiveTabChanged { .. } | Output::TabsChanged { .. } | Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } => {}
         }
     }
 }
@@ -176,6 +207,7 @@ fn error_message(error: &ListingError) -> String {
         ListingErrorKind::PermissionDenied => format!("You don’t have permission to open “{path}”."),
         ListingErrorKind::PrivacyRestricted => format!("macOS privacy settings don’t allow Dual Pane to open “{path}”."),
         ListingErrorKind::Internal => "Dual Pane couldn’t finish reading this folder unexpectedly.".to_owned(),
+        ListingErrorKind::Busy => "Dual Pane is busy reading folders. Try again shortly.".to_owned(),
         ListingErrorKind::Unknown => format!("“{path}” couldn’t be opened."),
     }
 }

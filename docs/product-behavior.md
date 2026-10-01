@@ -20,7 +20,7 @@ A fresh profile starts with one Favorite Group named Favorites containing, in or
 
 At launch, a Favorite Item whose target folder is missing or unavailable is automatically removed from the saved collection after a completed target probe. This includes temporary unavailability. Empty Favorite Groups remain. A database-load failure, failed validation worker, or cancelled probe does not count as a target-folder result and cannot remove an item.
 
-Favorite Group names are unique among groups, and Favorite Item Aliases are unique within their group, using exact text equality. An alias changes only an Item's displayed label, not its target. Deleting a Favorite Group removes its Favorite Items without a confirmation.
+Favorite Group names and Favorite Item Aliases reject empty or whitespace-only text. Group names are unique among groups, and Item Aliases are unique within their group, using exact text equality. An alias changes only an Item's displayed label, not its target. Deleting a Favorite Group removes its Favorite Items without a confirmation.
 
 ## File-operation safeguards
 

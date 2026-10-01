@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use dual_pane_domain::{BrowserSide, EntryName, Location, SortSpec};
+use dual_pane_domain::{BrowserSide, EntryName, FavoriteGroup, FavoriteGroupId, FavoriteItem, FavoriteItemId, Favorites, Location, SortSpec};
 
 pub const FOLDER_SORT_LIMIT: usize = 100;
 
@@ -229,6 +229,9 @@ impl SettingsState {
         self.favorites = favorites;
         self.revision += 1;
     }
+    pub fn favorites(&self) -> &FavoritesRecords {
+        &self.favorites
+    }
     pub fn snapshot(&self) -> SettingsSnapshot {
         let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.bindings.get(&action).copied().flatten() }).collect::<Vec<_>>();
         bindings.sort_by_key(|binding| binding.action.as_str());
@@ -259,6 +262,12 @@ impl SettingsState {
     fn touch(&mut self, location: &Location) {
         self.lru.retain(|candidate| candidate != location);
         self.lru.push_back(location.clone());
+    }
+}
+
+impl FavoritesRecords {
+    pub fn hierarchy(&self) -> Result<Favorites, dual_pane_domain::FavoriteError> {
+        Favorites::new(self.groups.iter().map(|group| FavoriteGroup { id: FavoriteGroupId::new(group.id), name: group.name.clone() }).collect(), self.items.iter().map(|item| FavoriteItem { id: FavoriteItemId::new(item.id), group_id: FavoriteGroupId::new(item.group_id), name: item.name.clone(), target: item.target.clone() }).collect())
     }
 }
 

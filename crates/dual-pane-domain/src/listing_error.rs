@@ -11,6 +11,9 @@ pub enum ListingErrorKind {
     /// The reader stopped unexpectedly. Details are intentionally not shown
     /// outside the driver boundary.
     Internal,
+    /// The bounded reader admission queue is temporarily full. Retrying later
+    /// is meaningful and does not imply a filesystem failure.
+    Busy,
     Unknown,
 }
 

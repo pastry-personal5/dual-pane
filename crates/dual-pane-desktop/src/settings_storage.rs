@@ -86,9 +86,12 @@ impl SettingsDatabase {
         let initialized = self.connection.query_row("SELECT value FROM setting_marker WHERE key = 'favorites_initialized'", [], |row| row.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0;
         let groups = self.connection.prepare("SELECT id, name, position FROM favorite_group ORDER BY position, id")?.query_map([], |row| Ok(FavoriteGroupRecord { id: row.get(0)?, name: row.get(1)?, position: row.get(2)? }))?.collect::<Result<Vec<_>, _>>()?;
         let items = self.connection.prepare("SELECT id, group_id, name, target, position FROM favorite_item ORDER BY group_id, position, id")?.query_map([], |row| Ok(FavoriteItemRecord { id: row.get(0)?, group_id: row.get(1)?, name: row.get(2)?, target: decode_location(&row.get::<_, Vec<u8>>(3)?).map_err(to_sql_error)?, position: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
-        Ok(SettingsSnapshot { bindings, folder_sorts, favorites: FavoritesRecords { initialized, groups, items } })
+        let favorites = FavoritesRecords { initialized, groups, items };
+        favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
+        Ok(SettingsSnapshot { bindings, folder_sorts, favorites })
     }
     pub fn save(&mut self, snapshot: &SettingsSnapshot) -> Result<(), SettingsStorageError> {
+        snapshot.favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
         let tx = self.connection.transaction()?;
         tx.execute("DELETE FROM action_binding", [])?;
         for binding in dual_pane_application::default_bindings() {
@@ -228,11 +231,13 @@ fn decode_location(bytes: &[u8]) -> Result<Location, SettingsStorageError> {
 }
 
 pub enum SettingsJob {
+    Load,
     Save { revision: u64, snapshot: SettingsSnapshot },
     Quit { revision: u64, snapshot: SettingsSnapshot },
     Reset,
 }
 pub enum SettingsResult {
+    Loaded(SettingsSnapshot),
     Saved { revision: u64 },
     Reset { backup: PathBuf },
     Failed(SettingsStorageError),
@@ -245,9 +250,12 @@ pub struct SettingsWorker {
 }
 impl SettingsWorker {
     pub fn start(path: PathBuf) -> Result<Self, std::io::Error> {
+        Self::start_with_wake(path, Box::new(|| {}))
+    }
+    pub fn start_with_wake(path: PathBuf, wake: Box<dyn Fn() + Send>) -> Result<Self, std::io::Error> {
         let (jobs, receiver) = mpsc::channel();
         let (sender, results) = mpsc::channel();
-        thread::Builder::new().name("settings-worker".to_owned()).spawn(move || worker_loop(path, receiver, sender))?;
+        thread::Builder::new().name("settings-worker".to_owned()).spawn(move || worker_loop(path, receiver, sender, wake))?;
         Ok(Self { jobs, results })
     }
     pub fn submit(&self, job: SettingsJob) -> bool {
@@ -261,11 +269,12 @@ impl SettingsWorker {
         results
     }
 }
-fn worker_loop(path: PathBuf, jobs: Receiver<SettingsJob>, results: Sender<SettingsResult>) {
+fn worker_loop(path: PathBuf, jobs: Receiver<SettingsJob>, results: Sender<SettingsResult>, wake: Box<dyn Fn() + Send>) {
     let mut database = match SettingsDatabase::open(path) {
         Ok(database) => database,
         Err(error) => {
             let _ = results.send(SettingsResult::Failed(error));
+            wake();
             return;
         }
     };
@@ -274,6 +283,11 @@ fn worker_loop(path: PathBuf, jobs: Receiver<SettingsJob>, results: Sender<Setti
         let mut next = Some(job);
         while let Some(job) = next.take() {
             match job {
+                SettingsJob::Load => {
+                    let result = database.load().map(SettingsResult::Loaded).unwrap_or_else(SettingsResult::Failed);
+                    let _ = results.send(result);
+                    wake();
+                }
                 SettingsJob::Save { revision, snapshot } | SettingsJob::Quit { revision, snapshot } => latest = Some((revision, snapshot)),
                 SettingsJob::Reset => match database.reset() {
                     Ok(backup) => {
@@ -281,9 +295,11 @@ fn worker_loop(path: PathBuf, jobs: Receiver<SettingsJob>, results: Sender<Setti
                         // that was queued before it.
                         latest = None;
                         let _ = results.send(SettingsResult::Reset { backup });
+                        wake();
                     }
                     Err(error) => {
                         let _ = results.send(SettingsResult::Failed(error));
+                        wake();
                     }
                 },
             }
@@ -292,6 +308,7 @@ fn worker_loop(path: PathBuf, jobs: Receiver<SettingsJob>, results: Sender<Setti
         if let Some((revision, snapshot)) = latest {
             let result = database.save(&snapshot).map(|()| SettingsResult::Saved { revision }).unwrap_or_else(SettingsResult::Failed);
             let _ = results.send(result);
+            wake();
         }
     }
 }
@@ -328,6 +345,18 @@ mod tests {
         let snapshot = SettingsSnapshot { bindings: dual_pane_application::default_bindings(), folder_sorts: vec![], favorites: FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 1, name: "A".into(), position: 0 }, FavoriteGroupRecord { id: 2, name: "B".into(), position: 1 }], items: vec![FavoriteItemRecord { id: 4, group_id: 1, name: "item".into(), target: non_utf8_location(), position: 0 }] } };
         db.save(&snapshot).unwrap();
         assert_eq!(db.load().unwrap().favorites, snapshot.favorites);
+    }
+    #[test]
+    fn invalid_favorites_are_rejected_before_save_and_on_load() {
+        let mut db = SettingsDatabase::open(path()).unwrap();
+        let mut snapshot = SettingsState::new().snapshot();
+        snapshot.favorites.initialized = true;
+        snapshot.favorites.groups.push(FavoriteGroupRecord { id: 1, name: " ".into(), position: 0 });
+        assert!(matches!(db.save(&snapshot), Err(SettingsStorageError::InvalidData("Favorites hierarchy"))));
+        assert!(db.load().unwrap().favorites.groups.is_empty());
+
+        db.connection.execute("INSERT INTO favorite_group(id, name, position) VALUES (1, ' ', 0)", []).unwrap();
+        assert!(matches!(db.load(), Err(SettingsStorageError::InvalidData("Favorites hierarchy"))));
     }
     #[test]
     fn supported_old_schema_migrates_transactionally() {

@@ -8,6 +8,7 @@ use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, WorkspaceSession};
 use crate::runtime::Runtime;
+use crate::settings_storage::SettingsWorker;
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
 pub mod ffi {
@@ -97,11 +98,12 @@ impl ffi::FolderItemsListModel {
     }
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
-        let BrowserStartup { location, source_factory } = *startup;
+        let BrowserStartup { location, home, screenshots_exists, settings_path, source_factory } = *startup;
         match Runtime::start(source_factory, Box::new(ffi::schedule_gui_drain)) {
             Ok(runtime) => {
                 let mut guard = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                let mut coordinator = WorkspaceSession::new(runtime, DRAIN_SLICE, DRAIN_TIME_BUDGET);
+                let settings = SettingsWorker::start_with_wake(settings_path, Box::new(ffi::schedule_gui_drain)).ok();
+                let mut coordinator = WorkspaceSession::with_settings(runtime, home, screenshots_exists, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
                 coordinator.start(location);
                 *guard = Some(coordinator);
                 drop(guard);

@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use dual_pane_domain::{Entry, EntryKind, EntryName, listing_sort_key};
+use dual_pane_domain::{Entry, EntryKind, EntryMetadata, EntryName, SortDirection, SortField, SortSpec, listing_sort_key, sort_entries};
 use proptest::prelude::*;
 
 fn entry(name: &[u8], kind: EntryKind) -> Entry {
@@ -61,6 +61,33 @@ fn composed_and_decomposed_accents_sort_together() {
 #[test]
 fn names_that_differ_only_in_composition_stay_distinct() {
     assert_ne!(order(&file("\u{e9}"), &file("e\u{301}")), Ordering::Equal);
+}
+
+#[test]
+fn every_sort_mode_keeps_folders_first_and_unknown_metadata_last() {
+    let folder = Entry::with_metadata(EntryName::new("folder").unwrap(), EntryKind::Directory, EntryMetadata::new(Some(4), Some(4)));
+    let small = Entry::with_metadata(EntryName::new("small").unwrap(), EntryKind::File, EntryMetadata::new(Some(2), Some(2)));
+    let large = Entry::with_metadata(EntryName::new("large").unwrap(), EntryKind::File, EntryMetadata::new(Some(3), Some(3)));
+    let unknown = file("unknown");
+    for spec in [SortSpec::new(SortField::Name, SortDirection::Ascending), SortSpec::new(SortField::Name, SortDirection::Descending), SortSpec::new(SortField::Type, SortDirection::Ascending), SortSpec::new(SortField::Type, SortDirection::Descending), SortSpec::new(SortField::Modified, SortDirection::Ascending), SortSpec::new(SortField::Modified, SortDirection::Descending), SortSpec::new(SortField::Size, SortDirection::Ascending), SortSpec::new(SortField::Size, SortDirection::Descending)] {
+        let mut entries = vec![unknown.clone(), large.clone(), folder.clone(), small.clone()];
+        sort_entries(&mut entries, spec);
+        assert_eq!(entries[0].name(), folder.name());
+        if matches!(spec.field(), SortField::Modified | SortField::Size) {
+            assert_eq!(entries.last().unwrap().name(), unknown.name());
+        }
+    }
+}
+
+#[test]
+fn non_name_ties_use_name_ascending_in_both_directions() {
+    let a = Entry::with_metadata(EntryName::new("a").unwrap(), EntryKind::File, EntryMetadata::new(Some(1), Some(1)));
+    let b = Entry::with_metadata(EntryName::new("b").unwrap(), EntryKind::File, EntryMetadata::new(Some(1), Some(1)));
+    for direction in [SortDirection::Ascending, SortDirection::Descending] {
+        let mut entries = vec![b.clone(), a.clone()];
+        sort_entries(&mut entries, SortSpec::new(SortField::Size, direction));
+        assert_eq!(entries.iter().map(|entry| entry.name()).collect::<Vec<_>>(), vec![a.name(), b.name()]);
+    }
 }
 
 fn arbitrary_entry() -> impl Strategy<Value = Entry> {

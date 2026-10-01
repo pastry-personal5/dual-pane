@@ -41,8 +41,9 @@ Plan: [overview](milestone-04-overview.md), [architecture](milestone-04-architec
 
 ### P3-M5: Model tabbed workspace state
 
-Status: Planned
+Status: Done
 Goal: Add Qt-free tab and Favorites state, tab history, location-shared sort, cursor, selection, and Folder Items refresh behavior; keep back/forward history session-only.
+Plan: [overview](milestone-05-overview.md), [architecture](milestone-05-architecture.md)
 
 ### P3-M6: Deliver tabbed browser UI
 

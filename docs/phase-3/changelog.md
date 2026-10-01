@@ -4,6 +4,29 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-01 — P3-M5 review fixes
+
+- Pending navigation now receives refreshed sort and settings choices without losing its target; settings load refreshes each open tab once. Right-click preserves a missing range anchor, movement at a row boundary still collapses a multiple selection, and tab/history outputs expose the retained scroll hint.
+- Favorite IDs stay unique after deletion within a session, so a late target probe cannot remove a recreated Item. Settings storage rejects an invalid Favorites hierarchy, Folder Items sort keys are cached once per entry, and undelivered read results count against per-Browser runtime admission.
+
+## 2026-10-01 — P3-M5 complete
+
+- Added Qt-free Browser tab structure, tab-local history and view state, Favorites hierarchy validation and edits, location-shared sorting with direct metadata, tokenized refresh routing, and bounded per-tab reader admission.
+- The desktop session now loads and saves settings on its serialized worker, seeds fresh Favorites once, and preserves the current two-Browser window while P3-M6 owns the interactive tab and Sidebar controls. The full automated gate passed.
+
+## 2026-10-01 — P3-M5 Favorite name validation decision
+
+- Favorite Group names and Favorite Item Aliases reject empty or whitespace-only text. The corresponding inline editor remains open and shows an error.
+
+## 2026-10-01 — P3-M5 tab, Favorites, and sort decisions
+
+- Closing a Browser's final tab opens a clean tab at the user's home directory. A newly created Favorite Item uses the active folder's current name as its alias.
+- Type, Date, and Size sorts use natural Name ascending as their tie-breaker for both directions. Folder-first ordering, link metadata, and unknown values last remain as already decided.
+
+## 2026-10-01 — P3-M5 planning
+
+- Added the next milestone's implementation plan and unchecked completion checklist. It migrates Browser-wide state and read routing to stable tab identity, connects the P3-M2 settings records to Qt-free Favorites and shared sort state, and reserves the interactive UI, session restore, and native watches for their assigned milestones.
+
 ## 2026-10-01 — P3-M4 complete
 
 - The remaining focus and range-anchor decisions are documented with scenario evidence. Every P3-M4 checklist item is complete; active-doc links, `git diff --check`, `make check`, and the direct Cargo format, Clippy, and test commands passed. Implementation remains assigned to P3-M5 through P3-M10.
