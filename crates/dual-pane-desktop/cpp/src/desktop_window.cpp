@@ -196,17 +196,15 @@ class ListingView final : public QTreeView {
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() == Qt::LeftButton) {
             activatePane();
-        }
-        event->accept();
-    }
-    void mouseReleaseEvent(QMouseEvent *event) override {
-        if (event->button() == Qt::LeftButton) {
             const auto index = indexAt(event->position().toPoint());
             if (index.isValid())
                 model_->select_row(index.row());
             else
                 model_->clear_selection();
         }
+        event->accept();
+    }
+    void mouseReleaseEvent(QMouseEvent *event) override {
         event->accept();
     }
     void mouseDoubleClickEvent(QMouseEvent *event) override {
@@ -329,6 +327,8 @@ class PaneHighlightController final : public QObject {
         active_view_ = view;
         apply(window_->isActiveWindow());
     }
+
+    [[nodiscard]] auto other_view() const -> ListingView * { return active_view_ == left_view_ ? right_view_ : left_view_; }
 
   private:
     auto eventFilter(QObject *watched, QEvent *event) -> bool override {
@@ -478,7 +478,7 @@ auto run_desktop(::rust::Box<PaneStartup> startup) -> int {
     left_view->setActivationHandler([&pane_highlighter, left_view] { pane_highlighter.activate(left_view); });
     right_view->setActivationHandler([&pane_highlighter, right_view] { pane_highlighter.activate(right_view); });
     auto *shortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::Key_F), &window);
-    QObject::connect(shortcut, &QShortcut::activated, &window, [left_view, right_view] { (left_view->hasFocus() ? right_view : left_view)->setFocus(); });
+    QObject::connect(shortcut, &QShortcut::activated, &window, [&pane_highlighter] { pane_highlighter.other_view()->setFocus(); });
     auto *close_shortcut = new QShortcut(QKeySequence::Close, &window);
     QObject::connect(close_shortcut, &QShortcut::activated, &window, [&window] { window.close(); });
     auto *quit_shortcut = new QShortcut(QKeySequence::Quit, &window);

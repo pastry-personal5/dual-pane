@@ -1,6 +1,6 @@
 # Phase 2: Two-Pane Browsing
 
-Status: Active
+Status: Done
 Goal: Show two side-by-side panes, each browsing its own directory, and let the user navigate either pane independently.
 
 ## Exit criteria
@@ -28,8 +28,9 @@ Goal: Show two real listings, display each Folder Pane Toolbar's current folder 
 Plan: [overview](milestone-03-overview.md), [architecture](milestone-03-architecture.md)
 
 ### P2-M4: Verify cross-pane independence and recovery
-Status: Planned
+Status: Done
 Goal: Verify that navigation, loading, errors, and late listing results in one pane leave the other pane usable.
+Plan: [overview](milestone-04-overview.md), [architecture](milestone-04-architecture.md)
 
 ## Scope boundary
 

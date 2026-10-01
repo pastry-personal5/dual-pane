@@ -146,8 +146,8 @@ impl<R: WorkRunner> WorkspaceSession<R> {
 mod tests {
     use std::sync::Arc;
 
-    use dual_pane_application::{Event, WorkRequest};
-    use dual_pane_domain::{Entry, EntryKind, EntryName, RequestToken};
+    use dual_pane_application::{Command, Event, WorkRequest};
+    use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken, Selection};
 
     use super::*;
 
@@ -171,6 +171,83 @@ mod tests {
 
     fn entry(name: &str) -> Entry {
         Entry::new(EntryName::new(name).unwrap(), EntryKind::Directory)
+    }
+
+    fn path(name: &str) -> Location {
+        Location::root().join(&EntryName::new(name).unwrap())
+    }
+
+    fn assert_view(session: &WorkspaceSession<FakeRunner>, pane: PaneSide, expected: (&str, &[&str], Option<&str>, &str, bool, u64)) {
+        let (path, rows, selected, status, loading, revision) = expected;
+        let view = session.view(pane);
+        assert_eq!(view.location_text(), path);
+        assert_eq!(view.row_count(), rows.len());
+        for (index, name) in rows.iter().enumerate() {
+            assert_eq!(view.row(index).map(|row| row.name), Some((*name).to_owned()));
+        }
+        let expected_row = selected.and_then(|name| rows.iter().position(|row| *row == name));
+        assert_eq!(view.selected_row(), expected_row);
+        let mut selection = Selection::default();
+        if let Some(name) = selected {
+            selection.select(EntryName::new(name).unwrap());
+        }
+        assert_eq!(view.selection(), &selection);
+        assert_eq!(view.status_text(), status);
+        assert_eq!(view.is_loading(), loading);
+        assert_eq!(view.listing_revision(), revision);
+    }
+
+    #[test]
+    fn loading_failure_cancellation_and_late_results_preserve_the_other_browser() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("base"));
+        assert_view(&session, PaneSide::Left, ("", &[], None, "Loading…", true, 0));
+        assert_view(&session, PaneSide::Right, ("", &[], None, "Loading…", true, 0));
+        session.submit(Event::ListingLoaded { pane: PaneSide::Left, token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
+        session.submit(Event::ListingLoaded { pane: PaneSide::Right, token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
+        session.submit_ui(PaneSide::Left, UiEvent::SelectRow { row: 0 });
+        session.submit_ui(PaneSide::Right, UiEvent::SelectRow { row: 0 });
+        assert_view(&session, PaneSide::Left, ("/base", &["left"], Some("left"), "/base", false, 1));
+        assert_view(&session, PaneSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
+
+        session.submit(Command::Navigate { pane: PaneSide::Left, location: path("older") });
+        let older = RequestToken::first().next().next();
+        session.submit(Command::Navigate { pane: PaneSide::Left, location: path("missing") });
+        let missing = older.next();
+        assert_eq!(session.runner.dispatched[3], WorkRequest::Cancel { pane: PaneSide::Left, token: older });
+        session.submit(Event::ListingCancelled { pane: PaneSide::Left, token: older });
+        session.submit(Event::ListingLoaded { pane: PaneSide::Left, token: older, entries: Arc::from(vec![entry("late")]) });
+        session.submit(Event::ListingLoaded { pane: PaneSide::Right, token: missing, entries: Arc::from(vec![entry("wrong")]) });
+        assert_view(&session, PaneSide::Left, ("/base", &["left"], Some("left"), "Loading…", true, 1));
+        assert_view(&session, PaneSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
+
+        session.submit(Event::ListingFailed { pane: PaneSide::Left, token: missing, kind: ListingErrorKind::ItemMissing });
+        assert_view(&session, PaneSide::Left, ("/base", &["left"], Some("left"), "“/missing” no longer exists.", false, 1));
+        assert_view(&session, PaneSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
+        session.submit(Command::Navigate { pane: PaneSide::Left, location: path("cancelled") });
+        let cancelled = missing.next();
+        session.submit(Event::ListingCancelled { pane: PaneSide::Left, token: cancelled });
+        assert_view(&session, PaneSide::Left, ("/base", &["left"], Some("left"), "/base", false, 1));
+        assert_view(&session, PaneSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
+
+        session.submit(Command::Navigate { pane: PaneSide::Left, location: path("final") });
+        session.submit(Event::ListingLoaded { pane: PaneSide::Left, token: cancelled.next(), entries: Arc::from(vec![entry("fresh")]) });
+        assert_view(&session, PaneSide::Left, ("/final", &["fresh"], None, "/final", false, 2));
+        assert_view(&session, PaneSide::Right, ("/base", &["right"], Some("right"), "/base", false, 1));
+    }
+
+    #[test]
+    fn bounded_drain_applies_one_panes_result_without_touching_the_other() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), 1, DRAIN_TIME_BUDGET);
+        session.start(path("base"));
+        session.runner.delivered.push_back(Event::ListingLoaded { pane: PaneSide::Right, token: RequestToken::first().next(), entries: Arc::from(vec![entry("right")]) });
+        session.runner.delivered.push_back(Event::ListingLoaded { pane: PaneSide::Left, token: RequestToken::first(), entries: Arc::from(vec![entry("left")]) });
+        assert!(session.drain());
+        assert_view(&session, PaneSide::Left, ("", &[], None, "Loading…", true, 0));
+        assert_view(&session, PaneSide::Right, ("/base", &["right"], None, "/base", false, 1));
+        assert!(!session.drain());
+        assert_view(&session, PaneSide::Left, ("/base", &["left"], None, "/base", false, 1));
+        assert_view(&session, PaneSide::Right, ("/base", &["right"], None, "/base", false, 1));
     }
 
     #[test]

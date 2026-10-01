@@ -11,14 +11,16 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [mvp.md](mvp.md) | Active MVP product scope, interaction rules, file-operation behavior, session recovery, and exclusions. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and which phase is active. |
-| [phase-2/phase.md](phase-2/phase.md) | Active Phase 2 goal, exit criteria, and milestone sequence. |
-| [phase-2/milestone-01-overview.md](phase-2/milestone-01-overview.md) | Completed P2-M1 interaction-decision scope and acceptance evidence. |
-| [phase-2/milestone-01-architecture.md](phase-2/milestone-01-architecture.md) | Completed P2-M1 documentation-only approach and implementation boundary. |
-| [phase-2/milestone-02-overview.md](phase-2/milestone-02-overview.md) | P2-M2 scope and completion checklist for the Qt-free two-pane workspace. |
-| [phase-2/milestone-02-architecture.md](phase-2/milestone-02-architecture.md) | P2-M2 application-state, input/output, and testing plan. |
-| [phase-2/milestone-03-overview.md](phase-2/milestone-03-overview.md) | P2-M3 Standard Layout scope and completion checklist. |
-| [phase-2/milestone-03-architecture.md](phase-2/milestone-03-architecture.md) | P2-M3 shared desktop coordinator and native layout design. |
-| [phase-2/changelog.md](phase-2/changelog.md) | Phase 2 owner decisions and plan changes. |
+| [archive/phases/phase-2/phase.md](archive/phases/phase-2/phase.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |
+| [archive/phases/phase-2/milestone-01-overview.md](archive/phases/phase-2/milestone-01-overview.md) | Completed P2-M1 interaction-decision scope and acceptance evidence. |
+| [archive/phases/phase-2/milestone-01-architecture.md](archive/phases/phase-2/milestone-01-architecture.md) | Completed P2-M1 documentation-only approach and implementation boundary. |
+| [archive/phases/phase-2/milestone-02-overview.md](archive/phases/phase-2/milestone-02-overview.md) | Completed P2-M2 scope and completion checklist for the Qt-free two-pane workspace. |
+| [archive/phases/phase-2/milestone-02-architecture.md](archive/phases/phase-2/milestone-02-architecture.md) | Completed P2-M2 application-state, input/output, and testing plan. |
+| [archive/phases/phase-2/milestone-03-overview.md](archive/phases/phase-2/milestone-03-overview.md) | Completed P2-M3 Standard Layout scope and completion checklist. |
+| [archive/phases/phase-2/milestone-03-architecture.md](archive/phases/phase-2/milestone-03-architecture.md) | Completed P2-M3 shared desktop coordinator and native layout design. |
+| [archive/phases/phase-2/milestone-04-overview.md](archive/phases/phase-2/milestone-04-overview.md) | Completed P2-M4 scope, completion checklist, and acceptance evidence. |
+| [archive/phases/phase-2/milestone-04-architecture.md](archive/phases/phase-2/milestone-04-architecture.md) | Completed P2-M4 pane-local listing runtime and verification approach. |
+| [archive/phases/phase-2/changelog.md](archive/phases/phase-2/changelog.md) | Completed Phase 2 owner decisions and plan changes. |
 | [release-notes/1.0.0.md](release-notes/1.0.0.md) | Concise release notes for version 1.0.0. |
 | [archive/phases/phase-1/phase.md](archive/phases/phase-1/phase.md) | Completed Phase 1 goal, exit criteria, and milestones. |
 | [archive/phases/phase-1/milestone-02-overview.md](archive/phases/phase-1/milestone-02-overview.md) | Archived P1-M2 scope, checklist, and evidence for the Cargo/Qt Widgets stack spike. |

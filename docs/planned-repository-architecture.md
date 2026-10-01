@@ -51,7 +51,7 @@ This is the target tree once each crate and its first representative test have e
 │       │   ├── main.rs                 # composition root and executable entry point
 │       │   ├── listing_model.rs        # CXX-Qt bridge: Qt list model and run_desktop
 │       │   ├── pane_session.rs         # Qt-free: workspace, presenter, bounded drain
-│       │   ├── runtime.rs              # Qt-free: worker thread, cancellation, GUI wake
+│       │   ├── runtime.rs              # Qt-free: pane-local listing workers, cancellation, GUI wake
 │       │   ├── directory_listing.rs    # Qt-free: native directory reader and error mapping
 │       │   └── native_location.rs      # Qt-free: byte-exact Path and Location conversion
 │       ├── cpp/                        # created with C++ Qt shim source

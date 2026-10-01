@@ -222,7 +222,7 @@ Locks, if the chosen runtime needs them, protect only driver-local mutable resou
 
 ### 5.2 Planned desktop execution model
 
-**Status: Planned.** This is the target after the P1-M4 single-worker listing runtime. It refines the required behavior above without selecting an executor, synchronization crate, pool-size value, or platform cancellation API.
+**Status: Planned.** This is the broader target beyond the current runtime, which has one supervised listing queue and worker per Browser. Each pane holds at most one pending read behind its running read; a cancelled pending read can be replaced by the latest navigation request. It refines the required behavior above without selecting an executor, synchronization crate, pool-size value, or platform cancellation API.
 
 The runtime has a GUI-thread endpoint, a coordinator, finite worker capacity, and a GUI-bound result endpoint. The GUI endpoint is the only component that may call the controller, `Workspace::handle`, presenter, CXX-Qt bridge, Qt models, or widgets. Dispatch is an O(1), non-blocking handoff. Workers own only a job's copied request data, cancellation handle, gateway-local resources, and result publisher; they have no reference to workspace or presenter state, a GUI `QObject`, or a callable that can re-enter the GUI thread.
 

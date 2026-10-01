@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
@@ -23,14 +23,15 @@ pub trait WorkRunner {
     fn take_events(&mut self, max: usize) -> (Vec<Event>, bool);
 }
 
-/// A supervised single-worker runtime. Each worker owns one job; a panic is
+/// One supervised listing queue per pane. Each worker owns one job; a panic is
 /// contained, reported safely, and followed by a replacement after backoff.
 pub struct Runtime {
-    jobs: Sender<Job>,
+    left_jobs: JobSender,
+    right_jobs: JobSender,
     events: Receiver<Event>,
     next_event: Option<Event>,
     wake_pending: Arc<AtomicBool>,
-    outstanding: HashMap<RequestToken, Arc<JobState>>,
+    outstanding: HashMap<RequestToken, (PaneSide, Arc<JobState>)>,
 }
 
 #[derive(Clone)]
@@ -39,6 +40,70 @@ struct Job {
     token: RequestToken,
     location: Location,
     state: Arc<JobState>,
+}
+
+struct JobQueue {
+    state: Mutex<QueueState>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct QueueState {
+    pending: Option<Job>,
+    closed: bool,
+}
+
+struct JobSender(Arc<JobQueue>);
+struct JobReceiver(Arc<JobQueue>);
+
+fn job_queue() -> (JobSender, JobReceiver) {
+    let queue = Arc::new(JobQueue { state: Mutex::new(QueueState::default()), ready: Condvar::new() });
+    (JobSender(Arc::clone(&queue)), JobReceiver(queue))
+}
+
+impl JobSender {
+    fn send(&self, job: Job) -> Result<(), Job> {
+        let mut state = self.0.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.closed || state.pending.as_ref().is_some_and(|pending| !pending.state.cancelled.load(Ordering::Relaxed)) {
+            return Err(job);
+        }
+        state.pending = Some(job);
+        self.0.ready.notify_one();
+        Ok(())
+    }
+}
+
+impl Drop for JobSender {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.closed = true;
+        self.0.ready.notify_one();
+    }
+}
+
+impl Iterator for JobReceiver {
+    type Item = Job;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut state = self.0.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            if let Some(job) = state.pending.take() {
+                return Some(job);
+            }
+            if state.closed {
+                return None;
+            }
+            state = self.0.ready.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+}
+
+impl Drop for JobReceiver {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.closed = true;
+        self.0.ready.notify_one();
+    }
 }
 
 struct JobState {
@@ -52,10 +117,11 @@ impl JobState {
     }
 }
 
+#[derive(Clone)]
 struct Delivery {
     events: Sender<Event>,
     wake_pending: Arc<AtomicBool>,
-    wake: Wake,
+    wake: Arc<Mutex<Wake>>,
 }
 
 enum WorkerOutcome {
@@ -70,18 +136,30 @@ static INSTALL_PANIC_HOOK: Once = Once::new();
 
 impl Runtime {
     pub fn start(source_factory: ListingSourceFactory, wake: Wake) -> io::Result<Self> {
+        Self::start_with(source_factory, wake, |pane, queue, source_factory, delivery| thread::Builder::new().name(format!("listing-supervisor-{pane:?}")).spawn(move || supervise(queue, source_factory, delivery)).map(|_| ()))
+    }
+
+    fn start_with(source_factory: ListingSourceFactory, wake: Wake, mut spawn: impl FnMut(PaneSide, JobReceiver, ListingSourceFactory, Delivery) -> io::Result<()>) -> io::Result<Self> {
         install_panic_hook();
-        let (jobs, queue) = mpsc::channel();
+        let (left_jobs, left_queue) = job_queue();
+        let (right_jobs, right_queue) = job_queue();
         let (event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
-        let delivery = Delivery { events: event_sender, wake_pending: Arc::clone(&wake_pending), wake };
-        thread::Builder::new().name("listing-supervisor".to_owned()).spawn(move || supervise(queue, source_factory, delivery))?;
-        Ok(Self { jobs, events, next_event: None, wake_pending, outstanding: HashMap::new() })
+        let delivery = Delivery { events: event_sender, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(wake)) };
+        spawn(PaneSide::Left, left_queue, Arc::clone(&source_factory), delivery.clone())?;
+        if let Err(error) = spawn(PaneSide::Right, right_queue, source_factory, delivery) {
+            drop(left_jobs);
+            return Err(error);
+        }
+        Ok(Self { left_jobs, right_jobs, events, next_event: None, wake_pending, outstanding: HashMap::new() })
     }
 
     fn receive(&mut self) -> Option<Event> {
         let event = self.next_event.take().or_else(|| self.events.try_recv().ok())?;
-        self.outstanding.remove(&event_token(&event));
+        let (pane, token) = event_address(&event);
+        if self.outstanding.get(&token).is_some_and(|(owner, _)| *owner == pane) {
+            self.outstanding.remove(&token);
+        }
         Some(event)
     }
 }
@@ -105,18 +183,24 @@ impl WorkRunner for Runtime {
         match request {
             WorkRequest::ReadDirectory { pane, token, location } => {
                 let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-                self.outstanding.insert(token, Arc::clone(&state));
-                if let Err(error) = self.jobs.send(Job { pane, token, location, state }) {
-                    let job = error.0;
-                    if job.state.claim_terminal() {
-                        self.outstanding.remove(&job.token);
-                        return Some(Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
-                    }
+                self.outstanding.insert(token, (pane, Arc::clone(&state)));
+                let jobs = match pane {
+                    PaneSide::Left => &self.left_jobs,
+                    PaneSide::Right => &self.right_jobs,
+                };
+                if let Err(job) = jobs.send(Job { pane, token, location, state })
+                    && job.state.claim_terminal()
+                {
+                    self.outstanding.remove(&job.token);
+                    return Some(Event::ListingFailed { pane: job.pane, token: job.token, kind: ListingErrorKind::Internal });
                 }
                 None
             }
             WorkRequest::Cancel { pane, token } => {
-                if let Some(state) = self.outstanding.get(&token) {
+                if let Some((owner, state)) = self.outstanding.get(&token) {
+                    if *owner != pane {
+                        return None;
+                    }
                     state.cancelled.store(true, Ordering::Relaxed);
                     if !state.claim_terminal() {
                         return None;
@@ -141,17 +225,17 @@ impl WorkRunner for Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        for state in self.outstanding.values() {
+        for (_, state) in self.outstanding.values() {
             state.cancelled.store(true, Ordering::Relaxed);
         }
     }
 }
 
-fn supervise(queue: Receiver<Job>, source_factory: ListingSourceFactory, delivery: Delivery) {
+fn supervise(queue: impl IntoIterator<Item = Job>, source_factory: ListingSourceFactory, delivery: Delivery) {
     supervise_with(queue, source_factory, delivery, |worker| thread::Builder::new().name(WORKER_THREAD_NAME.to_owned()).spawn(worker).map(|_| ()), thread::sleep);
 }
 
-fn supervise_with(queue: Receiver<Job>, source_factory: ListingSourceFactory, delivery: Delivery, mut spawn_worker: impl FnMut(WorkerTask) -> io::Result<()>, mut sleep: impl FnMut(Duration)) {
+fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factory: ListingSourceFactory, delivery: Delivery, mut spawn_worker: impl FnMut(WorkerTask) -> io::Result<()>, mut sleep: impl FnMut(Duration)) {
     let mut delay = INITIAL_RESTART_DELAY;
     for job in queue {
         if job.state.cancelled.load(Ordering::Relaxed) {
@@ -215,17 +299,17 @@ fn finish(delivery: &Delivery, job: &Job, event: Event) {
 
 fn deliver_event(delivery: &Delivery, event: Event) {
     if delivery.events.send(event).is_ok() && !delivery.wake_pending.swap(true, Ordering::SeqCst) {
-        (delivery.wake)();
+        (delivery.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))();
     }
 }
 
-fn event_token(event: &Event) -> RequestToken {
+fn event_address(event: &Event) -> (PaneSide, RequestToken) {
     match event {
-        Event::ListingLoaded { token, .. } | Event::ListingFailed { token, .. } | Event::ListingCancelled { token, .. } => *token,
+        Event::ListingLoaded { pane, token, .. } | Event::ListingFailed { pane, token, .. } | Event::ListingCancelled { pane, token, .. } => (*pane, *token),
     }
 }
 
-#[cfg(all(test, any()))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use dual_pane_domain::EntryName;
@@ -241,7 +325,10 @@ mod tests {
         (0..index).fold(RequestToken::first(), |token, _| token.next())
     }
     fn read(index: usize, name: &str) -> WorkRequest {
-        WorkRequest::ReadDirectory { token: token(index), location: location(name) }
+        pane_read(PaneSide::Left, index, name)
+    }
+    fn pane_read(pane: PaneSide, index: usize, name: &str) -> WorkRequest {
+        WorkRequest::ReadDirectory { pane, token: token(index), location: location(name) }
     }
     fn source_factory(source: impl Fn(&Location, &AtomicBool) -> ListingOutcome + Send + Sync + 'static) -> ListingSourceFactory {
         let source = Arc::new(source);
@@ -325,7 +412,98 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "alpha")), None);
         assert_eq!(probe.next_call(), (location("alpha"), Some("listing-worker".to_owned())));
         probe.wait_for_wake();
-        assert_eq!(runner.take_events(8), (vec![Event::ListingLoaded { token: token(0), entries: Arc::from([]) }], false));
+        assert_eq!(runner.take_events(8), (vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }], false));
+    }
+
+    #[test]
+    fn blocked_left_read_does_not_delay_right_read() {
+        let (mut runner, probe) = start_probe("blocked");
+        assert_eq!(runner.dispatch(read(0, "blocked")), None);
+        assert_eq!(probe.next_call().0, location("blocked"));
+        assert_eq!(runner.dispatch(pane_read(PaneSide::Right, 1, "right")), None);
+        assert_eq!(probe.next_call().0, location("right"));
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(1), entries: Arc::from([]) }]);
+        probe.gate.send(()).unwrap();
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }]);
+    }
+
+    #[test]
+    fn wrong_pane_cancellation_cannot_claim_another_panes_read() {
+        let (mut runner, probe) = start_probe("blocked");
+        runner.dispatch(read(0, "blocked"));
+        assert_eq!(probe.next_call().0, location("blocked"));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Right, token: token(0) }), None);
+        assert!(!runner.outstanding.get(&token(0)).unwrap().1.cancelled.load(Ordering::Relaxed));
+        runner.dispatch(pane_read(PaneSide::Right, 1, "right"));
+        assert_eq!(probe.next_call().0, location("right"));
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(1), entries: Arc::from([]) }]);
+        probe.gate.send(()).unwrap();
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }]);
+    }
+
+    #[test]
+    fn cancelled_left_result_is_discarded_while_right_remains_usable() {
+        let (mut runner, probe) = start_probe("blocked");
+        runner.dispatch(read(0, "blocked"));
+        assert_eq!(probe.next_call().0, location("blocked"));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(0) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(0) }));
+        runner.dispatch(read(1, "replacement"));
+        runner.dispatch(pane_read(PaneSide::Right, 2, "right"));
+        assert_eq!(probe.next_call().0, location("right"));
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(2), entries: Arc::from([]) }]);
+        probe.gate.send(()).unwrap();
+        assert_eq!(probe.next_call().0, location("replacement"));
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
+        assert!(runner.take_events(8).0.is_empty());
+    }
+
+    #[test]
+    fn failure_and_panic_recovery_stay_in_their_pane() {
+        let (gate, release) = mpsc::channel::<()>();
+        let release = Arc::new(Mutex::new(release));
+        let (started_sender, started) = mpsc::channel();
+        let source_factory = source_factory(move |location, _| {
+            if *location == self::location("right-blocked") {
+                started_sender.send(()).unwrap();
+                release.lock().unwrap().recv_timeout(TIMEOUT).unwrap();
+                Some(Ok(Arc::from([])))
+            } else if *location == self::location("left-failed") {
+                Some(Err(ListingErrorKind::PermissionDenied))
+            } else if *location == self::location("left-panic") {
+                panic!("worker failed")
+            } else {
+                Some(Ok(Arc::from([])))
+            }
+        });
+        let (mut runner, wakes) = runtime(source_factory);
+        runner.dispatch(pane_read(PaneSide::Right, 0, "right-blocked"));
+        started.recv_timeout(TIMEOUT).unwrap();
+        runner.dispatch(read(1, "left-failed"));
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(1), kind: ListingErrorKind::PermissionDenied }]);
+        runner.dispatch(read(2, "left-panic"));
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(2), kind: ListingErrorKind::Internal }]);
+        runner.dispatch(read(3, "left-recovered"));
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(3), entries: Arc::from([]) }]);
+        gate.send(()).unwrap();
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Right, token: token(0), entries: Arc::from([]) }]);
+    }
+
+    #[test]
+    fn startup_closes_first_queue_when_second_supervisor_fails() {
+        let (observed, closed) = mpsc::channel();
+        let result = Runtime::start_with(source_factory(|_, _| Some(Ok(Arc::from([])))), Box::new(|| {}), move |pane, queue, _, _| {
+            if pane == PaneSide::Right {
+                return Err(io::Error::other("right supervisor unavailable"));
+            }
+            let observed = observed.clone();
+            thread::spawn(move || {
+                for _ in queue {}
+                observed.send(()).ok();
+            });
+            Ok(())
+        });
+        assert!(result.is_err());
+        closed.recv_timeout(TIMEOUT).unwrap();
     }
 
     #[test]
@@ -334,7 +512,7 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "blocked")), None);
         assert_eq!(probe.next_call().0, location("blocked"));
         assert_eq!(runner.dispatch(read(1, "queued")), None);
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { token: token(1) }), Some(Event::ListingCancelled { token: token(1) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(1) }));
         probe.gate.send(()).unwrap();
         assert_eq!(runner.dispatch(read(2, "later")), None);
         assert_eq!(probe.next_call().0, location("later"));
@@ -349,13 +527,50 @@ mod tests {
     }
 
     #[test]
+    fn repeated_navigation_keeps_only_the_latest_pending_read() {
+        let (mut runner, probe) = start_probe("blocked");
+        assert_eq!(runner.dispatch(read(0, "blocked")), None);
+        assert_eq!(probe.next_call().0, location("blocked"));
+        for index in 1..=20 {
+            if index > 1 {
+                assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(index - 1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(index - 1) }));
+            }
+            assert_eq!(runner.dispatch(read(index, &format!("item {index}"))), None);
+        }
+        assert_eq!(runner.outstanding.len(), 2);
+        probe.gate.send(()).unwrap();
+        assert_eq!(probe.next_call().0, location("item 20"));
+        let mut delivered = Vec::new();
+        while delivered.len() < 2 {
+            probe.wait_for_wake();
+            delivered.extend(runner.take_events(8).0);
+        }
+        assert_eq!(loaded_tokens(&delivered), vec![token(0), token(20)]);
+        assert!(probe.calls.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
+    fn occupied_pending_slot_fails_an_uncancelled_extra_read() {
+        let (mut runner, probe) = start_probe("blocked");
+        runner.dispatch(read(0, "blocked"));
+        assert_eq!(probe.next_call().0, location("blocked"));
+        assert_eq!(runner.dispatch(read(1, "pending")), None);
+        assert_eq!(runner.dispatch(read(2, "extra")), Some(Event::ListingFailed { pane: PaneSide::Left, token: token(2), kind: ListingErrorKind::Internal }));
+        assert_eq!(runner.outstanding.len(), 2);
+        probe.gate.send(()).unwrap();
+        assert_eq!(probe.next_call().0, location("pending"));
+        assert!(probe.calls.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
     fn delivers_results_in_completion_order_and_bounded_slices() {
         let (mut runner, probe) = start_probe("blocked");
         for (index, name) in ["a", "b", "c", "d", "e"].into_iter().enumerate() {
             assert_eq!(runner.dispatch(read(index, name)), None);
+            assert_eq!(probe.next_call().0, location(name));
         }
         assert_eq!(runner.dispatch(read(5, "blocked")), None);
-        while probe.next_call().0 != location("blocked") {}
+        assert_eq!(probe.next_call().0, location("blocked"));
 
         let (first, more) = runner.take_events(2);
         assert_eq!(loaded_tokens(&first), vec![token(0), token(1)]);
@@ -371,9 +586,10 @@ mod tests {
         let (mut runner, probe) = start_probe("blocked");
         for index in 0..20 {
             assert_eq!(runner.dispatch(read(index, &format!("item {index}"))), None);
+            assert_eq!(probe.next_call().0, location(&format!("item {index}")));
         }
         assert_eq!(runner.dispatch(read(20, "blocked")), None);
-        while probe.next_call().0 != location("blocked") {}
+        assert_eq!(probe.next_call().0, location("blocked"));
         assert_eq!(probe.wake_count.load(Ordering::SeqCst), 1);
 
         runner.take_events(64);
@@ -410,8 +626,8 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "running")), None);
         started.recv_timeout(TIMEOUT).unwrap();
         assert_eq!(runner.dispatch(read(1, "queued")), None);
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { token: token(1) }), Some(Event::ListingCancelled { token: token(1) }));
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { token: token(0) }), Some(Event::ListingCancelled { token: token(0) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(1) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(0) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(0) }));
         assert!(wakes.recv_timeout(Duration::from_millis(100)).is_err());
     }
 
@@ -419,7 +635,7 @@ mod tests {
     fn a_source_reported_cancellation_is_terminal() {
         let (mut runner, wakes) = runtime(source_factory(|_, _| None));
         assert_eq!(runner.dispatch(read(0, "stopped")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingCancelled { token: token(0) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingCancelled { pane: PaneSide::Left, token: token(0) }]);
     }
 
     #[test]
@@ -428,20 +644,20 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "complete")), None);
         wakes.recv_timeout(TIMEOUT).unwrap();
 
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { token: token(0) }), None);
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(0) }), None);
 
-        assert_eq!(runner.take_events(32), (vec![Event::ListingLoaded { token: token(0), entries: Arc::from([]) }], false));
+        assert_eq!(runner.take_events(32), (vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(0), entries: Arc::from([]) }], false));
     }
 
     #[test]
     fn a_closed_supervisor_queue_fails_an_accepted_read() {
-        let (jobs, queue) = mpsc::channel();
+        let (jobs, queue) = job_queue();
         drop(queue);
         let (_event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
-        let mut runner = Runtime { jobs, events, next_event: None, wake_pending, outstanding: HashMap::new() };
+        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, events, next_event: None, wake_pending, outstanding: HashMap::new() };
 
-        assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::ListingFailed { token: token(0), kind: ListingErrorKind::Internal }));
+        assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());
     }
 
@@ -450,12 +666,12 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..3 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { token: token(index), location: location("item"), state }).unwrap();
+            jobs.send(Job { pane: PaneSide::Left, token: token(index), location: location("item"), state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
         let (event_sender, events) = mpsc::channel();
-        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Box::new(|| {}) };
+        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Arc::new(Mutex::new(Box::new(|| {}))) };
         let mut spawn_count = 0;
 
         supervise_with(
@@ -477,7 +693,7 @@ mod tests {
             |_| {},
         );
 
-        assert_eq!(events.into_iter().collect::<Vec<_>>(), vec![Event::ListingFailed { token: token(0), kind: ListingErrorKind::Internal }, Event::ListingFailed { token: token(1), kind: ListingErrorKind::Internal }, Event::ListingLoaded { token: token(2), entries: Arc::from([]) },]);
+        assert_eq!(events.into_iter().collect::<Vec<_>>(), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }, Event::ListingFailed { pane: PaneSide::Left, token: token(1), kind: ListingErrorKind::Internal }, Event::ListingLoaded { pane: PaneSide::Left, token: token(2), entries: Arc::from([]) },]);
     }
 
     #[test]
@@ -497,9 +713,9 @@ mod tests {
         });
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { token: token(0), kind: ListingErrorKind::Internal }]);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -517,9 +733,9 @@ mod tests {
         });
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { token: token(0), kind: ListingErrorKind::Internal }]);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -547,9 +763,9 @@ mod tests {
         });
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { token: token(0), kind: ListingErrorKind::Internal }]);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingLoaded { pane: PaneSide::Left, token: token(1), entries: Arc::from([]) }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -558,9 +774,9 @@ mod tests {
         let source_factory = source_factory(|_, _| panic!("worker failure"));
         let (mut runner, wakes) = runtime(source_factory);
         assert_eq!(runner.dispatch(read(0, "panic")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { token: token(0), kind: ListingErrorKind::Internal }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::ListingFailed { pane: PaneSide::Left, token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "cancelled")), None);
-        assert_eq!(runner.dispatch(WorkRequest::Cancel { token: token(1) }), Some(Event::ListingCancelled { token: token(1) }));
+        assert_eq!(runner.dispatch(WorkRequest::Cancel { pane: PaneSide::Left, token: token(1) }), Some(Event::ListingCancelled { pane: PaneSide::Left, token: token(1) }));
     }
 
     #[test]
@@ -568,12 +784,12 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..11 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { token: token(index), location: location("item"), state }).unwrap();
+            jobs.send(Job { pane: PaneSide::Left, token: token(index), location: location("item"), state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
         let (event_sender, events) = mpsc::channel();
-        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Box::new(|| {}) };
+        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Arc::new(Mutex::new(Box::new(|| {}))) };
         let mut spawn_count = 0;
         let mut delays = Vec::new();
 
@@ -596,11 +812,11 @@ mod tests {
         assert_eq!(delays, vec![Duration::from_millis(100), Duration::from_millis(200), Duration::from_millis(400), Duration::from_millis(800), Duration::from_millis(1_600), Duration::from_millis(3_200), MAX_RESTART_DELAY, MAX_RESTART_DELAY, INITIAL_RESTART_DELAY,]);
         let events = events.into_iter().collect::<Vec<_>>();
         assert_eq!(events.len(), 11);
-        assert_eq!(event_token(&events[8]), token(8));
+        assert_eq!(event_address(&events[8]).1, token(8));
         assert!(matches!(events[8], Event::ListingLoaded { .. }));
-        assert_eq!(event_token(&events[9]), token(9));
+        assert_eq!(event_address(&events[9]).1, token(9));
         assert!(matches!(events[9], Event::ListingFailed { kind: ListingErrorKind::Internal, .. }));
-        assert_eq!(event_token(&events[10]), token(10));
+        assert_eq!(event_address(&events[10]).1, token(10));
         assert!(matches!(events[10], Event::ListingLoaded { .. }));
     }
 }
