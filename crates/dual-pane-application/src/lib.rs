@@ -6,10 +6,12 @@
 
 mod input;
 mod output;
+mod settings;
 mod work_request;
 mod workspace;
 
 pub use input::{Command, Event, Input};
 pub use output::Output;
+pub use settings::{ActionBinding, ActionId, BrowserSnapshot, FOLDER_SORT_LIMIT, FavoriteGroupRecord, FavoriteItemRecord, FavoriteTargetValidation, FavoritesRecords, SettingsSnapshot, SettingsState, Shortcut, TabSnapshot, WorkspaceSnapshot, default_bindings, default_shortcut, fresh_profile_favorites, validate_bindings};
 pub use work_request::WorkRequest;
 pub use workspace::{Transition, Workspace};

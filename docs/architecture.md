@@ -136,7 +136,7 @@ This outer ring owns concrete technology and resource lifetime. It includes the 
 | Runtime | Receives work requests from the reducer, dispatches them to gateways on the worker pool, owns cancellation primitives and native handles, and delivers every typed result as an application input on the GUI thread. A worker, watcher, or dialog never mutates workspace state directly. |
 | File-system gateway | Reads directories, then sorts, filters, and computes row deltas against the previous Folder Items snapshot on a worker. Scans operation sources and executes operation steps using macOS facilities. Probes mounted-volume capabilities outside the GUI thread, enforces only the syscall-level protections the mounted file system actually supports, and classifies native errors into application error categories. |
 | Watcher gateway | Watches a requested location and reports invalidation; it never refreshes a Browser or changes state itself. |
-| Settings gateway | Stores application-defined settings values at an application-support location using a driver-chosen format and atomic replacement writes. |
+| Settings gateway | Stores application-defined settings, Favorites, and session values at an application-support location using driver-owned encoding and transactional durable writes. |
 
 Infrastructure code may contain FFI and `unsafe`, but it is isolated here. Each unsafe boundary is minimal and documented with a `SAFETY:` explanation. Native types, file descriptors, Qt objects, and platform error objects never escape this ring.
 

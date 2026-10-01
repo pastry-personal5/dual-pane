@@ -10,13 +10,15 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [architecture.md](architecture.md) | Active Clean Architecture boundaries, technical stack, workspace layout, threading, file-operation safety, and testing. |
 | [product-behavior.md](product-behavior.md) | Active included behavior, file-operation safeguards, session recovery, and exclusions. |
 | [ux-terms.md](ux-terms.md) | Canonical component vocabulary, code mappings, and naming exemptions. |
-| [ux-information-architecture.md](ux-information-architecture.md) | Standard Layout containment and structural relationships. |
-| [ux-gui.md](ux-gui.md) | Current visual, accessibility, input, active-Browser, and responsiveness behavior. |
+| [ux-information-architecture.md](ux-information-architecture.md) | Standard Layout containment and the planned one-level Favorites hierarchy. |
+| [ux-gui.md](ux-gui.md) | Current GUI behavior and owner-approved planned Phase 3 fields, sort controls, narrow-Browser behavior, and shortcut editor. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and which phase is active. |
 | [phase-3/phase-3.md](phase-3/phase-3.md) | Planned Phase 3 goal, exit criteria, and milestone sequence for tabs, file operations, session recovery, and watching. |
 | [phase-3/milestone-01-overview.md](phase-3/milestone-01-overview.md) | P3-M1 scope and executable completion checklist. |
 | [phase-3/milestone-01-architecture.md](phase-3/milestone-01-architecture.md) | P3-M1 naming and bridge migration approach. |
+| [phase-3/milestone-02-overview.md](phase-3/milestone-02-overview.md) | P3-M2 scope and checklist for Phase 3 configuration, defaults, Favorites, settings, and persistent storage. |
+| [phase-3/milestone-02-architecture.md](phase-3/milestone-02-architecture.md) | P3-M2 ownership and SQLite storage design for Favorites, folder sort memory, future sessions, and canonical actions. |
 | [phase-3/changelog.md](phase-3/changelog.md) | Phase 3 decisions and plan changes. |
 | [archive/phases/phase-2/phase-2.md](archive/phases/phase-2/phase-2.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |
 | [archive/phases/phase-2/milestone-01-overview.md](archive/phases/phase-2/milestone-01-overview.md) | Completed P2-M1 interaction-decision scope and acceptance evidence. |

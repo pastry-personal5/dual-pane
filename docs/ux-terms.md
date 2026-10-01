@@ -10,6 +10,9 @@ This is the canonical vocabulary for visible Dual Pane components and their code
 |---|---|
 | Standard Layout | `standard_layout` |
 | Sidebar | `sidebar` |
+| Favorites Groups | `favorites_groups` |
+| Favorite Group | `favorite_group` |
+| Favorite Item | `favorite_item` |
 | Sidebar Splitter | `sidebar_splitter` |
 | Browser Divider | `browser_divider` |
 | Left Browser / Right Browser | `BrowserSide::Left` / `BrowserSide::Right` |
@@ -21,6 +24,8 @@ This is the canonical vocabulary for visible Dual Pane components and their code
 | Folder Pane Toolbar Row #2 | `folder_pane_toolbar_row_2` |
 | Up Button | `up_button` |
 | Folder Items List | `folder_items_list` |
+| Relative Date Column | `relative_date_column` |
+| Exact Date Column | `exact_date_column` |
 | Browser Status Bar | `browser_status_bar` |
 
 `Browser` replaces the former logical side-specific component term: `BrowserSide`, `BrowserState`, `BrowserStartup`, `BrowserPresenter`, and `BrowserViewModel` are the corresponding code names. `Folder Items` names a displayed directory result: `FolderItems`, `FolderItemsListModel`, and `FolderItemsList` are the corresponding code names.
@@ -29,4 +34,4 @@ Mapped legacy component terms are not used in source or tests. The product and c
 
 ## Deferred components
 
-Browser Tabs are not rendered by the current desktop UI. The Sidebar currently displays static group labels, but Sidebar navigation behavior is deferred to a later Phase 3 milestone.
+Browser Tabs, Favorite Groups, Favorite Items, the Relative Date Column, and the Exact Date Column are not rendered as interactive components by the current desktop UI. Their planned GUI behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions). The Sidebar currently displays static group labels; its navigation and editing behavior is deferred to a later Phase 3 milestone.

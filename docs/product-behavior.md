@@ -8,10 +8,17 @@ This document is the active source of truth for committed product behavior, safe
 
 - One application window with two side-by-side Browsers, independent current locations, and one active Browser. There is no multi-window mode.
 - Tabs in each Browser, including tab history and an active tab.
+- One level of Favorite Groups containing Favorite Items in the Sidebar. People can create, rename, reorder, move, and delete them; their hierarchy and order remain in memory and across relaunches.
 - Copy and move between Browsers; rename; create directory; move to Trash; and permanent deletion.
 - Opening a regular file with its macOS default application.
-- Restoring each Browser's tabs, active tab, locations, sort/filter state, and active Browser when the application relaunches.
+- Restoring each Browser's open tabs, their order, active tab, locations, sort/filter state, and active Browser when the application relaunches.
 - Watching open locations and automatically refreshing Folder Items while preserving matching selection and cursor state.
+
+## Favorites
+
+A fresh profile starts with one Favorite Group named Favorites containing, in order, Applications, Desktop, Documents, Screenshots, and Downloads. Applications targets `/Applications`; Desktop, Documents, and Downloads target the corresponding folders in the user's home directory. Screenshots targets `~/Documents/Screenshots` only if that folder exists; otherwise that item is omitted. Dual Pane does not create target folders when seeding Favorites. Once initialized, an intentionally empty Favorites collection stays empty across relaunches.
+
+At launch, a Favorite Item whose target folder is missing or unavailable is automatically removed from the saved collection after a completed target probe. This includes temporary unavailability. Empty Favorite Groups remain. A database-load failure, failed validation worker, or cancelled probe does not count as a target-folder result and cannot remove an item.
 
 ## File-operation safeguards
 
@@ -27,7 +34,9 @@ This document is the active source of truth for committed product behavior, safe
 
 ## Session recovery
 
-If a saved tab location cannot be restored, Dual Pane discards that tab and restores the rest of the session normally.
+If a saved tab location cannot be restored, Dual Pane discards that tab and restores the rest of the session normally. Back/forward history is kept during the session but is not restored after relaunch.
+
+The [Favorites policy](#favorites) governs unavailable Favorite Items independently of tab recovery.
 
 ## Out of scope
 

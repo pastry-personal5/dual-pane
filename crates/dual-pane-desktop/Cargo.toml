@@ -12,6 +12,7 @@ cxx-qt-lib = { version = "=0.10.0", features = ["qt_gui"] }
 dual-pane-adapters.workspace = true
 dual-pane-application.workspace = true
 dual-pane-domain.workspace = true
+rusqlite.workspace = true
 
 [build-dependencies]
 cxx-qt-build = "=0.10.0"

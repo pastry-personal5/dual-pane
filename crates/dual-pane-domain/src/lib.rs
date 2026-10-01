@@ -8,6 +8,7 @@ mod listing_error;
 mod location;
 mod request_token;
 mod selection;
+mod sort_spec;
 
 pub use browser_side::BrowserSide;
 pub use entry::{Entry, EntryKind, ListingSortKey, listing_sort_key};
@@ -15,3 +16,4 @@ pub use listing_error::{ListingError, ListingErrorKind};
 pub use location::{EntryName, InvalidEntryName, Location};
 pub use request_token::RequestToken;
 pub use selection::Selection;
+pub use sort_spec::{SortDirection, SortField, SortSpec};

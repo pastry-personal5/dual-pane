@@ -24,3 +24,5 @@ The Standard Layout is the conceptual containment model for the dual-Browser win
   - Right Browser, with the same Navigation Pane and Folder Pane structure
 
 The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider divides the Left Browser from the Right Browser. Each Browser owns its own location, Folder Items, selection, and active state. Browser Tabs are part of the information architecture but remain deferred; the current Sidebar presents only static labels for its groups.
+
+The planned Favorites hierarchy has one level: the Favorites Groups container holds Favorite Groups, and each group holds Favorite Items. Groups do not nest. Group and item order is remembered during the session and across relaunches; the planned Sidebar interactions are in [ux-gui.md](ux-gui.md#sidebar-favorites).

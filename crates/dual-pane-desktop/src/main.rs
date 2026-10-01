@@ -3,6 +3,7 @@ mod folder_items;
 mod folder_items_list_model;
 mod native_location;
 mod runtime;
+pub mod settings_storage;
 
 use std::env;
 use std::process::ExitCode;

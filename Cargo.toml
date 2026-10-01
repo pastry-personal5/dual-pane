@@ -12,5 +12,6 @@ dual-pane-adapters = { path = "crates/dual-pane-adapters" }
 dual-pane-application = { path = "crates/dual-pane-application" }
 dual-pane-domain = { path = "crates/dual-pane-domain" }
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
+rusqlite = { version = "=0.38.0", default-features = false }
 tempfile = "=3.27.0"
 unicode-normalization = "=0.1.25"
