@@ -103,7 +103,7 @@ P1-M4 bounds execution to one active worker but retains the standard library's u
 3. Add `pane_session.rs` with its tests.
 4. Complete `listing_model.rs` and the C++ window, remove `desktop_bridge.rs` and the old C ABI, and update `build.rs`.
 5. Run the manual launch, then the dead-code, stray-file, and naming checks, then `make check` and the direct commands once.
-6. Update AGENTS.md, README.md, `planned-repository-architecture.md`, and `phase.md`, and check the completed items.
+6. Update AGENTS.md, README.md, `planned-repository-architecture.md`, and `phase-1.md`, and check the completed items.
 
 ## Constraints and rejection criteria
 

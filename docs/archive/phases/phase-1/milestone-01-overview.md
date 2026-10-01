@@ -24,6 +24,6 @@ Draft a target architecture for the project, check it against Clean Architecture
 - [x] [architecture.md](../../../architecture.md) records a coherent Clean Architecture boundary, has no phase or milestone plan, and has been reviewed.
 - [x] The minimum macOS and Qt 6 versions are recorded in AGENTS.md under "Decided".
 - [x] `docs/roadmap.md` exists and lists only Phase 1.
-- [x] This phase's `phase.md` lists P1-M1 (this milestone) and P1-M2 (a one-line stub).
+- [x] This phase's `phase-1.md` lists P1-M1 (this milestone) and P1-M2 (a one-line stub).
 - [x] The gate passes: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - [x] `docs/README.md` indexes every active documentation file.

@@ -119,7 +119,7 @@ No test creates, alters, or deletes file-system entries, so no temporary-directo
 3. Add `dual-pane-application` with the reducer and tests; iterate with `cargo test -q -p dual-pane-application`.
 4. Add `dual-pane-adapters` with the controller, presenter, and tests.
 5. Collect the `cargo tree` and Qt-free test evidence, run the naming-rule grep, then run `make check` and the equivalent direct commands once.
-6. Update AGENTS.md, README.md, `planned-repository-architecture.md`, and `phase.md`, and check the completed checklist items.
+6. Update AGENTS.md, README.md, `planned-repository-architecture.md`, and `phase-1.md`, and check the completed checklist items.
 
 ## Constraints and rejection criteria
 

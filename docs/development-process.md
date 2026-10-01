@@ -36,12 +36,12 @@ Each phase gets its own directory, created when that phase is planned.
 | File                                          | Contents |
 |------------------------------------------------|----------|
 | `docs/roadmap.md`                               | Every phase, one line each: ID, title, status, and a link to its phase doc. This is the only place that says which phase is active. |
-| `docs/phase-N/phase.md`                         | The phase doc: goal, exit criteria, and short entries for its milestones. |
+| `docs/phase-N/phase-N.md`                       | The phase doc: goal, exit criteria, and short entries for its milestones. |
 | `docs/phase-N/milestone-NN-overview.md`         | One milestone's goal, scope, and completion checklist, in detail. |
 | `docs/phase-N/milestone-NN-architecture.md`     | The technical approach for implementing that milestone. |
 | `docs/phase-N/changelog.md`                     | A chronological log of decisions, owner calls, and design changes made during the phase, most recent entry first. |
 
-`N` is the phase number (`phase-1`, `phase-2`, …). `NN` is the milestone number, zero-padded to two digits (`milestone-01`, `milestone-02`, …), matching the `M` in its `P<phase>-M<milestone>` ID.
+`N` is the phase number (`phase-1`, `phase-2`, …). Every phase overview filename repeats that number: `docs/phase-N/phase-N.md`; generic `phase.md` filenames are not allowed. `NN` is the milestone number, zero-padded to two digits (`milestone-01`, `milestone-02`, …), matching the `M` in its `P<phase>-M<milestone>` ID.
 
 A phase doc looks like this:
 

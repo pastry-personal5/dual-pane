@@ -14,11 +14,11 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [ux-gui.md](ux-gui.md) | Current visual, accessibility, input, active-Browser, and responsiveness behavior. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and which phase is active. |
-| [phase-3/phase.md](phase-3/phase.md) | Planned Phase 3 goal, exit criteria, and milestone sequence for tabs, file operations, session recovery, and watching. |
+| [phase-3/phase-3.md](phase-3/phase-3.md) | Planned Phase 3 goal, exit criteria, and milestone sequence for tabs, file operations, session recovery, and watching. |
 | [phase-3/milestone-01-overview.md](phase-3/milestone-01-overview.md) | P3-M1 scope and executable completion checklist. |
 | [phase-3/milestone-01-architecture.md](phase-3/milestone-01-architecture.md) | P3-M1 naming and bridge migration approach. |
 | [phase-3/changelog.md](phase-3/changelog.md) | Phase 3 decisions and plan changes. |
-| [archive/phases/phase-2/phase.md](archive/phases/phase-2/phase.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |
+| [archive/phases/phase-2/phase-2.md](archive/phases/phase-2/phase-2.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |
 | [archive/phases/phase-2/milestone-01-overview.md](archive/phases/phase-2/milestone-01-overview.md) | Completed P2-M1 interaction-decision scope and acceptance evidence. |
 | [archive/phases/phase-2/milestone-01-architecture.md](archive/phases/phase-2/milestone-01-architecture.md) | Completed P2-M1 documentation-only approach and implementation boundary. |
 | [archive/phases/phase-2/milestone-02-overview.md](archive/phases/phase-2/milestone-02-overview.md) | Completed P2-M2 scope and completion checklist for the Qt-free two-Browser workspace. |
@@ -30,7 +30,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [archive/phases/phase-2/changelog.md](archive/phases/phase-2/changelog.md) | Completed Phase 2 owner decisions and plan changes. |
 | [release-notes/1.0.0.md](release-notes/1.0.0.md) | Concise release notes for version 1.0.0. |
 | [release-notes/2.0.0.md](release-notes/2.0.0.md) | Concise release notes for version 2.0.0. |
-| [archive/phases/phase-1/phase.md](archive/phases/phase-1/phase.md) | Completed Phase 1 goal, exit criteria, and milestones. |
+| [archive/phases/phase-1/phase-1.md](archive/phases/phase-1/phase-1.md) | Completed Phase 1 goal, exit criteria, and milestones. |
 | [archive/phases/phase-1/milestone-02-overview.md](archive/phases/phase-1/milestone-02-overview.md) | Archived P1-M2 scope, checklist, and evidence for the Cargo/Qt Widgets stack spike. |
 | [archive/phases/phase-1/milestone-02-architecture.md](archive/phases/phase-1/milestone-02-architecture.md) | Archived P1-M2 workspace, bridge, Qt window, and implementation plan. |
 | [archive/phases/phase-1/milestone-03-overview.md](archive/phases/phase-1/milestone-03-overview.md) | Archived P1-M3 scope, decisions, and checklist for the Qt-free inner crates. |

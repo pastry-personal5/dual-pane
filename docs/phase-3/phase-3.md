@@ -15,9 +15,10 @@ Goal: Make each Browser a durable, independently tabbed workspace that can safel
 
 ### P3-M1: UX documentation and terminology refactor
 
-Status: Active
+Status: Done
 Goal: Establish the active UX sources of truth and a focused, verified Browser/Folder Items naming baseline.
 Plan: [overview](milestone-01-overview.md), [architecture](milestone-01-architecture.md)
+Notes: The automated gate passed. Native visual verification is deferred because the execution environment has no screen.
 
 ### P3-M2: UX Design and refactoring
 

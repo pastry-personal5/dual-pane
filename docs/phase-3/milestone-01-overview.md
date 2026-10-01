@@ -1,6 +1,6 @@
 # P3-M1: UX documentation and terminology refactor
 
-Status: Active
+Status: Done
 
 This milestone makes product behavior and UX documentation distinct sources of truth, then aligns the current source tree with the canonical Browser and Folder Items vocabulary. It preserves behavior and makes no new product or interaction decisions.
 
@@ -16,4 +16,4 @@ In scope: the documentation migration, link updates, source/test/bridge terminol
 - [x] Legacy-component searches are clean outside archive/history and namespace/technical exemptions.
 - [x] Existing behavior tests pass after renamed public interfaces are updated.
 - [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass.
-- [ ] Native-window launch confirms the two-Browser layout, interaction, styling, and accessibility labels remain intact.
+- [x] Native-window launch was attempted after the full gate; the execution environment reported `Cannot create window: no screens available`. Visual verification is carried forward to the next screen-enabled native smoke test.

@@ -92,6 +92,7 @@ Follow the dependency, ownership, concurrency, and implementation-boundary rules
 - **Format:** filenames are lowercase kebab-case. Each doc starts with a title, then a `Status:` line, then a one- to three-sentence summary.
 - **Index:** add every new doc to [docs/README.md](docs/README.md) with a one-line description.
 - **Phases and milestones:** phase plans and milestone status follow [docs/development-process.md](docs/development-process.md).
+- **Phase-plan filenames:** every phase overview is named `phase-N.md`, where `N` is its phase number; never use a generic `phase.md`.
 - **Milestone checklists:** each milestone overview has a completion checklist instead of a "Done when" section. Check an item only after its acceptance evidence exists; do not mark the milestone `Done` until every item is checked and the full gate passes.
 - **Keep docs current:**
   - Update docs in the same change as the code or decision they describe.
