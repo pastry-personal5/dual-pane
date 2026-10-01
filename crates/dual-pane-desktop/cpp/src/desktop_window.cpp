@@ -595,6 +595,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         std::scoped_lock lock(state.mutex);
         state.scheduler = nullptr;
     }
+    shutdown_desktop();
     return result;
 }
 } // namespace dual_pane_desktop

@@ -4,6 +4,19 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — Pre-M6 review fixes
+
+The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 code to be fixed before P3-M6 starts.
+
+- Settings safety: the application tracks whether stored settings are loading, loaded, or failed, and saves only after a successful load. A sort chosen before the load result is replayed over the loaded snapshot; Favorites edits wait for the load. After a failed load, edits stay in memory and are never saved, so a damaged database is preserved until an explicit reset. Load failures arrive as a typed `SettingsLoadFailed` event, and a session without a settings worker settles as failed instead of loading forever.
+- Quitting flushes unsaved settings with a bounded wait after the Qt event loop exits, as [architecture §5.2](../architecture.md#cancellation-and-shutdown) allows. The settings worker stays available after a failed open, and a reset that cannot move every file restores the moved ones and never falls back to an in-memory database.
+- Back and Forward count a pending history step as taken, so repeated presses keep moving; `can_go_back` and `can_go_forward` expose the same rule for P3-M6. The application now uses the domain `BrowserTabs` for tab order and activation instead of a duplicate.
+- Each Browser reads folders on four lanes, so a slow folder in one tab no longer delays the Browser's other tabs. Correction to the P3-M5 entry: admission was bounded per Browser, not per tab; it is now bounded per Browser at the pending capacity plus the lane count. Four lanes is provisional until measured.
+- Same-folder reloads report one minimal row change, and the Qt list model applies it as row insertions, removals, and `dataChanged` notifications instead of a reset. Navigation and tab switches still replace every row.
+- Settings schema version 2 gives `NavigateParent` its documented `Command+Up` default, replacing a stored plain `L` that version 1 used because shortcuts could not name arrow keys. A NULL key now means an unbound action; the migration restores defaults for NULL rows written by version 1, and unknown key text drops only that binding. P3-M6's `CloseTab` migration becomes schema version 3.
+- Favorite target probes report `FavoriteProbeOutcome`, and only `Unavailable` removes an Item; P3-M6 still adds the probe runner. Listing events no longer have a panicking address path, settings tests clean up their temporary directories, `main.rs` reuses the settings path helper and runs without persistence when `HOME` is unset, and the application has a property test for tab, selection, and stale-result invariants.
+- `scripts/lint-cpp.sh` passes Qt Core's header directory to clang-tidy, matching the compiler, because a CXX-Qt list header includes Qt headers without the `QtCore/` prefix.
+
 ## 2026-10-02 — P3-M6 interview decisions
 
 - Development continues with Claude Code. The owner commits changes; the agent does not commit or push unless asked. Codex's existing code is reviewed before P3-M6 implementation starts, and P3-M6 stays one milestone delivered in its four planned steps.

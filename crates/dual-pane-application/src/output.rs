@@ -1,4 +1,4 @@
-use crate::FavoritesRecords;
+use crate::{FavoritesRecords, SettingsFailure};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, Selection, TabId};
 use std::sync::Arc;
 
@@ -26,4 +26,5 @@ pub enum Output {
     FolderItemsCancelled { browser: BrowserSide, tab: TabId },
     FavoritesChanged { favorites: FavoritesRecords },
     SettingsSaveFailed { revision: u64 },
+    SettingsLoadFailed { failure: SettingsFailure },
 }

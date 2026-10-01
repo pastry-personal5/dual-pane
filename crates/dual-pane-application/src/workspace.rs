@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::{Command, Event, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Input, Output, RowChange, SettingsState, WorkRequest, fresh_profile_favorites};
-use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken, Selection, SortSpec, TabId, valid_favorite_name};
+use crate::{Command, Event, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoritesRecords, Input, Output, RowChange, SettingsFailure, SettingsState, SettingsStatus, WorkRequest, fresh_profile_favorites};
+use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken, Selection, SortSpec, TabId, valid_favorite_name};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Transition {
@@ -17,15 +17,21 @@ pub struct Workspace {
     home: Location,
     screenshots_exists: bool,
     settings: SettingsState,
+    settings_status: SettingsStatus,
+    /// Sort choices made before the stored settings loaded. They are replayed
+    /// over the loaded snapshot so the person's latest choice wins.
+    pending_sorts: Vec<(Location, SortSpec)>,
     last_token: Option<RequestToken>,
     next_tab: u64,
     next_favorite_group_id: i64,
     next_favorite_item_id: i64,
 }
+/// One Browser: the domain's ordered tab identities and active tab, plus the
+/// application's per-tab state, which is stored in no particular order.
 #[derive(Debug)]
 struct BrowserState {
+    order: BrowserTabs,
     tabs: Vec<TabState>,
-    active: TabId,
 }
 #[derive(Debug)]
 struct TabState {
@@ -75,7 +81,7 @@ impl Workspace {
     pub fn with_context(home: Location, screenshots_exists: bool) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, screenshots_exists, settings: SettingsState::new(), last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1 }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, screenshots_exists, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, pending_sorts: Vec::new(), last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1 }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         match input {
@@ -87,7 +93,7 @@ impl Workspace {
             Input::Command(Command::Navigate { browser, location }) => self.navigate(browser, location, None),
             Input::Command(Command::GoBack { browser }) => self.travel(browser, false),
             Input::Command(Command::GoForward { browser }) => self.travel(browser, true),
-            Input::Command(Command::Refresh { browser }) => self.refresh_tab(browser, self.browser(browser).active),
+            Input::Command(Command::Refresh { browser }) => self.refresh_tab(browser, self.active_tab(browser)),
             Input::Command(Command::InvalidateLocation { location }) => self.refresh_location(&location),
             Input::Command(Command::SetSort { location, sort }) => self.set_sort(location, sort),
             Input::Command(Command::CreateFavoriteGroup { name }) => self.create_favorite_group(name),
@@ -112,23 +118,34 @@ impl Workspace {
             Input::Event(Event::FolderItemsLoaded { browser, tab, token, entries }) => self.loaded(browser, tab, token, entries),
             Input::Event(Event::FolderItemsFailed { browser, tab, token, kind }) => self.failed(browser, tab, token, kind),
             Input::Event(Event::FolderItemsCancelled { browser, tab, token }) => self.cancelled(browser, tab, token),
-            Input::Event(Event::FavoriteTargetProbed { item_id, target, available }) => self.favorite_target_probed(item_id, target, available),
+            Input::Event(Event::FavoriteTargetProbed { item_id, target, outcome }) => self.favorite_target_probed(item_id, target, outcome),
             Input::Event(Event::SettingsSaved { revision }) => {
                 self.settings.mark_saved(revision);
                 Transition::default()
             }
             Input::Event(Event::SettingsSaveFailed { revision }) => Transition { outputs: vec![Output::SettingsSaveFailed { revision }], work: vec![] },
             Input::Event(Event::SettingsLoaded { snapshot }) => self.settings_loaded(snapshot),
+            Input::Event(Event::SettingsLoadFailed { failure }) => self.settings_load_failed(failure),
         }
     }
     pub fn active_browser(&self) -> BrowserSide {
         self.active_browser
     }
     pub fn active_tab(&self, side: BrowserSide) -> TabId {
-        self.browser(side).active
+        self.browser(side).order.active()
     }
+    /// The Browser's tabs in display order.
     pub fn tabs(&self, side: BrowserSide) -> impl ExactSizeIterator<Item = TabId> + '_ {
-        self.browser(side).tabs.iter().map(|tab| tab.id)
+        self.browser(side).order.tabs().iter().copied()
+    }
+    /// Whether Back would move the active tab, counting a Back or Forward that
+    /// is still loading as already taken.
+    pub fn can_go_back(&self, side: BrowserSide) -> bool {
+        self.history_step(side, false).is_some()
+    }
+    /// Whether Forward would move the active tab; see [`Self::can_go_back`].
+    pub fn can_go_forward(&self, side: BrowserSide) -> bool {
+        self.history_step(side, true).is_some()
     }
     pub fn location(&self, side: BrowserSide) -> Option<&Location> {
         self.tab(side, self.active_tab(side)).and_then(|t| t.folder_items.as_ref().map(|x| &x.location))
@@ -144,6 +161,14 @@ impl Workspace {
     }
     pub fn favorites(&self) -> &FavoritesRecords {
         self.settings.favorites()
+    }
+    pub fn settings_status(&self) -> SettingsStatus {
+        self.settings_status
+    }
+    /// The save to flush before the application exits, if loaded settings
+    /// have changed since the last confirmed save.
+    pub fn final_settings_save(&self) -> Option<WorkRequest> {
+        self.settings.has_unsaved_changes().then(|| self.save_settings()).flatten()
     }
     fn browser(&self, side: BrowserSide) -> &BrowserState {
         match side {
@@ -176,10 +201,9 @@ impl Workspace {
         }
     }
     fn activate_tab(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
-        if self.tab(browser, tab).is_none() || self.active_tab(browser) == tab {
+        if !self.browser_mut(browser).order.activate(tab) {
             return Transition::default();
         }
-        self.browser_mut(browser).active = tab;
         let mut outputs = vec![Output::ActiveTabChanged { browser, tab }];
         if self.active_browser != browser {
             self.active_browser = browser;
@@ -195,34 +219,35 @@ impl Workspace {
         };
         let id = TabId::new(self.next_tab);
         self.next_tab += 1;
-        self.browser_mut(browser).tabs.push(TabState::new(id));
-        self.browser_mut(browser).active = id;
+        let state = self.browser_mut(browser);
+        state.tabs.push(TabState::new(id));
+        state.order.insert_active(id);
         let mut transition = self.navigate(browser, location, None);
         transition.outputs.insert(0, Output::TabsChanged { browser, active_tab: id });
         transition.outputs.insert(1, self.tab_view(browser, id));
         transition
     }
     fn close_tab(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
-        let Some(index) = self.browser(browser).tabs.iter().position(|t| t.id == tab) else {
+        let Some(pending) = self.tab(browser, tab).map(|state| state.pending.as_ref().map(|p| p.token)) else {
             return Transition::default();
         };
-        let pending = self.browser(browser).tabs[index].pending.as_ref().map(|p| p.token);
-        let final_tab = self.browser(browser).tabs.len() == 1;
         let was_active = self.active_tab(browser) == tab;
+        let final_tab = self.browser(browser).order.tabs().len() == 1;
         let replacement = if final_tab {
-            TabId::new(self.next_tab)
-        } else if was_active {
-            self.browser(browser).tabs.get(index + 1).or_else(|| self.browser(browser).tabs.get(index - 1)).map(|t| t.id).expect("nonempty")
-        } else {
-            self.active_tab(browser)
-        };
-        if final_tab {
+            let id = TabId::new(self.next_tab);
             self.next_tab += 1;
-            self.browser_mut(browser).tabs[index] = TabState::new(replacement);
+            let state = self.browser_mut(browser);
+            state.order.replace_final(tab, id);
+            state.tabs = vec![TabState::new(id)];
+            id
         } else {
-            self.browser_mut(browser).tabs.remove(index);
-        }
-        self.browser_mut(browser).active = replacement;
+            let state = self.browser_mut(browser);
+            state.tabs.retain(|item| item.id != tab);
+            match state.order.close(tab) {
+                Some(active) => active,
+                None => return Transition::default(),
+            }
+        };
         let mut work: Vec<WorkRequest> = pending.into_iter().map(|token| WorkRequest::Cancel { browser, tab, token }).collect();
         let mut outputs = vec![Output::TabsChanged { browser, active_tab: replacement }];
         if was_active {
@@ -237,12 +262,10 @@ impl Workspace {
     }
     fn reorder_tab(&mut self, browser: BrowserSide, tab: TabId, position: usize) -> Transition {
         let state = self.browser_mut(browser);
-        let Some(index) = state.tabs.iter().position(|item| item.id == tab) else {
+        if !state.order.reorder(tab, position) {
             return Transition::default();
-        };
-        let item = state.tabs.remove(index);
-        state.tabs.insert(position.min(state.tabs.len()), item);
-        Transition { outputs: vec![Output::TabsChanged { browser, active_tab: state.active }], work: vec![] }
+        }
+        Transition { outputs: vec![Output::TabsChanged { browser, active_tab: state.order.active() }], work: vec![] }
     }
     fn navigate(&mut self, browser: BrowserSide, location: Location, history_target: Option<usize>) -> Transition {
         let tab = self.active_tab(browser);
@@ -263,10 +286,18 @@ impl Workspace {
         work.push(WorkRequest::ReadDirectory { browser, tab, token, location: location.clone(), sort });
         Transition { outputs: vec![Output::LoadingStarted { browser, tab, location }], work }
     }
+    /// The history entry one step back or forward from the active tab. A Back
+    /// or Forward that is still loading counts as taken, so repeated presses
+    /// keep moving instead of re-requesting the same entry.
+    fn history_step(&self, browser: BrowserSide, forward: bool) -> Option<(usize, Location)> {
+        let tab = self.tab(browser, self.active_tab(browser))?;
+        let base = tab.pending.as_ref().and_then(|pending| pending.history_target).or(tab.current)?;
+        let target = if forward { base.checked_add(1) } else { base.checked_sub(1) }?;
+        tab.history.get(target).map(|entry| (target, entry.location.clone()))
+    }
     fn travel(&mut self, browser: BrowserSide, forward: bool) -> Transition {
         let tab = self.active_tab(browser);
-        let next = self.tab(browser, tab).and_then(|t| t.current.and_then(|current| if forward { current.checked_add(1) } else { current.checked_sub(1) }).filter(|index| *index < t.history.len()));
-        next.and_then(|target| self.tab(browser, tab).and_then(|t| t.history.get(target)).map(|h| (target, h.location.clone()))).map_or_else(Transition::default, |(target, location)| self.start_read(browser, tab, location, Some(target)))
+        self.history_step(browser, forward).map_or_else(Transition::default, |(target, location)| self.start_read(browser, tab, location, Some(target)))
     }
     fn refresh_tab(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
         let target = self.tab(browser, tab).and_then(|state| state.pending.as_ref().map(|pending| (pending.location.clone(), pending.history_target)).or_else(|| state.folder_items.as_ref().map(|items| (items.location.clone(), None))));
@@ -283,29 +314,41 @@ impl Workspace {
     }
     fn set_sort(&mut self, location: Location, sort: SortSpec) -> Transition {
         self.settings.set_sort(location.clone(), sort);
+        if self.settings_status == SettingsStatus::Loading {
+            self.pending_sorts.push((location.clone(), sort));
+        }
         let mut transition = self.refresh_location(&location);
-        transition.work.push(self.save_settings());
+        transition.work.extend(self.save_settings());
         transition
     }
     fn settings_loaded(&mut self, snapshot: crate::SettingsSnapshot) -> Transition {
         self.settings.apply(snapshot);
-        let seeded = if !self.settings.favorites().initialized {
-            let favorites = fresh_profile_favorites(&self.home, self.screenshots_exists);
-            self.settings.replace_favorites(favorites.clone());
-            Some(favorites)
-        } else {
-            None
-        };
+        // The loaded snapshot is what storage already holds.
+        self.settings.mark_saved(self.settings.revision());
+        self.settings_status = SettingsStatus::Loaded;
+        let replayed = !self.pending_sorts.is_empty();
+        for (location, sort) in std::mem::take(&mut self.pending_sorts) {
+            self.settings.set_sort(location, sort);
+        }
+        let seeded = !self.settings.favorites().initialized;
+        if seeded {
+            self.settings.replace_favorites(fresh_profile_favorites(&self.home, self.screenshots_exists));
+        }
         self.next_favorite_group_id = self.next_favorite_group_id.max(self.settings.favorites().groups.iter().map(|group| group.id.saturating_add(1)).max().unwrap_or(1));
         self.next_favorite_item_id = self.next_favorite_item_id.max(self.settings.favorites().items.iter().map(|item| item.id.saturating_add(1)).max().unwrap_or(1));
         let tabs = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|side| self.browser(side).tabs.iter().map(move |tab| (side, tab.id))).collect::<Vec<_>>();
-        let mut transition = Transition { outputs: vec![Output::FavoritesChanged { favorites: self.settings.favorites().clone() }], work: seeded.map(|_| self.save_settings()).into_iter().collect() };
+        let mut transition = Transition { outputs: vec![Output::FavoritesChanged { favorites: self.settings.favorites().clone() }], work: if seeded || replayed { self.save_settings().into_iter().collect() } else { Vec::new() } };
         for (side, tab) in tabs {
             let refresh = self.refresh_tab(side, tab);
             transition.outputs.extend(refresh.outputs);
             transition.work.extend(refresh.work);
         }
         transition
+    }
+    fn settings_load_failed(&mut self, failure: SettingsFailure) -> Transition {
+        self.settings_status = SettingsStatus::LoadFailed(failure);
+        self.pending_sorts.clear();
+        Transition { outputs: vec![Output::SettingsLoadFailed { failure }], work: vec![] }
     }
     fn create_favorite_group(&mut self, name: String) -> Transition {
         if !valid_favorite_name(&name) || self.settings.favorites().groups.iter().any(|group| group.name == name) {
@@ -419,24 +462,31 @@ impl Workspace {
     fn open_favorite_item(&mut self, browser: BrowserSide, id: i64) -> Transition {
         self.settings.favorites().items.iter().find(|item| item.id == id).map(|item| item.target.clone()).map_or_else(Transition::default, |target| self.navigate(browser, target, None))
     }
-    fn favorite_target_probed(&mut self, item_id: i64, target: Location, available: bool) -> Transition {
-        if available {
+    fn favorite_target_probed(&mut self, item_id: i64, target: Location, outcome: FavoriteProbeOutcome) -> Transition {
+        if outcome != FavoriteProbeOutcome::Unavailable {
             return Transition::default();
         }
         let Some(item) = self.settings.favorites().items.iter().find(|item| item.id == item_id && item.target == target) else { return Transition::default() };
         self.delete_favorite_item(item.id)
     }
     fn commit_favorites(&mut self, mut favorites: FavoritesRecords) -> Transition {
+        // Favorites are unknown until the stored collection loads, so an edit
+        // now could not be merged with it.
+        if self.settings_status == SettingsStatus::Loading {
+            return Transition::default();
+        }
         favorites.initialized = true;
         if favorites.hierarchy().is_err() {
             return Transition::default();
         }
         self.settings.replace_favorites(favorites.clone());
-        let save = self.save_settings();
-        Transition { outputs: vec![Output::FavoritesChanged { favorites }], work: vec![save] }
+        Transition { outputs: vec![Output::FavoritesChanged { favorites }], work: self.save_settings().into_iter().collect() }
     }
-    fn save_settings(&self) -> WorkRequest {
-        WorkRequest::SaveSettings { revision: self.settings.revision(), snapshot: self.settings.snapshot() }
+    /// A save of the current settings, or `None` unless the stored settings
+    /// loaded successfully. Saving after a pending or failed load would replace
+    /// records the application never read.
+    fn save_settings(&self) -> Option<WorkRequest> {
+        (self.settings_status == SettingsStatus::Loaded).then(|| WorkRequest::SaveSettings { revision: self.settings.revision(), snapshot: self.settings.snapshot() })
     }
     fn select(&mut self, browser: BrowserSide, row: usize, name: &EntryName, toggle: bool) -> Transition {
         let tab = self.active_tab(browser);
@@ -540,7 +590,12 @@ impl Workspace {
         if view.view.scroll.as_ref().is_some_and(|(name, _)| !entries.iter().any(|e| e.name() == name)) {
             view.view.scroll = None;
         }
-        let changes = state.folder_items.as_ref().map_or_else(|| vec![RowChange { row: 0, removed: 0, inserted: entries.len() }], |old| listing_changes(&old.entries, &entries));
+        // A reload of the same folder reports its smallest change so the view
+        // keeps its rows and scroll position; a new folder replaces every row.
+        let changes = match state.folder_items.as_ref() {
+            Some(old) if old.location == pending.location => listing_changes(&old.entries, &entries),
+            old => whole_replacement(old.map_or(0, |old| old.entries.len()), entries.len()),
+        };
         state.folder_items = Some(FolderItems { location: pending.location.clone(), entries: Arc::clone(&entries) });
         state.error = None;
         let row = view.view.cursor.as_ref().and_then(|name| state.folder_items.as_ref().and_then(|items| items.entries.iter().position(|entry| entry.name() == name)));
@@ -577,7 +632,7 @@ impl Workspace {
 }
 impl BrowserState {
     fn new(id: TabId) -> Self {
-        Self { tabs: vec![TabState::new(id)], active: id }
+        Self { order: BrowserTabs::new(id), tabs: vec![TabState::new(id)] }
     }
 }
 impl TabState {
@@ -601,6 +656,51 @@ fn normalize_item_positions(favorites: &mut FavoritesRecords) {
     }
 }
 
+/// The smallest single contiguous change that turns `old` into `new`: rows
+/// shared at both ends are kept and only the differing middle is replaced.
 fn listing_changes(old: &[Entry], new: &[Entry]) -> Vec<RowChange> {
-    if old == new { vec![] } else { vec![RowChange { row: 0, removed: old.len(), inserted: new.len() }] }
+    let prefix = old.iter().zip(new).take_while(|(old, new)| old == new).count();
+    let suffix = old[prefix..].iter().rev().zip(new[prefix..].iter().rev()).take_while(|(old, new)| old == new).count();
+    let (removed, inserted) = (old.len() - prefix - suffix, new.len() - prefix - suffix);
+    if removed == 0 && inserted == 0 { vec![] } else { vec![RowChange { row: prefix, removed, inserted }] }
+}
+
+fn whole_replacement(removed: usize, inserted: usize) -> Vec<RowChange> {
+    if removed == 0 && inserted == 0 { vec![] } else { vec![RowChange { row: 0, removed, inserted }] }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dual_pane_domain::EntryKind;
+    use proptest::prelude::*;
+
+    fn entry(name: u8, size: u8) -> Entry {
+        Entry::with_metadata(EntryName::new(format!("item-{name}")).unwrap(), EntryKind::File, dual_pane_domain::EntryMetadata::new(None, Some(u64::from(size))))
+    }
+
+    proptest! {
+        #[test]
+        fn applying_the_reported_change_to_the_old_rows_yields_the_new_rows(old in proptest::collection::vec((0..6u8, 0..2u8), 0..12), new in proptest::collection::vec((0..6u8, 0..2u8), 0..12)) {
+            let old = old.into_iter().map(|(name, size)| entry(name, size)).collect::<Vec<_>>();
+            let new = new.into_iter().map(|(name, size)| entry(name, size)).collect::<Vec<_>>();
+            let changes = listing_changes(&old, &new);
+            prop_assert!(changes.len() <= 1);
+            let mut rows = old.clone();
+            for change in &changes {
+                prop_assert!(change.removed > 0 || change.inserted > 0);
+                prop_assert!(change.row + change.removed <= rows.len());
+                rows.splice(change.row..change.row + change.removed, new[change.row..change.row + change.inserted].iter().cloned());
+            }
+            prop_assert_eq!(rows, new);
+        }
+    }
+
+    #[test]
+    fn a_metadata_change_replaces_only_its_row() {
+        let old = [entry(1, 0), entry(2, 0), entry(3, 0)];
+        let new = [entry(1, 0), entry(2, 1), entry(3, 0)];
+        assert_eq!(listing_changes(&old, &new), vec![RowChange { row: 1, removed: 1, inserted: 1 }]);
+        assert_eq!(listing_changes(&old, &old), vec![]);
+    }
 }

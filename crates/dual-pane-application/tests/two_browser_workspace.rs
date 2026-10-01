@@ -1,4 +1,4 @@
-use dual_pane_application::{Command, Event, SettingsSnapshot, WorkRequest, Workspace};
+use dual_pane_application::{Command, Event, FavoriteProbeOutcome, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, SortDirection, SortField, SortSpec, TabId};
 use std::sync::Arc;
 
@@ -16,6 +16,13 @@ fn request(work: &[WorkRequest]) -> (TabId, dual_pane_domain::RequestToken) {
         Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
         _ => panic!("read"),
     }
+}
+/// A workspace whose stored settings loaded with an initialized, empty
+/// Favorites collection, as at a normal launch.
+fn ready() -> Workspace {
+    let mut workspace = Workspace::new();
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot { favorites: dual_pane_application::FavoritesRecords { initialized: true, ..Default::default() }, ..SettingsSnapshot::default() } }.into());
+    workspace
 }
 fn load(workspace: &mut Workspace, browser: BrowserSide, tab: TabId, token: dual_pane_domain::RequestToken, entries: Vec<Entry>) {
     workspace.handle(Event::FolderItemsLoaded { browser, tab, token, entries: Arc::from(entries) }.into());
@@ -99,7 +106,7 @@ fn selecting_the_sole_selected_item_reports_cursor_recovery() {
 
 #[test]
 fn favorites_editing_preserves_order_ids_and_rejects_invalid_names() {
-    let mut workspace = Workspace::new();
+    let mut workspace = ready();
     let group = workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into());
     assert!(matches!(group.work.as_slice(), [WorkRequest::SaveSettings { .. }]));
     let id = workspace.favorites().groups[0].id;
@@ -118,15 +125,19 @@ fn favorites_editing_preserves_order_ids_and_rejects_invalid_names() {
 
 #[test]
 fn unavailable_probe_only_removes_the_matching_favorite_target() {
-    let mut workspace = Workspace::new();
+    let mut workspace = ready();
     workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into());
     let group = workspace.favorites().groups[0].id;
     let old = location("old");
     workspace.handle(Command::CreateFavoriteItem { group_id: group, name: "Old".into(), target: old.clone() }.into());
     let item = workspace.favorites().items[0].id;
-    assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: location("different"), available: false }.into()).outputs.is_empty());
+    assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: location("different"), outcome: FavoriteProbeOutcome::Unavailable }.into()).outputs.is_empty());
     assert_eq!(workspace.favorites().items.len(), 1);
-    workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: old, available: false }.into());
+    for inconclusive in [FavoriteProbeOutcome::Available, FavoriteProbeOutcome::Failed, FavoriteProbeOutcome::Cancelled] {
+        assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: old.clone(), outcome: inconclusive }.into()).outputs.is_empty());
+    }
+    assert_eq!(workspace.favorites().items.len(), 1);
+    workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: old, outcome: FavoriteProbeOutcome::Unavailable }.into());
     assert!(workspace.favorites().items.is_empty());
 }
 
@@ -196,7 +207,7 @@ fn failed_navigation_retains_history_and_location_shared_sort_refreshes_every_ta
 
 #[test]
 fn sorting_a_pending_navigation_restarts_its_target_without_committing_the_old_result() {
-    let mut workspace = Workspace::new();
+    let mut workspace = ready();
     let (tab, first) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("shown") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, first, vec![entry("old")]);
     let target = location("target");
@@ -242,7 +253,7 @@ fn right_click_does_not_establish_a_missing_range_anchor() {
 
 #[test]
 fn recreating_a_favorite_does_not_reuse_an_id_from_an_in_flight_probe() {
-    let mut workspace = Workspace::new();
+    let mut workspace = ready();
     workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into());
     let group = workspace.favorites().groups[0].id;
     let target = location("same-target");
@@ -252,7 +263,7 @@ fn recreating_a_favorite_does_not_reuse_an_id_from_an_in_flight_probe() {
     workspace.handle(Command::CreateFavoriteItem { group_id: group, name: "Second".into(), target: target.clone() }.into());
     let new_id = workspace.favorites().items[0].id;
     assert_ne!(new_id, old_id);
-    workspace.handle(Event::FavoriteTargetProbed { item_id: old_id, target, available: false }.into());
+    workspace.handle(Event::FavoriteTargetProbed { item_id: old_id, target, outcome: FavoriteProbeOutcome::Unavailable }.into());
     assert_eq!(workspace.favorites().items[0].id, new_id);
 }
 
@@ -271,4 +282,69 @@ fn scroll_hint_is_exposed_when_history_and_tabs_are_restored() {
     workspace.handle(Command::NewTab { browser: BrowserSide::Left }.into());
     let switched = workspace.handle(Command::ActivateTab { browser: BrowserSide::Left, tab: first }.into());
     assert!(switched.outputs.iter().any(|output| matches!(output, dual_pane_application::Output::TabViewChanged { scroll_hint: Some((anchor, 7)), .. } if anchor == &name("anchor"))));
+}
+
+#[test]
+fn settings_are_never_saved_before_a_successful_load() {
+    let mut workspace = Workspace::new();
+    let shared = location("shared");
+    let sort = SortSpec::new(SortField::Size, SortDirection::Descending);
+    let early = workspace.handle(Command::SetSort { location: shared.clone(), sort }.into());
+    assert!(!early.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
+    assert!(workspace.handle(Command::CreateFavoriteGroup { name: "Early".into() }.into()).outputs.is_empty());
+    assert_eq!(workspace.final_settings_save(), None);
+
+    let stored = SettingsSnapshot { favorites: dual_pane_application::FavoritesRecords { initialized: true, groups: vec![dual_pane_application::FavoriteGroupRecord { id: 3, name: "Stored".into(), position: 0 }], items: vec![] }, ..SettingsSnapshot::default() };
+    let loaded = workspace.handle(Event::SettingsLoaded { snapshot: stored }.into());
+    let saved = loaded.work.iter().find_map(|work| match work {
+        WorkRequest::SaveSettings { snapshot, .. } => Some(snapshot.clone()),
+        _ => None,
+    });
+    let saved = saved.expect("the replayed sort is saved over the loaded snapshot");
+    assert_eq!(saved.folder_sorts, vec![(shared, sort)]);
+    assert_eq!(saved.favorites.groups[0].name, "Stored");
+    assert_eq!(workspace.settings_status(), SettingsStatus::Loaded);
+}
+
+#[test]
+fn a_failed_load_keeps_edits_in_memory_without_saving() {
+    let mut workspace = Workspace::new();
+    let failed = workspace.handle(Event::SettingsLoadFailed { failure: SettingsFailure::Corrupt }.into());
+    assert_eq!(failed.outputs, vec![dual_pane_application::Output::SettingsLoadFailed { failure: SettingsFailure::Corrupt }]);
+    let group = workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into());
+    assert!(!group.outputs.is_empty());
+    assert!(group.work.is_empty());
+    let sort = workspace.handle(Command::SetSort { location: location("any"), sort: SortSpec::new(SortField::Name, SortDirection::Descending) }.into());
+    assert!(!sort.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
+    assert_eq!(workspace.final_settings_save(), None);
+}
+
+#[test]
+fn only_changes_after_a_load_need_a_final_save() {
+    let mut workspace = ready();
+    assert_eq!(workspace.final_settings_save(), None);
+    workspace.handle(Command::SetSort { location: location("any"), sort: SortSpec::new(SortField::Name, SortDirection::Descending) }.into());
+    assert!(matches!(workspace.final_settings_save(), Some(WorkRequest::SaveSettings { .. })));
+}
+
+#[test]
+fn repeated_back_and_forward_while_loading_keep_moving() {
+    let mut workspace = Workspace::new();
+    for folder in ["a", "b", "c"] {
+        let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location(folder) }.into()).work);
+        load(&mut workspace, BrowserSide::Left, tab, token, vec![]);
+    }
+    let read_location = |work: &[WorkRequest]| match work.last() {
+        Some(WorkRequest::ReadDirectory { location, .. }) => location.clone(),
+        _ => panic!("read"),
+    };
+    assert_eq!(read_location(&workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work), location("b"));
+    assert_eq!(read_location(&workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work), location("a"));
+    assert!(!workspace.can_go_back(BrowserSide::Left));
+    assert!(workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work.is_empty());
+    assert!(workspace.can_go_forward(BrowserSide::Left));
+    let (tab, token) = request(&workspace.handle(Command::GoForward { browser: BrowserSide::Left }.into()).work);
+    load(&mut workspace, BrowserSide::Left, tab, token, vec![]);
+    assert_eq!(workspace.location(BrowserSide::Left), Some(&location("b")));
+    assert!(workspace.can_go_back(BrowserSide::Left) && workspace.can_go_forward(BrowserSide::Left));
 }

@@ -50,41 +50,101 @@ impl ActionId {
     }
 }
 
-/// A platform-neutral normalized shortcut. `key` is an uppercase ASCII key.
+/// A platform-neutral key. Characters are uppercase ASCII letters or digits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Key {
+    Character(char),
+    Up,
+    Down,
+    Left,
+    Right,
+    Return,
+    Delete,
+    /// A function key, F1 through F12.
+    Function(u8),
+}
+
+impl Key {
+    const NAMED: [(Self, &'static str); 6] = [(Self::Up, "Up"), (Self::Down, "Down"), (Self::Left, "Left"), (Self::Right, "Right"), (Self::Return, "Return"), (Self::Delete, "Delete")];
+
+    pub fn is_valid(self) -> bool {
+        match self {
+            Self::Character(key) => key.is_ascii_uppercase() || key.is_ascii_digit(),
+            Self::Function(number) => (1..=12).contains(&number),
+            Self::Up | Self::Down | Self::Left | Self::Right | Self::Return | Self::Delete => true,
+        }
+    }
+
+    /// The stable, non-localized text stored for this key.
+    pub fn as_text(self) -> String {
+        match self {
+            Self::Character(key) => key.to_string(),
+            Self::Function(number) => format!("F{number}"),
+            named => Self::NAMED.iter().find(|(key, _)| *key == named).map_or_else(String::new, |(_, text)| (*text).to_owned()),
+        }
+    }
+
+    /// Reads stored key text. Unknown text is `None`, never another key.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut characters = text.chars();
+        if let (Some(key), None) = (characters.next(), characters.next()) {
+            return Some(Self::Character(key));
+        }
+        if let Some((key, _)) = Self::NAMED.iter().find(|(_, name)| *name == text) {
+            return Some(*key);
+        }
+        text.strip_prefix('F').and_then(|number| number.parse().ok()).map(Self::Function)
+    }
+}
+
+/// A platform-neutral normalized shortcut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Shortcut {
     pub command: bool,
     pub shift: bool,
     pub option: bool,
     pub control: bool,
-    pub key: char,
+    pub key: Key,
 }
 
 impl Shortcut {
-    pub const fn new(command: bool, shift: bool, option: bool, control: bool, key: char) -> Self {
+    pub const fn new(command: bool, shift: bool, option: bool, control: bool, key: Key) -> Self {
         Self { command, shift, option, control, key }
     }
     pub fn is_valid(self) -> bool {
-        self.key.is_ascii_uppercase() || self.key.is_ascii_digit()
+        self.key.is_valid()
     }
     pub fn is_reserved(self) -> bool {
-        self.command && matches!(self.key, 'H' | 'M')
+        self.command && matches!(self.key, Key::Character('H' | 'M'))
     }
 }
 
 pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
     match action {
-        ActionId::FocusOtherBrowser => Some(Shortcut::new(false, false, true, false, 'F')),
-        ActionId::NavigateParent => Some(Shortcut::new(false, false, false, false, 'L')),
-        ActionId::CloseWindow => Some(Shortcut::new(true, false, false, false, 'W')),
-        ActionId::QuitApplication => Some(Shortcut::new(true, false, false, false, 'Q')),
-        ActionId::NewFolder => Some(Shortcut::new(true, true, false, false, 'N')),
+        ActionId::FocusOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('F'))),
+        ActionId::NavigateParent => Some(Shortcut::new(true, false, false, false, Key::Up)),
+        ActionId::CloseWindow => Some(Shortcut::new(true, false, false, false, Key::Character('W'))),
+        ActionId::QuitApplication => Some(Shortcut::new(true, false, false, false, Key::Character('Q'))),
+        ActionId::NewFolder => Some(Shortcut::new(true, true, false, false, Key::Character('N'))),
         ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
     }
 }
 
 pub fn default_bindings() -> Vec<ActionBinding> {
     ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: default_shortcut(action) }).collect()
+}
+
+/// Adds each action missing from `accepted`, using its default unless that
+/// default is already taken by an accepted binding.
+fn complete_bindings(accepted: Vec<ActionBinding>) -> HashMap<ActionId, Option<Shortcut>> {
+    let mut bindings = accepted.into_iter().map(|binding| (binding.action, binding.shortcut)).collect::<HashMap<_, _>>();
+    for action in ActionId::ALL {
+        if !bindings.contains_key(&action) {
+            let default = default_shortcut(action).filter(|shortcut| !bindings.values().any(|taken| *taken == Some(*shortcut)));
+            bindings.insert(action, default);
+        }
+    }
+    bindings
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,11 +203,40 @@ pub fn fresh_profile_favorites(home: &Location, screenshots_exists: bool) -> Fav
     FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 1, name: "Favorites".into(), position: 0 }], items }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FavoriteTargetValidation {
-    Available { item_id: i64 },
-    Unavailable { item_id: i64 },
-    ProbeFailed { item_id: i64 },
+/// The result of checking a Favorite Item's target at launch. Only a
+/// completed check that found the target missing or unavailable may remove
+/// the Item; a failed or cancelled check proves nothing about the target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FavoriteProbeOutcome {
+    Available,
+    Unavailable,
+    Failed,
+    Cancelled,
+}
+
+/// Why durable settings could not be loaded. The application continues with
+/// compiled defaults in memory and never saves over the stored settings until
+/// a later load succeeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsFailure {
+    /// No settings service could be started.
+    WorkerUnavailable,
+    /// The database could not be opened or read, for example because of
+    /// permissions or a full disk.
+    Unavailable,
+    /// The database or one of its records is damaged.
+    Corrupt,
+    /// The database was written by a newer, unsupported version.
+    UnsupportedSchema,
+}
+
+/// Whether the stored settings are known. Saves are allowed only after a
+/// successful load, so a pending or failed load can never overwrite them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsStatus {
+    Loading,
+    Loaded,
+    LoadFailed(SettingsFailure),
 }
 
 /// The deliberately narrow P3-M9 handoff. History is intentionally absent.
@@ -210,8 +299,10 @@ impl SettingsState {
         }
         self.revision += 1;
     }
+    /// The effective shortcut. `None` means the action is deliberately
+    /// unbound; an action with no recorded choice uses its default.
     pub fn binding(&self, action: ActionId) -> Option<Shortcut> {
-        self.bindings.get(&action).copied().flatten().or_else(|| default_shortcut(action))
+        self.bindings.get(&action).copied().unwrap_or_else(|| default_shortcut(action))
     }
     pub fn update_binding(&mut self, binding: ActionBinding) -> bool {
         let mut all = self.snapshot().bindings;
@@ -233,13 +324,16 @@ impl SettingsState {
         &self.favorites
     }
     pub fn snapshot(&self) -> SettingsSnapshot {
-        let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.bindings.get(&action).copied().flatten() }).collect::<Vec<_>>();
+        let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect::<Vec<_>>();
         bindings.sort_by_key(|binding| binding.action.as_str());
         let folder_sorts = self.lru.iter().filter_map(|location| self.folder_sorts.get(location).copied().map(|sort| (location.clone(), sort))).collect();
         SettingsSnapshot { bindings, folder_sorts, favorites: self.favorites.clone() }
     }
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.revision != self.saved_revision
     }
     pub fn mark_saved(&mut self, revision: u64) -> bool {
         if revision != self.revision || revision < self.saved_revision {
@@ -249,7 +343,7 @@ impl SettingsState {
         true
     }
     pub fn apply(&mut self, snapshot: SettingsSnapshot) {
-        self.bindings = validate_bindings(&snapshot.bindings).into_iter().map(|binding| (binding.action, binding.shortcut)).collect();
+        self.bindings = complete_bindings(validate_bindings(&snapshot.bindings));
         self.folder_sorts.clear();
         self.lru.clear();
         for (location, sort) in snapshot.folder_sorts.into_iter().take(FOLDER_SORT_LIMIT) {
@@ -306,6 +400,39 @@ mod tests {
         state.set_sort(location(1), SortSpec::default());
         assert!(!state.mark_saved(old));
         assert!(state.mark_saved(state.revision()));
+    }
+    #[test]
+    fn key_text_round_trips_and_unknown_text_is_rejected() {
+        for key in [Key::Character('N'), Key::Character('7'), Key::Up, Key::Down, Key::Left, Key::Right, Key::Return, Key::Delete, Key::Function(2), Key::Function(12)] {
+            assert_eq!(Key::parse(&key.as_text()), Some(key));
+        }
+        assert_eq!(Key::parse("Escape"), None);
+        assert_eq!(Key::parse(""), None);
+        assert!(!Key::Function(13).is_valid());
+        assert!(!Key::Character('n').is_valid());
+    }
+    #[test]
+    fn navigate_parent_defaults_to_command_up() {
+        assert_eq!(default_shortcut(ActionId::NavigateParent), Some(Shortcut::new(true, false, false, false, Key::Up)));
+    }
+    #[test]
+    fn an_unbound_action_stays_unbound_through_a_snapshot() {
+        let mut state = SettingsState::new();
+        assert!(state.update_binding(ActionBinding { action: ActionId::NewFolder, shortcut: None }));
+        assert_eq!(state.binding(ActionId::NewFolder), None);
+        let mut restored = SettingsState::new();
+        restored.apply(state.snapshot());
+        assert_eq!(restored.binding(ActionId::NewFolder), None);
+        assert_eq!(restored.binding(ActionId::CloseWindow), default_shortcut(ActionId::CloseWindow));
+    }
+    #[test]
+    fn a_missing_binding_uses_its_default_unless_that_default_is_taken() {
+        let taken = ActionBinding { action: ActionId::NewFolder, shortcut: default_shortcut(ActionId::CloseWindow) };
+        let mut state = SettingsState::new();
+        state.apply(SettingsSnapshot { bindings: vec![taken], ..SettingsSnapshot::default() });
+        assert_eq!(state.binding(ActionId::NewFolder), default_shortcut(ActionId::CloseWindow));
+        assert_eq!(state.binding(ActionId::CloseWindow), None);
+        assert_eq!(state.binding(ActionId::QuitApplication), default_shortcut(ActionId::QuitApplication));
     }
     #[test]
     fn fresh_profile_has_the_product_order() {

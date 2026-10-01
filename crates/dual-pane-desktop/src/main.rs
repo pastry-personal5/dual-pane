@@ -6,7 +6,7 @@ mod runtime;
 pub mod settings_storage;
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ fn main() -> ExitCode {
         let source: FolderItemsSource = Box::new(folder_items::read);
         source
     });
-    let settings_path = env::var_os("HOME").map(PathBuf::from).map(|home| home.join("Library/Application Support/Dual Pane/settings.sqlite3")).unwrap_or_else(|| PathBuf::from("/tmp/dual-pane-settings.sqlite3"));
+    let settings_path = env::var_os("HOME").map(|home| settings_storage::application_support_database_path(Path::new(&home)));
     let screenshots_exists = env::var_os("HOME").map(PathBuf::from).is_some_and(|home| home.join("Documents/Screenshots").is_dir());
     let startup = BrowserStartup { location, home, screenshots_exists, settings_path, source_factory };
     let status = folder_items_list_model::ffi::run_desktop(Box::new(startup));

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dual_pane_application::Output;
+use dual_pane_application::{Output, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, Selection, TabId};
 
 /// What a Browser shows. Rows are formatted when requested, so updating the view
@@ -16,6 +16,25 @@ pub struct BrowserViewModel {
     selected_row: Option<usize>,
     scroll_hint: Option<(EntryName, i32)>,
     folder_items_revision: u64,
+    /// How this revision's rows differ from the previous revision's, or
+    /// `None` when every row must be treated as replaced.
+    folder_items_delta: Option<Vec<RowChange>>,
+}
+
+/// How a list showing one revision of a Browser's Folder Items moves to a
+/// newer one. Row ranges are inclusive `(first, last)` pairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderItemsUpdate {
+    Unchanged,
+    /// Replace every row.
+    Reset,
+    /// Rows `changed` keep their position but show new content. Then either
+    /// `inserted` rows are added or `removed` rows are taken away.
+    Rows {
+        changed: Option<(usize, usize)>,
+        inserted: Option<(usize, usize)>,
+        removed: Option<(usize, usize)>,
+    },
 }
 
 /// One displayed row.
@@ -83,6 +102,27 @@ impl BrowserViewModel {
     pub(crate) fn entry(&self, index: usize) -> Option<&Entry> {
         self.entries.get(index)
     }
+
+    /// The smallest update that turns a list showing `shown` into one showing
+    /// `self`. Anything other than the single next revision of a same-folder
+    /// reload is a reset.
+    pub fn update_from(&self, shown: &BrowserViewModel) -> FolderItemsUpdate {
+        if self.folder_items_revision == shown.folder_items_revision {
+            return FolderItemsUpdate::Unchanged;
+        }
+        if self.folder_items_revision != shown.folder_items_revision.wrapping_add(1) {
+            return FolderItemsUpdate::Reset;
+        }
+        match self.folder_items_delta.as_deref() {
+            Some([]) if shown.row_count() == self.row_count() => FolderItemsUpdate::Unchanged,
+            Some([change]) if change.row + change.removed <= shown.row_count() && shown.row_count() - change.removed + change.inserted == self.row_count() => {
+                let RowChange { row, removed, inserted } = *change;
+                let common = removed.min(inserted);
+                FolderItemsUpdate::Rows { changed: (common > 0).then(|| (row, row + common - 1)), inserted: (inserted > removed).then(|| (row + removed, row + inserted - 1)), removed: (removed > inserted).then(|| (row + inserted, row + removed - 1)) }
+            }
+            _ => FolderItemsUpdate::Reset,
+        }
+    }
 }
 
 /// Keeps a [`BrowserViewModel`] up to date from application outputs.
@@ -91,6 +131,11 @@ pub struct BrowserPresenter {
     browser: BrowserSide,
     active_tab: Option<TabId>,
     view: BrowserViewModel,
+    /// The active tab's announced row change, applied with its listing.
+    pending_changes: Option<Vec<RowChange>>,
+    /// The folder whose Folder Items are shown. A row change is kept only for
+    /// a reload of this folder; another folder's listing replaces every row.
+    shown_location: Option<Location>,
 }
 
 impl Default for BrowserPresenter {
@@ -101,7 +146,7 @@ impl Default for BrowserPresenter {
 
 impl BrowserPresenter {
     pub fn new(browser: BrowserSide) -> Self {
-        Self { browser, active_tab: None, view: BrowserViewModel::default() }
+        Self { browser, active_tab: None, view: BrowserViewModel::default(), pending_changes: None, shown_location: None }
     }
 
     pub fn view(&self) -> &BrowserViewModel {
@@ -111,7 +156,7 @@ impl BrowserPresenter {
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
             Output::LoadingStarted { browser, .. } | Output::FolderItemsReplaced { browser, .. } | Output::FolderItemsRowsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } => *browser,
-            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } => return,
+            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } => return,
         };
         if output_browser != self.browser {
             return;
@@ -125,7 +170,7 @@ impl BrowserPresenter {
                 self.active_tab = Some(*tab);
             }
             Output::ActiveBrowserChanged { .. } => {}
-            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } => {}
+            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } => {}
         }
         match output {
             Output::TabViewChanged { location, entries, selection, row, scroll_hint, loading, error, .. } => {
@@ -138,6 +183,9 @@ impl BrowserPresenter {
                 self.view.error = error.as_ref().map(error_message);
                 self.view.status_text = if *loading { "Loading…".to_owned() } else { self.view.error.clone().unwrap_or_else(|| self.view.location_text.clone()) };
                 self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
+                self.view.folder_items_delta = None;
+                self.pending_changes = None;
+                self.shown_location = location.clone();
             }
             Output::LoadingStarted { .. } => {
                 self.view.loading = true;
@@ -152,8 +200,11 @@ impl BrowserPresenter {
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
                 self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
+                let changes = self.pending_changes.take();
+                self.view.folder_items_delta = changes.filter(|_| self.shown_location.as_ref() == Some(location));
+                self.shown_location = Some(location.clone());
             }
-            Output::FolderItemsRowsChanged { .. } => {}
+            Output::FolderItemsRowsChanged { changes, .. } => self.pending_changes = Some(changes.clone()),
             Output::SelectionChanged { selection, row, .. } => {
                 self.view.selection = selection.clone();
                 self.view.selected_row = *row;
@@ -168,7 +219,7 @@ impl BrowserPresenter {
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
             }
-            Output::ActiveBrowserChanged { .. } | Output::ActiveTabChanged { .. } | Output::TabsChanged { .. } | Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } => {}
+            Output::ActiveBrowserChanged { .. } | Output::ActiveTabChanged { .. } | Output::TabsChanged { .. } | Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } => {}
         }
     }
 }

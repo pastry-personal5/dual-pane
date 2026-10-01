@@ -1,0 +1,163 @@
+//! Generated command and result sequences must preserve the workspace's
+//! structural invariants, whatever order results arrive in.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use dual_pane_application::{Command, Event, Input, SettingsSnapshot, WorkRequest, Workspace};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingErrorKind, Location, RequestToken, SortDirection, SortField, SortSpec, TabId};
+use proptest::prelude::*;
+
+#[derive(Debug, Clone)]
+enum Op {
+    Navigate(bool, u8),
+    Deliver { pick: usize, mask: u8, fail: bool },
+    NewTab(bool),
+    CloseTab(bool, usize),
+    ActivateTab(bool, usize),
+    ReorderTab(bool, usize, usize),
+    Back(bool),
+    Forward(bool),
+    Refresh(bool),
+    Sort(u8, bool),
+    Select(bool, usize),
+    Toggle(bool, usize),
+    Range(bool, usize),
+    Secondary(bool, usize),
+    SelectAll(bool),
+    Clear(bool),
+    Parent(bool),
+}
+
+fn op() -> impl Strategy<Value = Op> {
+    prop_oneof![(any::<bool>(), 0..4u8).prop_map(|(left, folder)| Op::Navigate(left, folder)), (any::<usize>(), any::<u8>(), any::<bool>()).prop_map(|(pick, mask, fail)| Op::Deliver { pick, mask, fail }), (any::<usize>(), any::<u8>(), any::<bool>()).prop_map(|(pick, mask, fail)| Op::Deliver { pick, mask, fail }), any::<bool>().prop_map(Op::NewTab), (any::<bool>(), any::<usize>()).prop_map(|(left, pick)| Op::CloseTab(left, pick)), (any::<bool>(), any::<usize>()).prop_map(|(left, pick)| Op::ActivateTab(left, pick)), (any::<bool>(), any::<usize>(), 0..6usize).prop_map(|(left, pick, position)| Op::ReorderTab(left, pick, position)), any::<bool>().prop_map(Op::Back), any::<bool>().prop_map(Op::Forward), any::<bool>().prop_map(Op::Refresh), (0..4u8, any::<bool>()).prop_map(|(folder, descending)| Op::Sort(folder, descending)), (any::<bool>(), any::<usize>()).prop_map(|(left, row)| Op::Select(left, row)), (any::<bool>(), any::<usize>()).prop_map(|(left, row)| Op::Toggle(left, row)), (any::<bool>(), any::<usize>()).prop_map(|(left, row)| Op::Range(left, row)), (any::<bool>(), any::<usize>()).prop_map(|(left, row)| Op::Secondary(left, row)), any::<bool>().prop_map(Op::SelectAll), any::<bool>().prop_map(Op::Clear), any::<bool>().prop_map(Op::Parent),]
+}
+
+fn side(left: bool) -> BrowserSide {
+    if left { BrowserSide::Left } else { BrowserSide::Right }
+}
+fn folder(index: u8) -> Location {
+    Location::root().join(&EntryName::new(format!("folder-{index}")).unwrap())
+}
+fn entries(mask: u8) -> Arc<[Entry]> {
+    ["a", "b", "c", "d"].iter().enumerate().filter(|(bit, _)| mask & (1 << bit) != 0).map(|(_, name)| Entry::new(EntryName::new(*name).unwrap(), EntryKind::File)).collect()
+}
+
+/// Every read the workspace requested, and which one each tab still awaits.
+#[derive(Default)]
+struct Reads {
+    issued: Vec<(BrowserSide, TabId, RequestToken)>,
+    live: HashMap<(BrowserSide, TabId), RequestToken>,
+}
+
+impl Reads {
+    fn record(&mut self, work: &[WorkRequest]) {
+        for request in work {
+            match request {
+                WorkRequest::ReadDirectory { browser, tab, token, .. } => {
+                    self.issued.push((*browser, *tab, *token));
+                    self.live.insert((*browser, *tab), *token);
+                }
+                WorkRequest::Cancel { browser, tab, token } => {
+                    if self.live.get(&(*browser, *tab)) == Some(token) {
+                        self.live.remove(&(*browser, *tab));
+                    }
+                }
+                WorkRequest::SaveSettings { .. } => {}
+            }
+        }
+    }
+}
+
+type Visible = (Option<Location>, Vec<Entry>, Vec<EntryName>);
+fn visible(workspace: &Workspace, browser: BrowserSide) -> Visible {
+    (workspace.location(browser).cloned(), workspace.entries(browser).to_vec(), workspace.selection(browser).entries().to_vec())
+}
+
+fn row_command(workspace: &Workspace, browser: BrowserSide, row: usize, make: fn(BrowserSide, usize, EntryName) -> Command) -> Option<Command> {
+    let shown = workspace.entries(browser);
+    let row = row.checked_rem(shown.len())?;
+    Some(make(browser, row, shown[row].name().clone()))
+}
+
+fn command(workspace: &Workspace, op: &Op) -> Option<Command> {
+    let pick = |browser: BrowserSide, index: usize| {
+        let tabs = workspace.tabs(browser).collect::<Vec<_>>();
+        tabs[index % tabs.len()]
+    };
+    Some(match *op {
+        Op::Navigate(left, index) => Command::Navigate { browser: side(left), location: folder(index) },
+        Op::NewTab(left) => Command::NewTab { browser: side(left) },
+        Op::CloseTab(left, index) => Command::CloseTab { browser: side(left), tab: pick(side(left), index) },
+        Op::ActivateTab(left, index) => Command::ActivateTab { browser: side(left), tab: pick(side(left), index) },
+        Op::ReorderTab(left, index, position) => Command::ReorderTab { browser: side(left), tab: pick(side(left), index), position },
+        Op::Back(left) => Command::GoBack { browser: side(left) },
+        Op::Forward(left) => Command::GoForward { browser: side(left) },
+        Op::Refresh(left) => Command::Refresh { browser: side(left) },
+        Op::Sort(index, descending) => Command::SetSort { location: folder(index), sort: SortSpec::new(SortField::Name, if descending { SortDirection::Descending } else { SortDirection::Ascending }) },
+        Op::Select(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::SelectEntry { browser, row, name }),
+        Op::Toggle(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::ToggleEntry { browser, row, name }),
+        Op::Range(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::SelectRange { browser, row, name }),
+        Op::Secondary(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::SecondarySelect { browser, row, name }),
+        Op::SelectAll(left) => Command::SelectAll { browser: side(left) },
+        Op::Clear(left) => Command::ClearSelection { browser: side(left) },
+        Op::Parent(left) => Command::GoToParent { browser: side(left) },
+        Op::Deliver { .. } => return None,
+    })
+}
+
+fn check_structure(workspace: &Workspace) -> Result<(), TestCaseError> {
+    for browser in [BrowserSide::Left, BrowserSide::Right] {
+        let tabs = workspace.tabs(browser).collect::<Vec<_>>();
+        prop_assert!(!tabs.is_empty());
+        prop_assert!(tabs.contains(&workspace.active_tab(browser)));
+        let mut unique = tabs.clone();
+        unique.sort();
+        unique.dedup();
+        prop_assert_eq!(unique.len(), tabs.len());
+        let shown = workspace.entries(browser).iter().map(|entry| entry.name().clone()).collect::<Vec<_>>();
+        for selected in workspace.selection(browser).entries() {
+            prop_assert!(shown.contains(selected), "selection names a Folder Item that is not shown");
+        }
+    }
+    let left = workspace.tabs(BrowserSide::Left).collect::<Vec<_>>();
+    prop_assert!(workspace.tabs(BrowserSide::Right).all(|tab| !left.contains(&tab)), "tab identities are shared between Browsers");
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn generated_sequences_preserve_workspace_invariants(loaded in any::<bool>(), ops in proptest::collection::vec(op(), 1..80)) {
+        let mut workspace = Workspace::new();
+        let mut reads = Reads::default();
+        if loaded {
+            let transition = workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+            reads.record(&transition.work);
+        }
+        for op in &ops {
+            if let Op::Deliver { pick, mask, fail } = *op {
+                if reads.issued.is_empty() {
+                    continue;
+                }
+                let (browser, tab, token) = reads.issued[pick % reads.issued.len()];
+                let live = reads.live.get(&(browser, tab)) == Some(&token);
+                let before = (visible(&workspace, BrowserSide::Left), visible(&workspace, BrowserSide::Right));
+                let event = if fail { Event::FolderItemsFailed { browser, tab, token, kind: ListingErrorKind::ItemMissing } } else { Event::FolderItemsLoaded { browser, tab, token, entries: entries(mask) } };
+                let transition = workspace.handle(Input::from(event));
+                reads.record(&transition.work);
+                if live {
+                    reads.live.remove(&(browser, tab));
+                } else {
+                    prop_assert!(transition.outputs.is_empty(), "a stale result produced output");
+                    prop_assert_eq!(&before, &(visible(&workspace, BrowserSide::Left), visible(&workspace, BrowserSide::Right)), "a stale result changed the workspace");
+                }
+            } else if let Some(command) = command(&workspace, op) {
+                let transition = workspace.handle(command.into());
+                reads.record(&transition.work);
+            }
+            check_structure(&workspace)?;
+        }
+    }
+}

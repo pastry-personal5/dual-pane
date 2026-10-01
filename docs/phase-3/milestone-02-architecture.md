@@ -35,6 +35,8 @@ Persisted `ActionId` values are stable ASCII UpperCamelCase compatibility keys. 
 
 P3-M6 [supersedes the `CloseWindow` default binding](milestone-06-architecture.md#widgets-focus-and-visible-state) when it delivers `CloseTab`: migrate the workspace `Command+W` binding to the new action, retain the `CloseWindow` ID and meaning, and preserve other valid nonconflicting overrides.
 
+Superseded in part on 2026-10-02 by [schema version 2](changelog.md#2026-10-02--pre-m6-review-fixes): normalized keys can name arrow, Return, Delete, and function keys, so the stored `NavigateParent` default is its current `Command+Up` binding; a stored NULL key means a deliberately unbound action, and unknown key text falls back to the default for that action only.
+
 Saved shortcuts are application-owned normalized modifier/key values rather than Qt or localized strings. An `ActionId` is never localized, renamed, or reused for a different meaning; UI labels are separate presentation data. Loading validates each override independently, rejects unknown IDs, malformed or platform-reserved shortcuts, and collisions among actions active in the same context. A binding for an action that has no delivered command remains inert until that action is delivered. The [planned editor behavior](../ux-gui.md#future-shortcut-editor) uses these values and dispatches through the existing command boundary.
 
 ## Favorites hierarchy

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, InputController, UiEvent};
-use dual_pane_application::{Command, Input, Workspace};
+use dual_pane_application::{Command, Event, Input, SettingsFailure, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Location};
 
 use crate::runtime::{FolderItemsSourceFactory, Runtime, WorkRunner};
@@ -15,6 +15,10 @@ pub const DRAIN_SLICE: usize = 32;
 
 /// How long one drain may spend handling events before yielding to Qt.
 pub const DRAIN_TIME_BUDGET: Duration = Duration::from_millis(4);
+
+/// How long quitting may wait for the final settings save after the Qt event
+/// loop has exited.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionMovement {
@@ -28,7 +32,8 @@ pub struct BrowserStartup {
     pub location: Location,
     pub home: Location,
     pub screenshots_exists: bool,
-    pub settings_path: PathBuf,
+    /// Where settings persist, or `None` when no user location is known.
+    pub settings_path: Option<PathBuf>,
     pub source_factory: FolderItemsSourceFactory,
 }
 
@@ -58,7 +63,24 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         if let Some(worker) = &settings_worker {
             worker.submit(SettingsJob::Load);
         }
-        Self { workspace: Workspace::with_context(home, screenshots_exists), controller: InputController::new(), left: BrowserPresenter::new(BrowserSide::Left), right: BrowserPresenter::new(BrowserSide::Right), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false }
+        let missing_worker = settings_worker.is_none();
+        let mut session = Self { workspace: Workspace::with_context(home, screenshots_exists), controller: InputController::new(), left: BrowserPresenter::new(BrowserSide::Left), right: BrowserPresenter::new(BrowserSide::Right), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false };
+        if missing_worker {
+            session.submit(Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable });
+        }
+        session
+    }
+
+    /// Flushes unsaved settings and waits at most `timeout` for them to reach
+    /// storage. Dropping the runtime then cancels outstanding reads.
+    pub fn shutdown(self, timeout: Duration) {
+        let final_save = match self.workspace.final_settings_save() {
+            Some(WorkRequest::SaveSettings { revision, snapshot }) => Some((revision, snapshot)),
+            _ => None,
+        };
+        if let Some(worker) = self.settings_worker {
+            worker.shutdown(final_save, timeout);
+        }
     }
 
     pub fn start(&mut self, location: Location) {
@@ -75,13 +97,9 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                 self.right.apply(output);
             }
             for request in transition.work {
-                if let dual_pane_application::WorkRequest::SaveSettings { revision, snapshot } = request {
-                    if let Some(worker) = &self.settings_worker {
-                        if !worker.submit(SettingsJob::Save { revision, snapshot }) {
-                            inputs.push_back(dual_pane_application::Event::SettingsSaveFailed { revision }.into());
-                        }
-                    } else {
-                        inputs.push_back(dual_pane_application::Event::SettingsSaveFailed { revision }.into());
+                if let WorkRequest::SaveSettings { revision, snapshot } = request {
+                    if !self.settings_worker.as_ref().is_some_and(|worker| worker.submit(SettingsJob::Save { revision, snapshot })) {
+                        inputs.push_back(Event::SettingsSaveFailed { revision }.into());
                     }
                 } else if let Some(event) = self.runner.dispatch(request) {
                     inputs.push_back(event.into());
@@ -133,9 +151,13 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         if let Some(worker) = &self.settings_worker {
             for result in worker.take_results() {
                 match result {
-                    SettingsResult::Loaded(snapshot) => self.submit(dual_pane_application::Event::SettingsLoaded { snapshot }),
-                    SettingsResult::Saved { revision } => self.submit(dual_pane_application::Event::SettingsSaved { revision }),
-                    SettingsResult::Failed(_) | SettingsResult::Reset { .. } => self.submit(dual_pane_application::Event::SettingsSaveFailed { revision: 0 }),
+                    SettingsResult::Loaded(snapshot) => self.submit(Event::SettingsLoaded { snapshot }),
+                    SettingsResult::LoadFailed(error) => self.submit(Event::SettingsLoadFailed { failure: error.failure() }),
+                    SettingsResult::Saved { revision } => self.submit(Event::SettingsSaved { revision }),
+                    SettingsResult::SaveFailed { revision, .. } => self.submit(Event::SettingsSaveFailed { revision }),
+                    // Nothing submits a reset until P3-M6 adds its confirmed
+                    // recovery flow, which also reloads the fresh settings.
+                    SettingsResult::Reset { .. } | SettingsResult::ResetFailed(_) => {}
                 }
             }
         }
@@ -396,5 +418,67 @@ mod tests {
         let new = session.workspace.active_tab(BrowserSide::Left);
         assert_ne!(old, new);
         assert!(matches!(session.runner.dispatched.last(), Some(WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, location, .. }) if *tab == new && *location == home));
+    }
+
+    mod stored_settings {
+        use super::*;
+        use crate::settings_storage::{SettingsDatabase, SettingsWorker};
+        use dual_pane_application::{FavoriteGroupRecord, FavoritesRecords, SettingsSnapshot, SettingsStatus, default_bindings};
+
+        fn stored_database() -> (tempfile::TempDir, PathBuf) {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("settings.sqlite3");
+            let favorites = FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 7, name: "Work".into(), position: 0 }], items: vec![] };
+            SettingsDatabase::open(&path).unwrap().save(&SettingsSnapshot { bindings: default_bindings(), folder_sorts: vec![], favorites }).unwrap();
+            (directory, path)
+        }
+        fn session(path: &std::path::Path) -> WorkspaceSession<FakeRunner> {
+            WorkspaceSession::with_settings(FakeRunner::default(), Location::root(), false, Some(SettingsWorker::start(path.to_path_buf()).unwrap()), DRAIN_SLICE, DRAIN_TIME_BUDGET)
+        }
+        fn drain_until_settled(session: &mut WorkspaceSession<FakeRunner>) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while session.workspace.settings_status() == SettingsStatus::Loading {
+                assert!(Instant::now() < deadline, "settings never settled");
+                session.drain();
+                std::thread::yield_now();
+            }
+        }
+        fn stored_groups(path: &std::path::Path) -> Vec<String> {
+            SettingsDatabase::open(path).unwrap().load().unwrap().favorites.groups.into_iter().map(|group| group.name).collect()
+        }
+        fn sort_click(session: &mut WorkspaceSession<FakeRunner>) {
+            session.submit(Command::SetSort { location: Location::root(), sort: SortSpec::new(dual_pane_domain::SortField::Size, dual_pane_domain::SortDirection::Ascending) });
+        }
+
+        #[test]
+        fn a_failed_load_never_overwrites_the_stored_database() {
+            let (_directory, path) = stored_database();
+            rusqlite::Connection::open(&path).unwrap().execute("UPDATE action_binding SET command = 'damaged' WHERE action = 'NewFolder'", []).unwrap();
+            let mut session = session(&path);
+            drain_until_settled(&mut session);
+            assert!(matches!(session.workspace.settings_status(), SettingsStatus::LoadFailed(SettingsFailure::Corrupt)));
+            sort_click(&mut session);
+            session.shutdown(Duration::from_secs(10));
+            let damaged: String = rusqlite::Connection::open(&path).unwrap().query_row("SELECT command FROM action_binding WHERE action = 'NewFolder'", [], |row| row.get(0)).unwrap();
+            assert_eq!(damaged, "damaged");
+        }
+
+        #[test]
+        fn a_choice_made_before_the_load_result_is_saved_over_the_stored_settings() {
+            let (_directory, path) = stored_database();
+            let mut session = session(&path);
+            sort_click(&mut session);
+            drain_until_settled(&mut session);
+            session.shutdown(Duration::from_secs(10));
+            assert_eq!(stored_groups(&path), ["Work"]);
+            let sorts = SettingsDatabase::open(&path).unwrap().load().unwrap().folder_sorts;
+            assert_eq!(sorts, vec![(Location::root(), SortSpec::new(dual_pane_domain::SortField::Size, dual_pane_domain::SortDirection::Ascending))]);
+        }
+
+        #[test]
+        fn a_session_without_storage_settles_as_failed() {
+            let session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+            assert_eq!(session.workspace.settings_status(), SettingsStatus::LoadFailed(SettingsFailure::WorkerUnavailable));
+        }
     }
 }

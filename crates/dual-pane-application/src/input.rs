@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::SettingsSnapshot;
+use crate::{FavoriteProbeOutcome, SettingsFailure, SettingsSnapshot};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingErrorKind, Location, RequestToken, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,10 +50,11 @@ pub enum Event {
     FolderItemsLoaded { browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]> },
     FolderItemsFailed { browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind },
     FolderItemsCancelled { browser: BrowserSide, tab: TabId, token: RequestToken },
-    FavoriteTargetProbed { item_id: i64, target: Location, available: bool },
+    FavoriteTargetProbed { item_id: i64, target: Location, outcome: FavoriteProbeOutcome },
     SettingsSaved { revision: u64 },
     SettingsSaveFailed { revision: u64 },
     SettingsLoaded { snapshot: SettingsSnapshot },
+    SettingsLoadFailed { failure: SettingsFailure },
 }
 impl From<Command> for Input {
     fn from(value: Command) -> Self {

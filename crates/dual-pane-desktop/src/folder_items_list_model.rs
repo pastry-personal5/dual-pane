@@ -2,11 +2,11 @@ use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
 
 use cxx_qt::CxxQtType;
-use cxx_qt_lib::{QModelIndex, QString, QVariant};
-use dual_pane_adapters::{BrowserViewModel, UiEvent, reader_start_failure_status};
+use cxx_qt_lib::{QList, QModelIndex, QString, QVariant};
+use dual_pane_adapters::{BrowserViewModel, FolderItemsUpdate, UiEvent, reader_start_failure_status};
 use dual_pane_domain::BrowserSide;
 
-use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, WorkspaceSession};
+use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
 use crate::runtime::Runtime;
 use crate::settings_storage::SettingsWorker;
 
@@ -20,11 +20,15 @@ pub mod ffi {
         type QString = cxx_qt_lib::QString;
         include!("cxx-qt-lib/qvariant.h");
         type QVariant = cxx_qt_lib::QVariant;
+        include!("cxx-qt-lib/qlist.h");
+        type QList_i32 = cxx_qt_lib::QList<i32>;
         include!(<QtCore/QAbstractListModel>);
         type QAbstractListModel;
     }
     extern "Rust" {
         type BrowserStartup;
+        /// Flushes settings after the Qt event loop exits; see [`super::shutdown_desktop`].
+        fn shutdown_desktop();
     }
     unsafe extern "C++" {
         include!("dual_pane_desktop/desktop_window.hpp");
@@ -50,6 +54,24 @@ pub mod ffi {
         #[inherit]
         #[cxx_name = "endResetModel"]
         fn end_reset_model(self: Pin<&mut FolderItemsListModel>);
+        #[inherit]
+        #[cxx_name = "beginInsertRows"]
+        fn begin_insert_rows(self: Pin<&mut FolderItemsListModel>, parent: &QModelIndex, first: i32, last: i32);
+        #[inherit]
+        #[cxx_name = "endInsertRows"]
+        fn end_insert_rows(self: Pin<&mut FolderItemsListModel>);
+        #[inherit]
+        #[cxx_name = "beginRemoveRows"]
+        fn begin_remove_rows(self: Pin<&mut FolderItemsListModel>, parent: &QModelIndex, first: i32, last: i32);
+        #[inherit]
+        #[cxx_name = "endRemoveRows"]
+        fn end_remove_rows(self: Pin<&mut FolderItemsListModel>);
+        #[inherit]
+        fn index(self: &FolderItemsListModel, row: i32, column: i32, parent: &QModelIndex) -> QModelIndex;
+        #[inherit]
+        #[qsignal]
+        #[cxx_name = "dataChanged"]
+        fn data_changed(self: Pin<&mut FolderItemsListModel>, top_left: &QModelIndex, bottom_right: &QModelIndex, roles: &QList_i32);
         fn start(self: Pin<&mut FolderItemsListModel>, startup: Box<BrowserStartup>);
         fn set_right_browser(self: Pin<&mut FolderItemsListModel>);
         fn refresh(self: Pin<&mut FolderItemsListModel>);
@@ -70,6 +92,20 @@ const DISPLAY_ROLE: i32 = 0;
 static SESSION: OnceLock<Mutex<Option<WorkspaceSession>>> = OnceLock::new();
 fn session() -> &'static Mutex<Option<WorkspaceSession>> {
     SESSION.get_or_init(|| Mutex::new(None))
+}
+
+/// Ends the session after the Qt event loop has exited: unsaved settings get
+/// a bounded flush, and outstanding reads are cancelled.
+fn shutdown_desktop() {
+    let session = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+    if let Some(session) = session {
+        session.shutdown(SHUTDOWN_TIMEOUT);
+    }
+}
+
+/// Converts an inclusive row range to Qt's `int` rows.
+fn qt_rows((first, last): (usize, usize)) -> Result<(i32, i32), std::num::TryFromIntError> {
+    Ok((i32::try_from(first)?, i32::try_from(last)?))
 }
 
 pub struct FolderItemsListModelRust {
@@ -102,7 +138,7 @@ impl ffi::FolderItemsListModel {
         match Runtime::start(source_factory, Box::new(ffi::schedule_gui_drain)) {
             Ok(runtime) => {
                 let mut guard = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                let settings = SettingsWorker::start_with_wake(settings_path, Box::new(ffi::schedule_gui_drain)).ok();
+                let settings = settings_path.and_then(|path| SettingsWorker::start_with_wake(path, Box::new(ffi::schedule_gui_drain)).ok());
                 let mut coordinator = WorkspaceSession::with_settings(runtime, home, screenshots_exists, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
                 coordinator.start(location);
                 *guard = Some(coordinator);
@@ -122,14 +158,9 @@ impl ffi::FolderItemsListModel {
         let Some(view) = view else {
             return;
         };
-        let folder_items_changed = self.rust().shown.folder_items_revision() != view.folder_items_revision();
-        if folder_items_changed {
-            self.as_mut().begin_reset_model();
-        }
-        self.as_mut().rust_mut().get_mut().shown = view;
-        if folder_items_changed {
-            self.as_mut().end_reset_model();
-        }
+        // The session lock is released, so Qt may call back into the model
+        // while these notifications are delivered.
+        self.as_mut().show(view);
         let selected = self.rust().shown.selected_row().and_then(|row| i32::try_from(row).ok()).unwrap_or(-1);
         self.as_mut().set_selected_row(selected);
         let status = self.rust().shown.status_text().to_owned();
@@ -137,6 +168,46 @@ impl ffi::FolderItemsListModel {
         let path = self.rust().shown.location_text().to_owned();
         self.as_mut().set_path_text(QString::from(path.as_str()));
         self.as_mut().set_folder_name(QString::from(path.rsplit('/').find(|part| !part.is_empty()).unwrap_or("/")));
+    }
+    /// Replaces the shown view, notifying Qt of only the rows that changed
+    /// when the new listing is a same-folder reload of the shown one.
+    fn show(mut self: Pin<&mut Self>, view: BrowserViewModel) {
+        let update = view.update_from(&self.rust().shown);
+        let FolderItemsUpdate::Rows { changed, inserted, removed } = update else {
+            let reset = update == FolderItemsUpdate::Reset;
+            if reset {
+                self.as_mut().begin_reset_model();
+            }
+            self.as_mut().rust_mut().get_mut().shown = view;
+            if reset {
+                self.as_mut().end_reset_model();
+            }
+            return;
+        };
+        let (Ok(changed), Ok(inserted), Ok(removed)) = (changed.map(qt_rows).transpose(), inserted.map(qt_rows).transpose(), removed.map(qt_rows).transpose()) else {
+            // Rows beyond Qt's `int` range cannot be addressed individually.
+            self.as_mut().begin_reset_model();
+            self.as_mut().rust_mut().get_mut().shown = view;
+            self.as_mut().end_reset_model();
+            return;
+        };
+        let root = QModelIndex::default();
+        if let Some((first, last)) = inserted {
+            self.as_mut().begin_insert_rows(&root, first, last);
+            self.as_mut().rust_mut().get_mut().shown = view;
+            self.as_mut().end_insert_rows();
+        } else if let Some((first, last)) = removed {
+            self.as_mut().begin_remove_rows(&root, first, last);
+            self.as_mut().rust_mut().get_mut().shown = view;
+            self.as_mut().end_remove_rows();
+        } else {
+            self.as_mut().rust_mut().get_mut().shown = view;
+        }
+        if let Some((first, last)) = changed {
+            let top_left = self.index(first, 0, &root);
+            let bottom_right = self.index(last, 0, &root);
+            self.as_mut().data_changed(&top_left, &bottom_right, &QList::default());
+        }
     }
     fn drain(mut self: Pin<&mut Self>) -> bool {
         let more = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut().is_some_and(WorkspaceSession::drain);
