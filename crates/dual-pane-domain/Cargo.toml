@@ -1,6 +1,6 @@
 [package]
 name = "dual-pane-domain"
-version = "1.0.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Platform-neutral file-manager values and policies for Dual Pane"

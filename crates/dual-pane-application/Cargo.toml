@@ -1,6 +1,6 @@
 [package]
 name = "dual-pane-application"
-version = "1.0.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Workspace state and use cases for Dual Pane"

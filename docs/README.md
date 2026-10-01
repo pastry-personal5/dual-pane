@@ -22,6 +22,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [archive/phases/phase-2/milestone-04-architecture.md](archive/phases/phase-2/milestone-04-architecture.md) | Completed P2-M4 pane-local listing runtime and verification approach. |
 | [archive/phases/phase-2/changelog.md](archive/phases/phase-2/changelog.md) | Completed Phase 2 owner decisions and plan changes. |
 | [release-notes/1.0.0.md](release-notes/1.0.0.md) | Concise release notes for version 1.0.0. |
+| [release-notes/2.0.0.md](release-notes/2.0.0.md) | Concise release notes for version 2.0.0. |
 | [archive/phases/phase-1/phase.md](archive/phases/phase-1/phase.md) | Completed Phase 1 goal, exit criteria, and milestones. |
 | [archive/phases/phase-1/milestone-02-overview.md](archive/phases/phase-1/milestone-02-overview.md) | Archived P1-M2 scope, checklist, and evidence for the Cargo/Qt Widgets stack spike. |
 | [archive/phases/phase-1/milestone-02-architecture.md](archive/phases/phase-1/milestone-02-architecture.md) | Archived P1-M2 workspace, bridge, Qt window, and implementation plan. |
