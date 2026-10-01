@@ -4,6 +4,15 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — P3-M6 interview decisions
+
+- Development continues with Claude Code. The owner commits changes; the agent does not commit or push unless asked. Codex's existing code is reviewed before P3-M6 implementation starts, and P3-M6 stays one milestone delivered in its four planned steps.
+- Verification uses automated tests first; the owner is notified when an automated check fails or cannot establish a checklist item. This replaces the earlier no-display exception question.
+- [Folder Items fields](../ux-gui.md#folder-items-fields-and-display): Type shows `[DIR]` for folders, `[LNK]` for every symbolic link, and otherwise the lowercase text after the last `.` (blank without one). Type sort uses that text, replacing P3-M5's kind-only key. Folders have a blank Size cell and are excluded from totals. Relative dates show `now` under one minute or in the future and `N min` under one hour; sizes below 1 KB show whole bytes.
+- The owner approved adding the `jiff` crate (MIT/Unlicense) to `dual-pane-adapters` for local-time Exact Date formatting.
+- [Browser Tabs](../ux-gui.md#browser-tabs-strip-and-navigation) shrink and elide without scrolling, with at most eight tabs per Browser; New Tab is disabled at the limit. The root folder is labeled with its volume name, falling back to `/`.
+- [Add Favorite Item](../ux-gui.md#sidebar-favorites) with an alias already in the group adds nothing and shows a brief inline “Already in this group” cue instead of a Notice.
+
 ## 2026-10-01 — P3-M6 second plan review
 
 - The owner kept the Path Edit Control read-only and outside keyboard traversal. Favorite name validation stays in the inline editor without adding a Notice; automatic removal of an unavailable Favorite Item adds a Notice naming it.
