@@ -4,6 +4,17 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-01 — P3-M6 second plan review
+
+- The owner kept the Path Edit Control read-only and outside keyboard traversal. Favorite name validation stays in the inline editor without adding a Notice; automatic removal of an unavailable Favorite Item adds a Notice naming it.
+- The P3-M6 plan now includes the settings worker's failed-open recovery path, typed storage failures, post-reset reload and stale-save invalidation, and multi-column row updates. Its native-verification item stays unchecked when no screen is available. The owner requested a note that a separate owner decision is needed on whether a documented no-display blocker may satisfy that item.
+
+## 2026-10-01 — P3-M6 plan review and owner decisions
+
+- The owner chose to show M6 storage and Favorites errors in Notices, with actionable storage errors opening Notices even at startup. M6 also delivers the P3-M2 explicit Reset Settings recovery UI; reset requires confirmation, preserves the failed database, and reports its outcome. Operation and restoration messages remain with P3-M8/P3-M9.
+- The owner chose to migrate the workspace `Command+W` binding from `CloseWindow` to the new `CloseTab` action while retaining both stable IDs and the `CloseWindow` meaning. A focused Notices window handles `Command+W` locally.
+- The [revised M6 plan](milestone-06-overview.md) adds typed Favorite edit rejections, stable-tab validation for delayed gestures, multi-column model work, launch probe sequencing, and direct native verification evidence.
+
 ## 2026-10-01 — P3-M5 review fixes
 
 - Pending navigation now receives refreshed sort and settings choices without losing its target; settings load refreshes each open tab once. Right-click preserves a missing range anchor, movement at a row boundary still collapses a multiple selection, and tab/history outputs expose the retained scroll hint.

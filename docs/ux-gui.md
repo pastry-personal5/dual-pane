@@ -81,6 +81,7 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 - Each Browser Tab shows its folder name. Its full path appears in a tooltip and accessibility text so repeated folder names remain distinguishable. Its borderless Close Tab Button appears only while that exact Browser Tab is hovered.
 - Back Button, Forward Button, and Up Button appear in that order at the left of Folder Pane Toolbar Row #3. Back and Forward follow the active tab's history; after Back, a new navigation discards its Forward history. `Option+Left Arrow` and `Option+Right Arrow` navigate Back and Forward when focus is outside text editing. Up navigates to the parent.
 - Browser Tab switching retains that tab's selection, cursor, and scroll. Back rereads the folder and restores the matching view state. History belongs to a tab and lasts only for the session.
+- The Path Edit Control continues to display the active tab's confirmed folder path. It remains read-only and outside keyboard focus traversal; typing a path does not navigate in Phase 3.
 - Under macOS Full Keyboard Access, focused Browser Tabs use arrow keys to move focus and Return to activate the focused tab. Focused buttons use standard Return or Space activation. Plain Tab remains reserved for Full Keyboard Access.
 
 ### Selection and file commands
@@ -90,7 +91,7 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 - Rename Item uses F2 and the Folder Items Context Menu, requires exactly one selected Item, and opens the inline Rename Item Editor. New Folder uses `Command+Shift+N` or the empty-space Folder Items Context Menu, targets the active tab's confirmed folder regardless of selection, and opens the inline New Folder Name Editor. A name collision or a name containing only whitespace keeps the corresponding editor open with an error, without overwriting or creating an Item. A successful edit closes the editor and refreshes affected open tabs.
 - Move to Trash uses `Command+Delete` or the Folder Items Context Menu. Delete Permanently uses `Option+Command+Delete` or that menu. Both require one or more selected Items and a confirmed source folder, and capture the selected targets when invoked; later selection or tab changes cannot retarget them. Delete Permanently opens a separate Permanent Delete Confirmation Window showing only the frozen target count. Cancel is the default; deletion requires explicit activation of Delete Permanently.
 - Activating exactly one regular file opens it with the default application. Activating a link to a regular file opens its target with the default application; Copy and Move act on the link. A link to a folder follows the [navigation rule](product-behavior.md#file-operation-safeguards). File activation requires a confirmed source folder. An opening failure appears in Notices, which opens to show it.
-- While the Path Edit Control or an inline name editor has keyboard focus, text editing takes priority and file-command shortcuts are suppressed until editing ends.
+- While an inline name editor has keyboard focus, text editing takes priority and file-command shortcuts are suppressed until editing ends.
 
 ### Operation Panels and decisions
 
@@ -101,6 +102,7 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 ### Notices and restoration feedback
 
 - Notices is an auxiliary window for nonblocking messages. Its Notices Button in the Main Toolbar reopens it. The Notices Startup Checkbox is default-unchecked and shows “Don’t show notices at startup”. `Command+W` closes Notices while it has focus. The [session recovery policy](product-behavior.md#session-recovery) defines startup opening, message suppression, session lifetime, and tab fallback.
+- P3-M6 shows storage and Favorite target-probe errors in Notices. Rejected Favorite name edits show an inline error without adding a Notice. When a completed launch probe removes an unavailable Favorite Item, Notices names the removed Item. An actionable storage failure opens Notices, including at launch, and offers Reset Settings with explicit confirmation and a visible outcome. The [settings storage contract](phase-3/milestone-02-architecture.md#storage-and-lifecycle) defines what reset preserves. Operation and restoration messages arrive in their later milestones.
 
 ### Automatic refresh
 

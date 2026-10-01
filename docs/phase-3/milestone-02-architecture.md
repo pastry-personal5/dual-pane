@@ -33,6 +33,8 @@ P3-M5 passes the effective `SortSpec` with each tokenized directory-read request
 
 Persisted `ActionId` values are stable ASCII UpperCamelCase compatibility keys. The action catalogue owns each ID, availability, default shortcut, and editor eligibility. Every catalogue action is seeded as a persistent binding on first database creation and when a migration adds that action. `NewFolder` defaults to `Command+Shift+N` but is unavailable until directory creation exists. Existing `FocusOtherBrowser`, `NavigateParent`, `CloseWindow`, and `QuitApplication` actions retain their current bindings. The eight `SortBy{Name|Type|Date|Size}{Ascending|Descending}` actions have no default keyboard shortcut.
 
+P3-M6 [supersedes the `CloseWindow` default binding](milestone-06-architecture.md#widgets-focus-and-visible-state) when it delivers `CloseTab`: migrate the workspace `Command+W` binding to the new action, retain the `CloseWindow` ID and meaning, and preserve other valid nonconflicting overrides.
+
 Saved shortcuts are application-owned normalized modifier/key values rather than Qt or localized strings. An `ActionId` is never localized, renamed, or reused for a different meaning; UI labels are separate presentation data. Loading validates each override independently, rejects unknown IDs, malformed or platform-reserved shortcuts, and collisions among actions active in the same context. A binding for an action that has no delivered command remains inert until that action is delivered. The [planned editor behavior](../ux-gui.md#future-shortcut-editor) uses these values and dispatches through the existing command boundary.
 
 ## Favorites hierarchy

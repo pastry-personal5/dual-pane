@@ -25,6 +25,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-3/milestone-04-architecture.md](phase-3/milestone-04-architecture.md) | P3-M4 sources of truth and P3-M5–P3-M10 implementation handoffs. |
 | [phase-3/milestone-05-overview.md](phase-3/milestone-05-overview.md) | P3-M5 scope and executable checklist for tabbed Qt-free workspace state, Favorites, sort, and refresh. |
 | [phase-3/milestone-05-architecture.md](phase-3/milestone-05-architecture.md) | P3-M5 ownership, state transitions, request routing, and implementation sequence. |
+| [phase-3/milestone-06-overview.md](phase-3/milestone-06-overview.md) | P3-M6 scope and executable checklist for the tabbed desktop interface, Favorites, sort, focus, and selection. |
+| [phase-3/milestone-06-architecture.md](phase-3/milestone-06-architecture.md) | P3-M6 projection, adapter, Qt Widgets, runtime, and verification approach. |
 | [phase-3/changelog.md](phase-3/changelog.md) | Phase 3 decisions and plan changes. |
 | [archive/phases/phase-2/phase-2.md](archive/phases/phase-2/phase-2.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |
 | [archive/phases/phase-2/milestone-01-overview.md](archive/phases/phase-2/milestone-01-overview.md) | Completed P2-M1 interaction-decision scope and acceptance evidence. |
