@@ -23,17 +23,18 @@ This tree shows the current crate boundaries and representative future homes. En
 .
 ├── Cargo.toml                         # virtual workspace manifest
 ├── Cargo.lock
+├── Makefile                           # build, run, format, lint, and test gate
 ├── crates/
 │   ├── dual-pane-domain/
 │   │   ├── Cargo.toml
 │   │   ├── src/
-│   │       └── lib.rs
+│   │   │   └── lib.rs
 │   │   └── tests/
 │   │       └── operation_policy.rs       # public domain behavior
 │   ├── dual-pane-application/
 │   │   ├── Cargo.toml
 │   │   ├── src/
-│   │       └── lib.rs
+│   │   │   └── lib.rs
 │   │   └── tests/
 │   │       ├── stale_listing_results.rs  # token and state behavior
 │   │       └── support/
@@ -41,7 +42,7 @@ This tree shows the current crate boundaries and representative future homes. En
 │   ├── dual-pane-adapters/
 │   │   ├── Cargo.toml
 │   │   ├── src/
-│   │       └── lib.rs
+│   │   │   └── lib.rs
 │   │   └── tests/
 │   │       └── presenter_output.rs       # translation without policy
 │   └── dual-pane-desktop/
@@ -53,13 +54,15 @@ This tree shows the current crate boundaries and representative future homes. En
 │       │   ├── browser_session.rs      # Qt-free: workspace, presenter, bounded drain
 │       │   ├── runtime.rs              # Qt-free: Browser-local directory-read workers, cancellation, GUI wake
 │       │   ├── folder_items.rs         # Qt-free: native directory reader and error mapping
-│       │   └── native_location.rs      # Qt-free: byte-exact Path and Location conversion
+│       │   ├── native_location.rs      # Qt-free: byte-exact Path and Location conversion
+│       │   └── settings_storage.rs     # Qt-free: SQLite settings driver and its serialized worker
 │       ├── cpp/                        # created with C++ Qt shim source
-│           ├── include/dual_pane_desktop/
-│           └── src/
+│       │   ├── include/dual_pane_desktop/
+│       │   └── src/
 │       └── tests/
 │           └── qt_window_smoke.rs       # only if desktop exposes a testable library API
 ├── docs/
+├── scripts/                           # C++ format, lint, and code-statistics helpers
 ├── AGENTS.md
 ├── README.md
 └── LICENSE
@@ -122,4 +125,4 @@ Test-only dependencies are dependencies for architecture purposes. A crate's `[d
 
 Each milestone that adds or extends a crate boundary adds the tests and fixtures that prove its new boundary rather than deferring test placement to a later cleanup. Package names and dependency directions are fixed by this document and [architecture.md](architecture.md).
 
-The conversion must preserve the architecture's verification rule: inner-crate tests run without Qt or macOS facilities, while Qt and native integration tests remain desktop-owned. The P1-M2 checklist must name the exact test or launch evidence for the stack spike and must not mark the milestone complete until the repository-wide gate in [AGENTS.md](../AGENTS.md) passes.
+Every such change preserves the architecture's verification rule: inner-crate tests run without Qt or macOS facilities, while Qt and native integration tests remain desktop-owned. A milestone that changes the layout is not complete until the repository-wide gate in [AGENTS.md](../AGENTS.md) passes.

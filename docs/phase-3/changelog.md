@@ -4,6 +4,12 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — Pre-M6 codebase and docs review
+
+- Hardening for paths P3-M6 and P3-M10 make frequent: a reload reconciles selection, cursor, anchor, and scroll hint against a set of present names, so refreshing a large selected folder is linear instead of quadratic. The settings worker writes a save queued before a `Load` first, so a load reports what storage holds; a confirmed `Reset` still discards saves queued before it. Neither path is reachable from the 2.0.0 window.
+- Reordering a tab to its current position is a no-op and emits no `TabsChanged`. Mapping a Folder Items gesture no longer clones the Browser view model. The C++ format and lint scripts also check `settings_glyph.hpp`.
+- Docs: the [architecture §5.2](../architecture.md#52-planned-desktop-execution-model) status note now describes the current reader lanes, its lane table renders, and the property-testing note names the approved `proptest`. Completed milestone architecture docs are marked Done, the [repository tree](../planned-repository-architecture.md#repository-layout-and-future-examples) is redrawn with `settings_storage.rs`, and the P3-M6 native-verification step matches the automated-first rule.
+
 ## 2026-10-02 — Item Icon Column
 
 - The owner added an [Item Icon Column](../ux-gui.md#folder-items-fields-and-display) as the first Folder Items column. It shows macOS native icons loaded off the GUI thread, has no header or sort buttons, and is the last column hidden as a Browser narrows. P3-M6 delivers it with the other columns.

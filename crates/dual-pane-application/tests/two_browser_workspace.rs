@@ -1,4 +1,4 @@
-use dual_pane_application::{Command, Event, FavoriteProbeOutcome, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
+use dual_pane_application::{Command, Event, FavoriteProbeOutcome, Output, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, SortDirection, SortField, SortSpec, TabId};
 use std::sync::Arc;
 
@@ -347,4 +347,31 @@ fn repeated_back_and_forward_while_loading_keep_moving() {
     load(&mut workspace, BrowserSide::Left, tab, token, vec![]);
     assert_eq!(workspace.location(BrowserSide::Left), Some(&location("b")));
     assert!(workspace.can_go_back(BrowserSide::Left) && workspace.can_go_forward(BrowserSide::Left));
+}
+
+#[test]
+fn a_refresh_keeps_present_selected_items_in_order_and_drops_missing_ones() {
+    let mut workspace = Workspace::new();
+    let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("folder") }.into()).work);
+    load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b"), entry("c")]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, row: 1, name: name("b") }.into());
+    workspace.handle(Command::SelectAll { browser: BrowserSide::Left }.into());
+    let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into()).work);
+    let refreshed = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("c"), entry("d")]) }.into());
+    assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("a"), name("c")]);
+    assert!(refreshed.outputs.contains(&Output::SelectionChanged { browser: BrowserSide::Left, tab, selection: workspace.selection(BrowserSide::Left).clone(), row: None }), "the missing cursor is cleared rather than moved");
+    assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, row: 2, name: name("d") }.into()).outputs.is_empty(), "the missing anchor is cleared");
+}
+
+#[test]
+fn reordering_a_tab_to_its_current_position_reports_nothing() {
+    let mut workspace = Workspace::new();
+    let (first, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("one") }.into()).work);
+    load(&mut workspace, BrowserSide::Left, first, token, vec![]);
+    let (second, _) = request(&workspace.handle(Command::NewTab { browser: BrowserSide::Left }.into()).work);
+    assert_eq!(workspace.handle(Command::ReorderTab { browser: BrowserSide::Left, tab: second, position: 1 }.into()), Default::default());
+    assert_eq!(workspace.handle(Command::ReorderTab { browser: BrowserSide::Left, tab: second, position: 9 }.into()), Default::default());
+    let moved = workspace.handle(Command::ReorderTab { browser: BrowserSide::Left, tab: second, position: 0 }.into());
+    assert_eq!(moved.outputs, vec![Output::TabsChanged { browser: BrowserSide::Left, active_tab: second }]);
+    assert_eq!(workspace.tabs(BrowserSide::Left).collect::<Vec<_>>(), vec![second, first]);
 }

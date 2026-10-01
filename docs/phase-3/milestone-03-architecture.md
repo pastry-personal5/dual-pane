@@ -1,6 +1,6 @@
 # P3-M3 architecture
 
-Status: Active
+Status: Done
 
 P3-M3 is a desktop-framework presentation refactor. It keeps the existing Folder Items model, application commands, runtime drain scheduling, and Browser-local selection intact.
 

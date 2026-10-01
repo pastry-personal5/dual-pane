@@ -1,7 +1,4 @@
 /// A field by which Folder Items can be ordered.
-///
-/// The domain intentionally defines all planned fields before the desktop
-/// renders their controls. P3-M2 only persists these values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SortField {
     Name,

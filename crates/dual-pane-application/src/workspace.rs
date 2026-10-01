@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{Command, Event, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoritesRecords, Input, Output, RowChange, SettingsFailure, SettingsState, SettingsStatus, WorkRequest, fresh_profile_favorites};
@@ -580,14 +581,17 @@ impl Workspace {
             state.current = Some(target);
         }
         let view = state.current.and_then(|i| state.history.get_mut(i)).expect("loaded history");
-        view.view.selection.retain(|name| entries.iter().any(|entry| entry.name() == name));
-        if view.view.cursor.as_ref().is_some_and(|name| !entries.iter().any(|e| e.name() == name)) {
+        // One lookup set keeps reconciling a large selection linear in the
+        // listing size on the GUI owner.
+        let present = entries.iter().map(Entry::name).collect::<HashSet<_>>();
+        view.view.selection.retain(|name| present.contains(name));
+        if view.view.cursor.as_ref().is_some_and(|name| !present.contains(name)) {
             view.view.cursor = None;
         }
-        if view.view.anchor.as_ref().is_some_and(|name| !entries.iter().any(|e| e.name() == name)) {
+        if view.view.anchor.as_ref().is_some_and(|name| !present.contains(name)) {
             view.view.anchor = None;
         }
-        if view.view.scroll.as_ref().is_some_and(|(name, _)| !entries.iter().any(|e| e.name() == name)) {
+        if view.view.scroll.as_ref().is_some_and(|(name, _)| !present.contains(name)) {
             view.view.scroll = None;
         }
         // A reload of the same folder reports its smallest change so the view

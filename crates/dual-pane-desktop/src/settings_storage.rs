@@ -368,6 +368,9 @@ impl WorkerState {
         };
         Ok(self.database.insert(database))
     }
+    fn save(&mut self, revision: u64, snapshot: &SettingsSnapshot) -> SettingsResult {
+        self.database().and_then(|database| database.save(snapshot)).map_or_else(|error| SettingsResult::SaveFailed { revision, error }, |()| SettingsResult::Saved { revision })
+    }
 }
 fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sender<SettingsResult>, wake: Box<dyn Fn() + Send>) {
     let send = |result| {
@@ -380,7 +383,14 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
         let mut next = Some(job);
         while let Some(job) = next.take() {
             match job {
-                SettingsJob::Load => send(state.database().and_then(|database| database.load()).map_or_else(SettingsResult::LoadFailed, SettingsResult::Loaded)),
+                SettingsJob::Load => {
+                    // A load reports what storage holds, so a save requested
+                    // before it must reach storage first.
+                    if let Some((revision, snapshot)) = latest.take() {
+                        send(state.save(revision, &snapshot));
+                    }
+                    send(state.database().and_then(|database| database.load()).map_or_else(SettingsResult::LoadFailed, SettingsResult::Loaded));
+                }
                 SettingsJob::Save { revision, snapshot } => latest = Some((revision, snapshot)),
                 SettingsJob::Quit { revision, snapshot } => {
                     latest = Some((revision, snapshot));
@@ -405,7 +415,7 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
             }
         }
         if let Some((revision, snapshot)) = latest {
-            send(state.database().and_then(|database| database.save(&snapshot)).map_or_else(|error| SettingsResult::SaveFailed { revision, error }, |()| SettingsResult::Saved { revision }));
+            send(state.save(revision, &snapshot));
         }
         if quitting {
             return;
@@ -521,6 +531,31 @@ mod tests {
         assert!(matches!(wait_for_results(&worker).as_slice(), [SettingsResult::Reset { .. }]));
         assert!(worker.submit(SettingsJob::Save { revision: 2, snapshot: SettingsState::new().snapshot() }));
         assert!(matches!(wait_for_results(&worker).as_slice(), [SettingsResult::Saved { revision: 2 }]));
+    }
+    fn sorted_snapshot() -> SettingsSnapshot {
+        let mut snapshot = SettingsState::new().snapshot();
+        snapshot.folder_sorts.push((non_utf8_location(), SortSpec::new(SortField::Type, SortDirection::Descending)));
+        snapshot
+    }
+    #[test]
+    fn a_load_after_a_queued_save_reports_the_saved_settings() {
+        let (_directory, path) = temp_database();
+        let worker = SettingsWorker::start(path).unwrap();
+        let snapshot = sorted_snapshot();
+        assert!(worker.submit(SettingsJob::Save { revision: 3, snapshot: snapshot.clone() }));
+        assert!(worker.submit(SettingsJob::Load));
+        let results = worker.shutdown(None, Duration::from_secs(10));
+        assert!(matches!(results.as_slice(), [SettingsResult::Saved { revision: 3 }, SettingsResult::Loaded(loaded)] if loaded.folder_sorts == snapshot.folder_sorts));
+    }
+    #[test]
+    fn a_reset_discards_saves_queued_before_it() {
+        let (_directory, path) = temp_database();
+        let worker = SettingsWorker::start(path).unwrap();
+        assert!(worker.submit(SettingsJob::Save { revision: 3, snapshot: sorted_snapshot() }));
+        assert!(worker.submit(SettingsJob::Reset));
+        assert!(worker.submit(SettingsJob::Load));
+        let results = worker.shutdown(None, Duration::from_secs(10));
+        assert!(matches!(results.as_slice(), [SettingsResult::Reset { .. }, SettingsResult::Loaded(loaded)] if loaded.folder_sorts.is_empty()));
     }
     fn stored_sorts(path: &Path) -> Vec<(Location, SortSpec)> {
         SettingsDatabase::open(path).unwrap().load().unwrap().folder_sorts

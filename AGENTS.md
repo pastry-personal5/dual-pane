@@ -43,7 +43,7 @@ The product and architecture decisions above leave no open items.
   export QMAKE="$(brew --prefix qt)/bin/qmake"
   ```
 
-P1-M2 requires Qt 6.11.2+ and dynamically links its Widgets framework through CXX-Qt.
+The desktop requires Qt 6.11.2+ and dynamically links its Widgets framework through CXX-Qt.
 
 ## Commands
 

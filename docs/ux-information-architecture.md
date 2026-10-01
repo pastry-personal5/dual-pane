@@ -26,7 +26,7 @@ The Standard Layout is the conceptual containment model for the dual-Browser win
   - Browser Divider
   - Right Browser, with the same Navigation Pane and Folder Pane structure
 
-The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider divides the Left Browser from the Right Browser. Each Browser owns its own location, Folder Items, selection, and active state. Browser Tabs Strip binds only to the current folder name; it does not create, close, switch, or retain history in this milestone. The Sidebar groups remain static and are not connected to persisted Favorites.
+The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider divides the Left Browser from the Right Browser. Each Browser owns its own location, Folder Items, selection, and active state. Browser Tabs Strip binds only to the current folder name; it does not yet create, close, switch, or retain history. The Sidebar groups remain static and are not connected to persisted Favorites.
 
 ## Planned Phase 3 containment
 

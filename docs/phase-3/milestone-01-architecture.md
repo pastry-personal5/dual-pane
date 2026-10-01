@@ -1,6 +1,6 @@
 # P3-M1 architecture
 
-Status: Active
+Status: Done
 
 This milestone is a naming and documentation migration. It keeps domain ownership, reducer behavior, runtime scheduling, and CXX-Qt composition unchanged.
 

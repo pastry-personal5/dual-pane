@@ -31,15 +31,21 @@ impl BrowserTabs {
         self.tabs.push(tab);
         self.active = tab;
     }
+    /// Moves `tab` to `position`, clamped to the end, and reports whether the
+    /// order changed.
     pub fn reorder(&mut self, tab: TabId, position: usize) -> bool {
         let Some(index) = self.tabs.iter().position(|item| *item == tab) else { return false };
+        let position = position.min(self.tabs.len() - 1);
+        if position == index {
+            return false;
+        }
         let tab = self.tabs.remove(index);
-        let position = position.min(self.tabs.len());
         self.tabs.insert(position, tab);
         true
     }
-    /// Removes a nonfinal tab and returns the tab that becomes active when the
-    /// removed tab was active. The final tab must be replaced by its caller.
+    /// Removes a nonfinal tab and returns the active tab afterwards. When the
+    /// removed tab was active, its right neighbor, or else its left neighbor,
+    /// becomes active. The final tab must be replaced by its caller.
     pub fn close(&mut self, tab: TabId) -> Option<TabId> {
         if self.tabs.len() == 1 {
             return None;
@@ -47,7 +53,7 @@ impl BrowserTabs {
         let index = self.tabs.iter().position(|item| *item == tab)?;
         self.tabs.remove(index);
         if self.active == tab {
-            self.active = self.tabs.get(index).copied().or_else(|| self.tabs.last().copied()).expect("nonempty after close");
+            self.active = self.tabs[index.min(self.tabs.len() - 1)];
         }
         Some(self.active)
     }
@@ -73,5 +79,27 @@ mod tests {
         assert_eq!(tabs.close(TabId::new(2)), Some(TabId::new(1)));
         assert!(tabs.replace_final(TabId::new(1), TabId::new(3)));
         assert_eq!(tabs.active(), TabId::new(3));
+    }
+
+    #[test]
+    fn reordering_reports_only_actual_moves() {
+        let mut tabs = BrowserTabs::new(TabId::new(1));
+        tabs.insert_active(TabId::new(2));
+        assert!(!tabs.reorder(TabId::new(2), 1));
+        assert!(!tabs.reorder(TabId::new(2), 7), "a position past the end clamps to the last slot");
+        assert!(!tabs.reorder(TabId::new(9), 0));
+        assert!(tabs.reorder(TabId::new(1), 7));
+        assert_eq!(tabs.tabs(), &[TabId::new(2), TabId::new(1)]);
+    }
+
+    #[test]
+    fn closing_the_active_tab_prefers_its_right_then_left_neighbor() {
+        let mut tabs = BrowserTabs::new(TabId::new(1));
+        tabs.insert_active(TabId::new(2));
+        tabs.insert_active(TabId::new(3));
+        tabs.activate(TabId::new(2));
+        assert_eq!(tabs.close(TabId::new(2)), Some(TabId::new(3)));
+        assert_eq!(tabs.close(TabId::new(3)), Some(TabId::new(1)));
+        assert_eq!(tabs.close(TabId::new(1)), None, "the final tab is replaced, not closed");
     }
 }

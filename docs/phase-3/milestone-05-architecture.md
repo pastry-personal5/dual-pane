@@ -1,6 +1,6 @@
 # P3-M5 architecture
 
-Status: Planned
+Status: Done
 
 P3-M5 replaces the current Browser-wide, single-selection listing state with a Qt-free tabbed Workspace. The application remains a pure reducer; native directory reads and settings writes remain outside it. The [overview checklist](milestone-05-overview.md#completion-checklist) defines acceptance.
 

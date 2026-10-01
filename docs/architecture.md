@@ -222,7 +222,7 @@ Locks, if the chosen runtime needs them, protect only driver-local mutable resou
 
 ### 5.2 Planned desktop execution model
 
-**Status: Planned.** This is the broader target beyond the current runtime, which has one supervised directory-read queue and worker per Browser. Each Browser holds at most one pending read behind its running read; a cancelled pending read can be replaced by the latest navigation request. It refines the required behavior above without selecting an executor, synchronization crate, pool-size value, or platform cancellation API.
+**Status: Planned.** This is the broader target beyond the current runtime, which serves each Browser's bounded directory-read admission queue with a fixed set of supervised reader lanes ([2026-10-02 changelog](phase-3/changelog.md#2026-10-02--pre-m6-review-fixes)). A cancelled queued read never runs, and a blocked read occupies only its own lane, so the Browser's other tabs keep loading while a lane is free; further reads stay queued and cancellable. It refines the required behavior above without selecting an executor, synchronization crate, pool-size value, or platform cancellation API.
 
 The runtime has a GUI-thread endpoint, a coordinator, finite worker capacity, and a GUI-bound result endpoint. The GUI endpoint is the only component that may call the controller, `Workspace::handle`, presenter, CXX-Qt bridge, Qt models, or widgets. Dispatch is an O(1), non-blocking handoff. Workers own only a job's copied request data, cancellation handle, gateway-local resources, and result publisher; they have no reference to workspace or presenter state, a GUI `QObject`, or a callable that can re-enter the GUI thread.
 
@@ -231,7 +231,7 @@ The runtime has a GUI-thread endpoint, a coordinator, finite worker capacity, an
 The runtime exposes logical execution lanes. An implementation may use separate pools or a shared physical pool only if it preserves the isolation, capacity, and scheduling guarantees in this table:
 
 | Lane | Work | Scheduling rule |
-|---|---|
+|---|---|---|
 | Foreground blocking I/O | Directory enumeration, metadata needed for visible rows, navigation, and other latency-sensitive reads. | Superseded Folder Items requests are cancelled before admission when possible. It has reserved service capacity so bulk operations and CPU work cannot occupy every slot. Provider and remote-volume calls have separate bounded allowances, so one blocked mount cannot consume all foreground capacity. |
 | File-operation I/O | Copy, move, rename, create, delete, source scans, and cancellation cleanup. | Fair progress with bounded parallelism. Dependent steps and writes with overlapping destination scopes are serialized by runtime-owned destination leases. A step releases its worker and lease before asking for a decision. |
 | CPU transformation | Sort, diff, checksum, and other computation over data already read. | Bounded independently from blocking I/O so CPU saturation cannot prevent a read or cancellation cleanup from starting. Long computations split into cancellable units. |
@@ -353,7 +353,7 @@ Logging is an outer concern. Structured operation context may be carried in appl
 
 Tests that touch a file system stay in a temporary directory. No test uses a real user path, and the domain, application, and adapter test suites require neither Qt nor macOS facilities.
 
-Property tests generate input sequences and check that invariants hold, for example: the cursor and selection always refer to the current Folder Items; only the latest token changes a tab's Folder Items; applying emitted row deltas to the old Folder Items yields the new Folder Items; an operation terminates exactly once and rejects decisions that are not pending; and a restored session equals the saved one apart from unrestorable tabs. A property-testing dev-dependency requires approval under [AGENTS.md](../AGENTS.md) when the first such test is written.
+Property tests generate input sequences and check that invariants hold, for example: the cursor and selection always refer to the current Folder Items; only the latest token changes a tab's Folder Items; applying emitted row deltas to the old Folder Items yields the new Folder Items; an operation terminates exactly once and rejects decisions that are not pending; and a restored session equals the saved one apart from unrestorable tabs. The domain and application crates use the approved `proptest` dev-dependency for them.
 
 ## 8. Deliberate non-decisions
 

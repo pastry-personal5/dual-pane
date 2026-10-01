@@ -16,7 +16,7 @@ use crate::browser_session::BrowserStartup;
 use crate::runtime::{FolderItemsSource, FolderItemsSourceFactory};
 fn main() -> ExitCode {
     let location = env::current_dir().ok().and_then(|path| native_location::location_from_path(&path)).unwrap_or_else(Location::root);
-    let home = env::var_os("HOME").and_then(|path| native_location::location_from_path(std::path::Path::new(&path))).unwrap_or_else(Location::root);
+    let home = env::var_os("HOME").and_then(|path| native_location::location_from_path(Path::new(&path))).unwrap_or_else(Location::root);
     let source_factory: FolderItemsSourceFactory = Arc::new(|| {
         let source: FolderItemsSource = Box::new(folder_items::read);
         source

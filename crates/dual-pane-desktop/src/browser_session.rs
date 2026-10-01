@@ -110,8 +110,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
 
     pub fn submit_ui(&mut self, browser: BrowserSide, event: UiEvent) {
         self.submit(Command::ActivateBrowser { browser });
-        let view = self.view(browser).clone();
-        if let Some(command) = self.controller.command(browser, event, &view) {
+        if let Some(command) = self.controller.command(browser, event, self.view(browser)) {
             self.submit(command);
         }
     }
