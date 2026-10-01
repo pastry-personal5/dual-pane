@@ -4,25 +4,48 @@ Status: Active
 
 The Standard Layout is the conceptual containment model for the dual-Browser window. It records structure only; visual and interaction rules are in [ux-gui.md](ux-gui.md), and it does not imply that every conceptual container has a separate Qt widget.
 
-## Standard Layout
+## Current Standard Layout (version 2.0.0)
 
 - Standard Layout
   - Sidebar
     - Drives Group with Drive Items
     - Favorites Groups containing Favorite Groups, each with Favorite Items
+    - flexible space
+    - Main Toolbar with Settings
   - Sidebar Splitter
   - Left Browser
     - Navigation Pane
-      - Browser Tabs (deferred)
+      - Browser Tabs Strip: label-only current-folder strip
       - Path Edit Control
     - Folder Pane
       - Folder Pane Toolbar Row #1: concise current folder name
-      - Folder Pane Toolbar Row #2: Up Button
+      - Folder Pane Toolbar Row #2: reserved Folder Items summary
+      - Folder Pane Toolbar Row #3: Up Button and sort controls
       - Folder Items List
       - Browser Status Bar
   - Browser Divider
   - Right Browser, with the same Navigation Pane and Folder Pane structure
 
-The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider divides the Left Browser from the Right Browser. Each Browser owns its own location, Folder Items, selection, and active state. Browser Tabs are part of the information architecture but remain deferred; the current Sidebar presents only static labels for its groups.
+The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider divides the Left Browser from the Right Browser. Each Browser owns its own location, Folder Items, selection, and active state. Browser Tabs Strip binds only to the current folder name; it does not create, close, switch, or retain history in this milestone. The Sidebar groups remain static and are not connected to persisted Favorites.
 
-The planned Favorites hierarchy has one level: the Favorites Groups container holds Favorite Groups, and each group holds Favorite Items. Groups do not nest. Group and item order is remembered during the session and across relaunches; the planned Sidebar interactions are in [ux-gui.md](ux-gui.md#sidebar-favorites).
+## Planned Phase 3 containment
+
+- Workspace window
+  - Sidebar
+    - Favorites Groups
+      - Favorite Group rows, each with Favorite Group Name, Favorite Group Menu Button, Add Favorite Item Button, and Favorite Items
+      - New Group Button below the group list
+    - Main Toolbar with Settings and Notices Button
+  - Left Browser and Right Browser
+    - Navigation Pane with Browser Tabs Strip, Browser Tabs, each tab's Close Tab Button, New Tab Button, and Path Edit Control
+    - Folder Pane
+      - Folder Pane Toolbar Rows #1 and #2
+      - Folder Pane Toolbar Row #3 with Back Button, Forward Button, Up Button, and sort controls
+      - Folder Items List and Folder Items Context Menu
+      - Browser Status Bar
+  - Operation Panel Strip below both Browsers, containing docked Operation Panels
+- Floating Operation Panels, each with Operation Progress Indicator, Cancel Operation Button, and any Operation Decision Card for its job
+- Notices auxiliary window with Notice entries and Notices Startup Checkbox
+- Permanent Delete Confirmation Window
+
+The Favorites hierarchy has one level: Favorites Groups contains Favorite Groups, and each group contains ordered Favorite Items. Groups do not nest. The Sidebar and Browser Tabs Strip above describe planned containment; the [GUI rules](ux-gui.md#planned-phase-3-gui-decisions) define their interactions.

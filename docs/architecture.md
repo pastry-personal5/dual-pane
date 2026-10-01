@@ -17,7 +17,7 @@ The architecture prioritizes the following, in order:
 
 The fixed technical constraints are Rust 2024; Qt 6.11.2+ Widgets; CXX-Qt (`cxx-qt`, `cxx-qt-lib`, and `cxx-qt-build`); Cargo-only builds; C++17 or newer; and macOS 26.7+ only. Qt is linked dynamically under LGPLv3. QML/Qt Quick, CMake, Corrosion, qmake project files, Windows or Linux support, a GUI-dependent core, and blocking work on the GUI thread are outside this design.
 
-Dual Pane runs as a single application window containing one workspace; there is no multi-window mode. It is built and run locally without notarization and without the App Sandbox, so file access is governed by ordinary permissions and macOS privacy (TCC) grants. Those grants are tied to the code signature and can be lost when a locally signed build changes, so a privacy denial is a routine, recoverable error rather than an edge case.
+Dual Pane has one workspace window; Notices and operation UI may occupy auxiliary windows, but there is no second workspace. It is built and run locally without notarization and without the App Sandbox, so file access is governed by ordinary permissions and macOS privacy (TCC) grants. Those grants are tied to the code signature and can be lost when a locally signed build changes, so a privacy denial is a routine, recoverable error rather than an edge case.
 
 ## 2. Dependency rule and logical rings
 
@@ -109,7 +109,7 @@ Workspace::handle(input)
   → (application outputs, zero or more work requests)
 ```
 
-A runtime in the frameworks ring carries out each work request and later submits its typed result as a new input. The application owns the request and result types; there are no application-owned I/O traits to implement or fake. Work requests are purpose-specific; there is no universal `FileSystem` façade whose broad API encourages business logic to drift outward. For example, a directory-read request carries the location, sort and filter specification, and the previous Folder Items snapshot needed to compute row deltas, and an operation-step request carries an already validated intent and the decisions that apply to it.
+A runtime in the frameworks ring carries out each work request and later submits its typed result as a new input. The application owns the request and result types; there are no application-owned I/O traits to implement or fake. Work requests are purpose-specific; there is no universal `FileSystem` façade whose broad API encourages business logic to drift outward. For example, a directory-read request carries the location, sort specification, and the previous Folder Items snapshot needed to compute row deltas, and an operation-step request carries an already validated intent and the decisions that apply to it.
 
 `handle` must not return a Qt `ViewChange`, manipulate a model, choose dialog text, or start a thread. A multi-step flow is modelled as explicit state identified by tokens, not as a suspended call.
 
@@ -120,7 +120,7 @@ Interface adapters translate between the user interface and the application boun
 | Adapter | Responsibility |
 |---|---|
 | Input controller | Maps Qt-free UI events (for example `UiEvent::DropOnBrowser { browser, row }` or a menu command identifier) plus current view context into application commands. It does not decide whether a command is valid. |
-| Presenter | Maps application output into plain-Rust view-models: row view-models with display text and icon kind, row-delta instructions, operation status, and dialog view-models listing the permitted choices. It owns formatting and wording, not policy or the set of available user actions. |
+| Presenter | Maps application output into plain-Rust view-models: row view-models with display text and icon kind, row-delta instructions, Operation Panel status, Operation Decision Card choices, and Notices. It owns formatting and wording, not policy or the set of available user actions. |
 
 The Qt delivery driver performs only the mechanical translation from Qt signals, actions, and model indexes to `UiEvent` values and from view-models to Qt model notifications and widgets.
 
@@ -132,9 +132,9 @@ This outer ring owns concrete technology and resource lifetime. It includes the 
 
 | Driver | Responsibility |
 |---|---|
-| Qt delivery | Constructs the single window and its widgets, owns Qt object lifetime, translates Qt signals into `UiEvent` values for the input controller, and applies presenter view-models to Qt models and dialogs. CXX-Qt types stay here because they name a framework. |
+| Qt delivery | Constructs the workspace window and auxiliary operation and Notices windows, owns Qt object lifetime, translates Qt signals into `UiEvent` values for the input controller, and applies presenter view-models to Qt models and widgets. CXX-Qt types stay here because they name a framework. |
 | Runtime | Receives work requests from the reducer, dispatches them to gateways on the worker pool, owns cancellation primitives and native handles, and delivers every typed result as an application input on the GUI thread. A worker, watcher, or dialog never mutates workspace state directly. |
-| File-system gateway | Reads directories, then sorts, filters, and computes row deltas against the previous Folder Items snapshot on a worker. Scans operation sources and executes operation steps using macOS facilities. Probes mounted-volume capabilities outside the GUI thread, enforces only the syscall-level protections the mounted file system actually supports, and classifies native errors into application error categories. |
+| File-system gateway | Reads directories, then sorts and computes row deltas against the previous Folder Items snapshot on a worker. Scans operation sources and executes operation steps using macOS facilities. Probes mounted-volume capabilities outside the GUI thread, enforces only the syscall-level protections the mounted file system actually supports, and classifies native errors into application error categories. |
 | Watcher gateway | Watches a requested location and reports invalidation; it never refreshes a Browser or changes state itself. |
 | Settings gateway | Stores application-defined settings, Favorites, and session values at an application-support location using driver-owned encoding and transactional durable writes. |
 
@@ -155,7 +155,7 @@ Qt signal / drag-and-drop / menu action
   → Workspace::handle
   → application outputs (+ work requests, see 4.2)
   → presenter: view-models
-  → Qt delivery driver: Qt model notifications or dialog
+  → Qt delivery driver: Qt model notifications, Operation Panels, Notices, or confirmation UI
 ```
 
 Menus, toolbars, drag-and-drop, tests, and future shortcuts all use the same command boundary. The interface adapter may report invalid input, but it does not replace application validation with widget-specific rules.
@@ -184,7 +184,7 @@ File operations cross two boundaries: policy decides whether the operation may p
 2. The application requests a source scan. A worker returns the operation plan: the ordered items to process, with symlinks recorded as links and never traversed.
 3. The application issues an execution step for the plan starting at a given item, together with the decisions that apply to it, and records the operation as running.
 4. The executor processes items until the step finishes, the operation is cancelled, or it reaches an item that needs a decision: a destination conflict, a file/folder kind mismatch, or a recoverable error. It then stops, reports typed progress and the item's outcome, and releases its worker. It never chooses a resolution on its own. A directory whose destination is an existing directory is merged without a decision; only the items inside it can conflict.
-5. A required decision becomes application output. The presenter displays the permitted choices and returns the selected choice as an application command.
+5. A required conflict or recoverable-error decision becomes application output for that job's Operation Decision Card. Several jobs may wait for separate choices concurrently. The presenter displays the permitted choices and returns the selected choice as an application command.
 6. The application validates that the choice still belongs to the pending operation and item, records it (including any "apply to all" choice, scoped to that operation), and issues the next step from that item. Cancelling simply issues no further step and requests cleanup of the operation's known partial artifacts.
 7. When the operation finishes, the application requests affected listings to refresh.
 
@@ -209,12 +209,12 @@ The desktop runtime uses a small, bounded set of execution contexts. These are a
 |---|---|---|
 | GUI/application thread | Qt event loop; widgets and Qt models; the serialized application input boundary; bounded state transitions; output delivery and rendering. | Synchronous file, provider, watch, persistence, process, or other unbounded work; waiting for a worker; blocking queue submission; a blocking queued connection; nested event-loop pumping; or holding a lock while invoking Qt or application code. |
 | Runtime coordinator | Non-blocking work admission; bounded queues; prioritization and fairness; request cancellation state; worker supervision; and terminal-result accounting. | Perform file I/O or expensive computation; call application or Qt code; wait for a user decision; or make product-policy decisions. |
-| Worker execution | Blocking directory reads; Folder Items sort, filter, and delta computation; operation scans and steps; settings I/O; native calls; and other work that could delay an event-loop turn. It emits typed events only. | Read or write Qt objects, presenter state, or workspace state; decide product policy; synchronously wait for GUI processing; or hold a destination lease while waiting for a person. |
+| Worker execution | Blocking directory reads; Folder Items sort and delta computation; operation scans and steps; settings I/O; native calls; and other work that could delay an event-loop turn. It emits typed events only. | Read or write Qt objects, presenter state, or workspace state; decide product policy; synchronously wait for GUI processing; or hold a destination lease while waiting for a person. |
 | Native callback sources | Minimal watcher or platform callbacks that enqueue an invalidation or typed result. | Refresh Folder Items, perform I/O, update a model, or call application code re-entrantly. |
 
-Nothing may simulate responsiveness by calling `QCoreApplication::processEvents`, entering a nested event loop, or using a synchronous cross-thread callback. Those techniques permit re-entrancy and make state ordering implicit. Dialogs and other user decisions are asynchronous: opening the UI returns to Qt, and the eventual response arrives as a new application command. Cross-thread Qt delivery always uses a queued invocation; a direct or blocking queued connection is not used across thread boundaries.
+Nothing may simulate responsiveness by calling `QCoreApplication::processEvents`, entering a nested event loop, or using a synchronous cross-thread callback. Those techniques permit re-entrancy and make state ordering implicit. Operation Decision Cards and other user decisions are asynchronous: opening the UI returns to Qt, and the eventual response arrives as a new application command. Cross-thread Qt delivery always uses a queued invocation; a direct or blocking queued connection is not used across thread boundaries.
 
-Every GUI-thread action is short and non-waiting. Application transitions process one input at a time and return to Qt promptly. Worker results are drained in slices bounded by both item count and elapsed time, over successive event-loop turns; a count limit alone is insufficient because individual results may have very different costs. The GUI thread applies only already-computed model changes. It never enumerates, sorts, filters, diffs, formats complete large Folder Items, resolves icons through blocking I/O, or eagerly converts every row to a Qt value. A full replacement swaps immutable backing data and issues the required Qt notification in bounded work; incremental results use bounded row-delta batches. All `QAbstractItemModel` API and begin/end notification pairs remain on the model's GUI thread.
+Every GUI-thread action is short and non-waiting. Application transitions process one input at a time and return to Qt promptly. Worker results are drained in slices bounded by both item count and elapsed time, over successive event-loop turns; a count limit alone is insufficient because individual results may have very different costs. The GUI thread applies only already-computed model changes. It never enumerates, sorts, diffs, formats complete large Folder Items, resolves icons through blocking I/O, or eagerly converts every row to a Qt value. A full replacement swaps immutable backing data and issues the required Qt notification in bounded work; incremental results use bounded row-delta batches. All `QAbstractItemModel` API and begin/end notification pairs remain on the model's GUI thread.
 
 The event-loop budget covers controller mapping, one `Workspace::handle` transition, presentation, model notification, and scheduling the next drain. Progress updates are rate-limited or coalesced, repeated watcher invalidations for the same location become one refresh request, and paint is requested with Qt's coalescing update path rather than forced synchronously. Exact slice sizes and time budgets are measured and tuned later, but an event storm, large directory, or fast worker must always leave turns for input, painting, window management, dialogs, and accessibility.
 
@@ -234,7 +234,7 @@ The runtime exposes logical execution lanes. An implementation may use separate 
 |---|---|
 | Foreground blocking I/O | Directory enumeration, metadata needed for visible rows, navigation, and other latency-sensitive reads. | Superseded Folder Items requests are cancelled before admission when possible. It has reserved service capacity so bulk operations and CPU work cannot occupy every slot. Provider and remote-volume calls have separate bounded allowances, so one blocked mount cannot consume all foreground capacity. |
 | File-operation I/O | Copy, move, rename, create, delete, source scans, and cancellation cleanup. | Fair progress with bounded parallelism. Dependent steps and writes with overlapping destination scopes are serialized by runtime-owned destination leases. A step releases its worker and lease before asking for a decision. |
-| CPU transformation | Sort, filter, diff, checksum, and other computation over data already read. | Bounded independently from blocking I/O so CPU saturation cannot prevent a read or cancellation cleanup from starting. Long computations split into cancellable units. |
+| CPU transformation | Sort, diff, checksum, and other computation over data already read. | Bounded independently from blocking I/O so CPU saturation cannot prevent a read or cancellation cleanup from starting. Long computations split into cancellable units. |
 | Serialized services | Settings persistence and native facilities that require one owner or a particular callback context. | Each service has one ordered owner and coalesces replaceable work such as session snapshots. It receives a dedicated thread only when the native API requires one. |
 
 Every lane and queue has a configured finite bound; there is no unbounded thread-per-request fallback. Capacity is based on measurement, workload type, and memory limits rather than equating every task with a CPU core. Fair scheduling prevents sustained navigation from starving file-operation cleanup and prevents background refreshes from delaying foreground navigation. Slow or uninterruptible I/O is never compensated for by unlimited replacement threads. If a lane has exhausted its bounded capacity, further work remains cancellable in its queue or admission fails visibly; the GUI still does not block.

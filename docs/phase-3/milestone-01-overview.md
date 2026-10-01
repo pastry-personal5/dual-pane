@@ -6,7 +6,7 @@ This milestone makes product behavior and UX documentation distinct sources of t
 
 ## Scope
 
-In scope: the documentation migration, link updates, source/test/bridge terminology rename, and verification. Out of scope: rendering deferred Browser Tabs or Sidebar groups; new operations, persistence, sorting/filtering, and watcher behavior.
+In scope: the documentation migration, link updates, source/test/bridge terminology rename, and verification. Out of scope: rendering deferred Browser Tabs Strip or Sidebar groups; new operations, persistence, sorting/filtering, and watcher behavior.
 
 ## Completion checklist
 

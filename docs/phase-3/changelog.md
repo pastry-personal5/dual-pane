@@ -4,6 +4,44 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-01 — P3-M4 complete
+
+- The remaining focus and range-anchor decisions are documented with scenario evidence. Every P3-M4 checklist item is complete; active-doc links, `git diff --check`, `make check`, and the direct Cargo format, Clippy, and test commands passed. Implementation remains assigned to P3-M5 through P3-M10.
+
+## 2026-10-01 — P3-M4 workspace interview decisions
+
+- The owner settled the remaining [keyboard-focus and range-anchor rules](../ux-gui.md#planned-phase-3-gui-decisions): focus entering any control in a Browser activates that Browser before Browser-specific commands, and Shift-click or Shift-arrow does nothing until a plain selection establishes an anchor. The [scenario trace](milestone-04-overview.md#scenario-trace) records both cases.
+- The owner completed the [selection and file-command contract](../ux-gui.md#selection-and-file-commands): fixed range anchor and cursor behavior, confirmed-folder command availability, context-menu entry points, frozen destructive targets, and a Cancel-default Permanent Delete confirmation. Rename and New Folder reject whitespace-only names.
+- The owner corrected Permanent Delete Confirmation to show the frozen target count only, without names; Cancel remains the default and deletion requires explicit activation.
+- The owner completed [operation result behavior](../ux-gui.md#operation-panels-and-decisions): reveal panels for long work, decisions, and partial or failed results; hide successful and cleanly cancelled panels after about three seconds; close completed panels with `Command+W`; open Notices for quick failures and default-app opening failures. Tab reordering, Favorite Item movement, and panel docking remain drag-only by owner choice.
+- The owner completed [refresh behavior](../ux-gui.md#automatic-refresh): `Command+R` is the sole manual entry point and reserves the `RefreshFolder` action ID; unavailable watched folders keep their last successful view and path with an error; affected open tabs refresh after operations; disappeared Items leave selection and a disappeared cursor clears.
+- For keyboard focus, Browser Tabs and Favorite Items use arrow keys and Return under Full Keyboard Access, and text editing suppresses file-command shortcuts. The Favorite Item Context Menu remains pointer-only by owner choice.
+- The owner set [tab, history, and selection gestures](../ux-gui.md#browser-tabs-strip-and-navigation), [Favorite controls](../ux-gui.md#sidebar-favorites), [file-command entry points](../ux-gui.md#selection-and-file-commands), and [Operation Panels and Decision Cards](../ux-gui.md#operation-panels-and-decisions). The [product safeguards](../product-behavior.md#file-operation-safeguards) retain conflict choices and define the conflict-only apply-to-all option.
+- The owner set [fallback restoration and Notices policy](../product-behavior.md#session-recovery), [Notices controls](../ux-gui.md#notices-and-restoration-feedback), and [inactive-tab refresh feedback](../ux-gui.md#automatic-refresh). [Planned containment](../ux-information-architecture.md#planned-phase-3-containment) places the new components while current 2.0.0 layout and gestures stay separate.
+- Text filtering was removed from Phase 3 scope and restored session state; location-shared [sort memory and controls](../ux-gui.md#sort-controls-and-remembered-choice) remain. Completed P3-M2 filter references now carry a supersession note. Existing code and persisted action IDs are unchanged; P3-M5/P3-M9 own later compatibility work.
+
+## 2026-10-01 — Canonical terminology before P3-M4
+
+- Recorded shortcut-capable action names and planned component names in [UX terms](../ux-terms.md). Nine new action IDs are reserved in documentation only; the persisted catalogue and tab behavior are unchanged. Renamed the inert native Browser Tabs Strip widget and its object and accessibility names to match the canonical container term.
+
+## 2026-10-01 — P3-M4 plan review
+
+- Renamed the milestone to cover its full workspace-interaction scope and made its decision questions, owner review, scenario evidence, and downstream handoffs explicit. Added gesture collisions, multi-selection and command targeting, user-visible filter rules, hidden-tab refresh, and operation/session error paths to the plan; no behavior decision was made in this review.
+
+## 2026-10-01 — P3-M4 planning
+
+- Added the documentation-first plan for the next milestone. It will settle the user-facing contracts for tabs, file operations, recovery, sort/filter, refresh, and Sidebar Favorite editing before P3-M5 models the new state.
+
+## 2026-10-01 — P3-M3 complete
+
+- Refactored the native desktop shell into static Sidebar, Main Toolbar, Browser, Browser Tabs Strip, Folder Pane, summary-row, command-row, and coordination components without changing the existing model or command interfaces. The full automated gate passed.
+- A native launch was attempted after verification, but visual inspection remains deferred because the environment reported `Cannot create window: no screens available`.
+
+## 2026-10-01 — P3-M3 layout decisions
+
+- The static Standard Layout now has inert Browser Tabs Strip bound only to each current folder name, a bottom-anchored Main Toolbar with disabled Settings, and a three-row Folder Pane. Static Sidebar labels remain disconnected from persisted Favorites.
+- Folder Pane Toolbar Row #2 reserves summary metrics for P3-M5/P3-M6. Those milestones will show `N items`, optional `X selected`, and selected or folder totals as non-recursive sums of known direct visible Folder Item sizes; unknown totals render `—`, and metrics stay with visible last-successful items across pending or failed navigation. Row #3 has the functional Up Button followed by disabled Name, Type, Date, and Size ascending/descending carets until P3-M6 connects them.
+
 ## 2026-10-01 — P3-M2 complete
 
 - Added Qt-free settings values, sort memory, action catalogue, Favorites records, and workspace-session handoff values; the desktop SQLite driver uses a serialized worker and lossless BLOB locations.
@@ -46,7 +84,7 @@ Chronological record of decisions and plan changes for Phase 3.
 
 ## 2026-10-01 — Documentation consistency review
 
-- Separated committed product scope from version 2.0.0 availability, clarified current versus deferred Sidebar and Browser Tabs behavior, and aligned active architecture and repository-layout terminology with Browser and Folder Items.
+- Separated committed product scope from version 2.0.0 availability, clarified current versus deferred Sidebar and Browser Tabs Strip behavior, and aligned active architecture and repository-layout terminology with Browser and Folder Items.
 
 ## 2026-10-01 — P3-M1 terminology baseline
 

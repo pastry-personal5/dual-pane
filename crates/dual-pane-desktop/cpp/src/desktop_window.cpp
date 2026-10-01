@@ -1,15 +1,18 @@
 #include "dual_pane_desktop/desktop_window.hpp"
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
+#include "dual_pane_desktop/settings_glyph.hpp"
 
 #include <QtCore/QEvent>
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QMetaObject>
 #include <QtCore/QString>
 #include <QtCore/QVariant>
+#include <QtGui/QIcon>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QPixmap>
 #include <QtGui/QShortcut>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
@@ -88,6 +91,8 @@ auto style_sheet() -> QString {
       QTreeView::item:selected { background:%6; color:white; }
       QTreeView[browserActive="true"][windowActive="true"]::item:selected { background:%5; color:white; }
       QToolButton { background:%2; color:%3; border:1px solid %4; padding:4px; }
+      QToolButton:disabled { color:#737A84; }
+      QToolButton#sortControl { min-width:16px; max-width:16px; min-height:16px; max-height:16px; padding:0; }
       QSplitter::handle { background:%4; }
     )")
         .arg(window_color)
@@ -394,50 +399,141 @@ auto has_run() -> std::atomic_bool & {
     return value;
 }
 
-auto browser(FolderItemsListModel *model, QWidget *parent, FolderItemsList **out_view, QFrame **out_folder) -> QWidget * {
-    auto *root = new QWidget(parent);
-    root->setObjectName(QStringLiteral("browser"));
-    auto *layout = new QVBoxLayout(root);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-    auto *path = new QLineEdit(root);
-    path->setObjectName(QStringLiteral("pathEditControl"));
-    path->setReadOnly(true);
-    path->setFocusPolicy(Qt::NoFocus);
-    path->setAttribute(Qt::WA_TransparentForMouseEvents);
-    path->setAccessibleName(QStringLiteral("Path Edit Control"));
-    auto *folder = new QFrame(root);
-    folder->setObjectName(QStringLiteral("folderPane"));
-    auto *folder_layout = new QVBoxLayout(folder);
-    folder_layout->setContentsMargins(0, 0, 0, 0);
-    folder_layout->setSpacing(0);
-    auto *title = new QLabel(folder);
-    title->setObjectName(QStringLiteral("folderPaneToolbarRow1"));
-    auto *up = new QToolButton(folder);
-    up->setObjectName(QStringLiteral("upButton"));
-    up->setText(QStringLiteral("Up"));
-    up->setAccessibleName(QStringLiteral("Up Button"));
-    up->setFocusPolicy(Qt::NoFocus);
-    auto *view = new FolderItemsList(model);
-    view->setObjectName(QStringLiteral("folderItemsList"));
-    view->setAccessibleName(QStringLiteral("Folder Items List"));
-    auto *status = new QLabel(folder);
-    status->setObjectName(QStringLiteral("browserStatusBar"));
-    status->setAccessibleName(QStringLiteral("Browser Status Bar"));
-    layout->addWidget(path);
-    folder_layout->addWidget(title);
-    folder_layout->addWidget(up);
-    folder_layout->addWidget(view, 1);
-    folder_layout->addWidget(status);
-    layout->addWidget(folder, 1);
-    QObject::connect(model, &FolderItemsListModel::pathTextChanged, root, [path, model] { path->setText(model->getPathText()); });
-    QObject::connect(model, &FolderItemsListModel::folderNameChanged, root, [title, model] { title->setText(model->getFolderName()); });
-    QObject::connect(model, &FolderItemsListModel::statusTextChanged, root, [status, model] { status->setText(model->getStatusText()); });
-    QObject::connect(up, &QToolButton::clicked, model, [model, view] { view->activateBrowser(); model->go_to_parent(); });
-    *out_view = view;
-    *out_folder = folder;
-    return root;
+class MainToolbar final : public QWidget {
+  public:
+    explicit MainToolbar(QWidget *parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("mainToolbar"));
+        auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        auto *settings = new QToolButton(this);
+        settings->setObjectName(QStringLiteral("settings"));
+        settings->setIcon(QIcon(QPixmap(settings_glyph::pixels)));
+        settings->setToolTip(QStringLiteral("Settings"));
+        settings->setAccessibleName(QStringLiteral("Settings"));
+        settings->setFocusPolicy(Qt::NoFocus);
+        settings->setDisabled(true);
+        layout->addWidget(settings);
+        layout->addStretch();
+    }
+};
+
+class Sidebar final : public QWidget {
+  public:
+    explicit Sidebar(QWidget *parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("sidebar"));
+        auto *layout = new QVBoxLayout(this);
+        layout->addWidget(new QLabel(QStringLiteral("Drives"), this));
+        layout->addWidget(new QLabel(QStringLiteral("Macintosh HD"), this));
+        layout->addWidget(new QLabel(QStringLiteral("Favorites"), this));
+        for (const auto &item : {"Home", "Desktop", "Documents", "Downloads"})
+            layout->addWidget(new QLabel(QString::fromLatin1(item), this));
+        layout->addStretch(1);
+        layout->addWidget(new MainToolbar(this));
+    }
+};
+
+class BrowserTabsStrip final : public QWidget {
+  public:
+    explicit BrowserTabsStrip(FolderItemsListModel *model, QWidget *parent) : QWidget(parent), label_(new QLabel(this)) {
+        setObjectName(QStringLiteral("browserTabsStrip"));
+        setAccessibleName(QStringLiteral("Browser Tabs Strip"));
+        setMinimumHeight(24);
+        auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(label_);
+        QObject::connect(model, &FolderItemsListModel::folderNameChanged, this, [this, model] { label_->setText(model->getFolderName()); });
+    }
+
+  private:
+    QLabel *label_;
+};
+
+auto sort_control(const QString &field, const QString &direction, QWidget *parent) -> QToolButton * {
+    auto *control = new QToolButton(parent);
+    control->setObjectName(QStringLiteral("sortControl"));
+    const auto description = QStringLiteral("Sort by %1 %2").arg(field, direction);
+    control->setText(direction == QStringLiteral("ascending") ? QStringLiteral("^") : QStringLiteral("v"));
+    control->setToolTip(description);
+    control->setAccessibleName(description);
+    control->setFocusPolicy(Qt::NoFocus);
+    control->setDisabled(true);
+    return control;
 }
+
+class FolderPane final : public QFrame {
+  public:
+    explicit FolderPane(FolderItemsListModel *model, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model)) {
+        setObjectName(QStringLiteral("folderPane"));
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        auto *title = new QLabel(this);
+        title->setObjectName(QStringLiteral("folderPaneToolbarRow1"));
+        auto *summary = new QLabel(this);
+        summary->setObjectName(QStringLiteral("folderPaneToolbarRow2"));
+        summary->setMinimumHeight(20);
+        auto *commands = new QWidget(this);
+        commands->setObjectName(QStringLiteral("folderPaneToolbarRow3"));
+        auto *command_layout = new QHBoxLayout(commands);
+        command_layout->setContentsMargins(0, 0, 0, 0);
+        command_layout->setSpacing(0);
+        auto *up = new QToolButton(commands);
+        up->setObjectName(QStringLiteral("upButton"));
+        up->setText(QStringLiteral("Up"));
+        up->setAccessibleName(QStringLiteral("Up Button"));
+        up->setFocusPolicy(Qt::NoFocus);
+        command_layout->addWidget(up);
+        for (const auto &field : {QStringLiteral("Name"), QStringLiteral("Type"), QStringLiteral("Date"), QStringLiteral("Size")}) {
+            command_layout->addWidget(sort_control(field, QStringLiteral("ascending"), commands));
+            command_layout->addWidget(sort_control(field, QStringLiteral("descending"), commands));
+        }
+        command_layout->addStretch();
+        view_->setObjectName(QStringLiteral("folderItemsList"));
+        view_->setAccessibleName(QStringLiteral("Folder Items List"));
+        auto *status = new QLabel(this);
+        status->setObjectName(QStringLiteral("browserStatusBar"));
+        status->setAccessibleName(QStringLiteral("Browser Status Bar"));
+        layout->addWidget(title);
+        layout->addWidget(summary);
+        layout->addWidget(commands);
+        layout->addWidget(view_, 1);
+        layout->addWidget(status);
+        QObject::connect(model, &FolderItemsListModel::folderNameChanged, this, [title, model] { title->setText(model->getFolderName()); });
+        QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, [status, model] { status->setText(model->getStatusText()); });
+        QObject::connect(up, &QToolButton::clicked, model, [model, this] { view_->activateBrowser(); model->go_to_parent(); });
+    }
+
+    [[nodiscard]] auto view() const -> FolderItemsList * { return view_; }
+
+  private:
+    FolderItemsList *view_;
+};
+
+class Browser final : public QWidget {
+  public:
+    explicit Browser(FolderItemsListModel *model, QWidget *parent) : QWidget(parent), folder_(new FolderPane(model, this)) {
+        setObjectName(QStringLiteral("browser"));
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        layout->addWidget(new BrowserTabsStrip(model, this));
+        auto *path = new QLineEdit(this);
+        path->setObjectName(QStringLiteral("pathEditControl"));
+        path->setReadOnly(true);
+        path->setFocusPolicy(Qt::NoFocus);
+        path->setAttribute(Qt::WA_TransparentForMouseEvents);
+        path->setAccessibleName(QStringLiteral("Path Edit Control"));
+        layout->addWidget(path);
+        layout->addWidget(folder_, 1);
+        QObject::connect(model, &FolderItemsListModel::pathTextChanged, this, [path, model] { path->setText(model->getPathText()); });
+    }
+
+    [[nodiscard]] auto view() const -> FolderItemsList * { return folder_->view(); }
+    [[nodiscard]] auto folder() const -> QFrame * { return folder_; }
+
+  private:
+    FolderPane *folder_;
+};
 } // namespace
 
 void schedule_gui_drain() {
@@ -459,20 +555,16 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     right_model.set_right_browser();
     DrainScheduler scheduler(&left_model, &right_model);
     ThinSplitter standard_layout(SplitterKind::Sidebar);
-    auto *sidebar = new QWidget(&standard_layout);
-    sidebar->setObjectName(QStringLiteral("sidebar"));
-    auto *side_layout = new QVBoxLayout(sidebar);
-    side_layout->addWidget(new QLabel(QStringLiteral("Drives"), sidebar));
-    side_layout->addWidget(new QLabel(QStringLiteral("Macintosh HD"), sidebar));
-    side_layout->addWidget(new QLabel(QStringLiteral("Favorites"), sidebar));
-    for (const auto &item : {"Home", "Desktop", "Documents", "Downloads"})
-        side_layout->addWidget(new QLabel(QString::fromLatin1(item), sidebar));
-    side_layout->addStretch();
+    auto *sidebar = new Sidebar(&standard_layout);
     auto *split = new ThinSplitter(SplitterKind::Browser, &standard_layout);
-    FolderItemsList *left_view = nullptr, *right_view = nullptr;
-    QFrame *left_folder = nullptr, *right_folder = nullptr;
-    split->addWidget(browser(&left_model, split, &left_view, &left_folder));
-    split->addWidget(browser(&right_model, split, &right_view, &right_folder));
+    auto *left_browser = new Browser(&left_model, split);
+    auto *right_browser = new Browser(&right_model, split);
+    auto *left_view = left_browser->view();
+    auto *right_view = right_browser->view();
+    auto *left_folder = left_browser->folder();
+    auto *right_folder = right_browser->folder();
+    split->addWidget(left_browser);
+    split->addWidget(right_browser);
     standard_layout.addWidget(sidebar);
     standard_layout.addWidget(split);
     window.setCentralWidget(&standard_layout);

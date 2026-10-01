@@ -8,11 +8,11 @@ This document defines the current interface and records owner-approved Phase 3 G
 
 Both Browser layouts have zero outer margins and zero gaps between child components for a flat, edge-to-edge appearance. Folder Pane borders and splitters use `#3A4048`; a key-window active Folder Pane uses a one-pixel `#2F6D9A` border. Active selected rows use `#2F6D9A` with white text; inactive-Browser selected rows use `#1E4668` with white text. When the application window is inactive, neither Folder Pane has an accent border and both selections use `#1E4668` with white text.
 
-The Sidebar Splitter and Browser Divider are three-pixel draggable strips. Hovering adds a gray border; primary-button dragging removes that border until release. The current accessible names are Sidebar Splitter, Browser Divider, Path Edit Control, Up Button, Folder Items List, and Browser Status Bar. Controls retain these names as the window resizes; both Browsers share available space through their splitters without overlapping or suppressing ordinary interaction.
+The Sidebar Splitter and Browser Divider are three-pixel draggable strips. Hovering adds a gray border; primary-button dragging removes that border until release. The current accessible names are Sidebar Splitter, Browser Divider, Browser Tabs Strip, Settings, Path Edit Control, Up Button, Folder Items List, and Browser Status Bar. Controls retain these names as the window resizes; both Browsers share available space through their splitters without overlapping or suppressing ordinary interaction. The bottom-anchored Main Toolbar has one disabled, non-focusable Settings control; it emits no command.
 
 ## Input and active-Browser state
 
-Mouse and keyboard invoke the same application commands. Both Browsers open at the launch working directory; the Left Browser is active and its Folder Items List has keyboard focus. The active Browser is the target for Browser-specific commands.
+The following table records version 2.0.0 behavior. Mouse and keyboard invoke the same application commands. Both Browsers open at the launch working directory; the Left Browser is active and its Folder Items List has keyboard focus. The active Browser is the target for Browser-specific commands.
 
 | Gesture | Result |
 |---|---|
@@ -31,7 +31,7 @@ Mouse and keyboard invoke the same application commands. Both Browsers open at t
 | Exact Right | Activate the selected row; without a selection or when the item cannot be entered, this is a no-op. |
 | Exact Return | Activate the selected row, or no-op without selection. |
 | Exact Command-Up | Navigate the active Browser to its parent; root is a no-op. |
-| `Command+W` / `Command+Q` | Close the only app window / quit the app. |
+| `Command+W` / `Command+Q` | Close the current workspace window / quit the app. |
 | Modified movement key, modified Return or Command-Up, or any other gesture | No-op. |
 
 ## Responsiveness during work
@@ -42,7 +42,7 @@ Automatic refresh, session persistence, and file operations are committed produc
 
 ## Planned Phase 3 GUI decisions
 
-Implementation status: Planned. These owner decisions describe future behavior; the sections above continue to describe the current interface. P3-M3/P3-M4 incorporate them into the broader interaction design, and P3-M5/P3-M6 deliver the sorting model and GUI.
+Implementation status: Planned. These owner decisions describe future behavior; the table above continues to describe version 2.0.0. P3-M5 through P3-M10 deliver the corresponding behavior.
 
 ### Folder Items fields and display
 
@@ -53,7 +53,7 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 ### Sort controls and remembered choice
 
 - Name, Type, Date, and Size each have separate ascending and descending buttons; there is no direction-toggle cycle. Both Date displays share one Date button pair and sort by the same modification timestamp.
-- The eight direct buttons sit beside the Up Button in Folder Pane Toolbar Row #2. They are very small bitmap carets (`^` for ascending and its inverse for descending), with descriptive tooltips and accessible names.
+- The eight direct buttons sit beside the Up Button in Folder Pane Toolbar Row #3. They are very small bitmap carets (`^` for ascending and its inverse for descending), with descriptive tooltips and accessible names.
 - A field's button pair is shown only while its field is visible. The Date pair remains while either date column is visible.
 - Folders, including links to folders, stay ahead of non-folders for every sort. A folder without a remembered choice starts at natural Name ascending. A chosen sort is shared by location across Browsers and tabs and restored from persistent storage; the [P3-M2 plan](phase-3/milestone-02-architecture.md#folder-sort-memory) owns its retention and storage rules.
 
@@ -64,10 +64,44 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 
 ### Future shortcut editor
 
-- A later shortcut editor lists customizable actions backed by stable UpperCamelCase action IDs and lets the person replace a default keyboard shortcut. For example, `NewFolder` starts with `Command+Shift+N` and can be assigned another valid shortcut once the action exists.
+- A later shortcut editor lists customizable actions backed by stable UpperCamelCase action IDs and lets the person replace a default keyboard shortcut. The [canonical actions](ux-terms.md#canonical-actions) name existing catalogue entries and reserved future IDs. For example, `NewFolder` starts with `Command+Shift+N` and can be assigned another valid shortcut once the action exists.
 - The editor shows each action's effective shortcut, reports conflicts, and offers Restore Default. The [P3-M2 plan](phase-3/milestone-02-architecture.md#actions-and-shortcut-settings) owns action identity, validation, and persistence.
 
 ### Sidebar Favorites
 
-- The Sidebar supports one level of Favorite Groups, each containing ordered Favorite Items. People can create, rename, reorder, move, and delete groups and items. The hierarchy and order persist across relaunches.
-- At launch, a Favorite Item whose target folder is missing or unavailable is automatically removed. The [product behavior](product-behavior.md#favorites) defines this recovery rule; the Sidebar interaction design for editing is part of P3-M3/P3-M4.
+- The Sidebar supports one level of Favorite Groups, each containing ordered Favorite Items. A Favorite Item opens its target in the active Browser Tab.
+- Each Favorite Group row shows its name, a borderless Favorite Group Menu Button, and a borderless Add Favorite Item Button. The latter adds the active Browser Tab's current folder to that group. The Favorite Group Menu offers rename, move up, move down, move to top, move to bottom, and delete. New Group Button sits below the group list.
+- Favorite Group Name Editor and Favorite Item Alias Editor edit names inline. A Favorite Item's right-click Favorite Item Context Menu offers removal from its group and Change alias; that menu is pointer-only. Dragging a Favorite Item reorders it or moves it between groups; reordering and group movement have no keyboard command. Under macOS Full Keyboard Access, focused Favorite Items use arrow keys to move focus and Return to open their targets. The [Favorites policy](product-behavior.md#favorites) defines exact-text uniqueness, alias meaning, deletion, and launch removal.
+
+### Browser Tabs Strip and navigation
+
+- Keyboard focus entering any control inside a Browser activates that Browser before a Browser-specific command is handled. This includes its Browser Tabs Strip, Folder Pane controls, and Folder Items List; moving focus among controls within one Browser leaves it active. The version 2.0.0 rule above covers only focus entering a Folder Items List.
+- `Command+T` or the borderless New Tab Button adds a Browser Tab at the active Browser Tab's current folder and activates it. Browser Tabs can be dragged to reorder them; reordering has no keyboard command.
+- `Command+W` closes the active Browser's Browser Tab. If another tab remains, activate the nearest one on the right, then the nearest on the left. Closing the last tab replaces it with a clean Home tab. `Command+Q` quits the application by keyboard.
+- Each Browser Tab shows its folder name. Its full path appears in a tooltip and accessibility text so repeated folder names remain distinguishable. Its borderless Close Tab Button appears only while that exact Browser Tab is hovered.
+- Back Button, Forward Button, and Up Button appear in that order at the left of Folder Pane Toolbar Row #3. Back and Forward follow the active tab's history; after Back, a new navigation discards its Forward history. `Option+Left Arrow` and `Option+Right Arrow` navigate Back and Forward when focus is outside text editing. Up navigates to the parent.
+- Browser Tab switching retains that tab's selection, cursor, and scroll. Back rereads the folder and restores the matching view state. History belongs to a tab and lasts only for the session.
+- Under macOS Full Keyboard Access, focused Browser Tabs use arrow keys to move focus and Return to activate the focused tab. Focused buttons use standard Return or Space activation. Plain Tab remains reserved for Full Keyboard Access.
+
+### Selection and file commands
+
+- A plain click replaces the selection and sets the cursor and range anchor to that row. An unmodified movement key that selects a row also establishes a range anchor; after a range selection, the next plain movement key collapses it to one selected Item and sets that row as the anchor. Command-click toggles the clicked Folder Item and moves the cursor there, even when it deselects the row; it moves an existing anchor there but does not establish one when none exists. Shift-click and Shift-arrow extend a range from the fixed anchor while the cursor moves, and are no-ops until a plain click or unmodified movement selects a row and establishes an anchor. `Command+A` selects all visible Folder Items without moving an existing cursor or anchor and does not establish a missing anchor. Right-click on a selected Item keeps the selection; right-click on an unselected Item selects that Item alone without establishing a missing anchor. Selection, cursor, and anchor belong to the Browser Tab. These planned gestures supersede the version 2.0.0 modified-click and secondary-click rows above once delivered.
+- Copy to Other Browser and Move to Other Browser appear in the Folder Items Context Menu and use `Option+C` and `Option+M`. Both require one or more selected Items, a confirmed source folder, and a confirmed, available destination folder in the other Browser's active tab. At command start, capture the source selection and destination folder. Later selection or tab changes do not retarget that job. Disable both commands when source and destination are the same folder.
+- Rename Item uses F2 and the Folder Items Context Menu, requires exactly one selected Item, and opens the inline Rename Item Editor. New Folder uses `Command+Shift+N` or the empty-space Folder Items Context Menu, targets the active tab's confirmed folder regardless of selection, and opens the inline New Folder Name Editor. A name collision or a name containing only whitespace keeps the corresponding editor open with an error, without overwriting or creating an Item. A successful edit closes the editor and refreshes affected open tabs.
+- Move to Trash uses `Command+Delete` or the Folder Items Context Menu. Delete Permanently uses `Option+Command+Delete` or that menu. Both require one or more selected Items and a confirmed source folder, and capture the selected targets when invoked; later selection or tab changes cannot retarget them. Delete Permanently opens a separate Permanent Delete Confirmation Window showing only the frozen target count. Cancel is the default; deletion requires explicit activation of Delete Permanently.
+- Activating exactly one regular file opens it with the default application. Activating a link to a regular file opens its target with the default application; Copy and Move act on the link. A link to a folder follows the [navigation rule](product-behavior.md#file-operation-safeguards). File activation requires a confirmed source folder. An opening failure appears in Notices, which opens to show it.
+- While the Path Edit Control or an inline name editor has keyboard focus, text editing takes priority and file-command shortcuts are suppressed until editing ends.
+
+### Operation Panels and decisions
+
+- A job that outlasts a brief reveal delay, needs a decision, or reaches a failed or partial result shows its own floating Operation Panel with progress and a Cancel Operation Button. A panel can be dragged into the Operation Panel Strip below both Browsers; docked panels arrange left to right. Docking and undocking have no keyboard command. A running or decision-waiting panel stays open. Closing its source Browser Tab does not cancel the job; `Command+W` does nothing while a running or decision-waiting panel has focus.
+- A job's conflict or recoverable-error choices appear in its Operation Decision Card. Several jobs may show decision cards simultaneously. The [file-operation safeguards](product-behavior.md#file-operation-safeguards) define the choices and the initially unchecked, conflict-only “apply to all” option.
+- A successful panel hides about three seconds after completion. A clean cancellation with no completed changes hides after the same delay; cancellation with completed or uncertain work, and partial or failed results, remain for review. `Command+W` closes a completed panel while it has focus. Quick successes are recorded in Notices without opening it; quick failures open Notices to show the error. Cancellation leaves completed work intact under the [file-operation safeguards](product-behavior.md#file-operation-safeguards).
+
+### Notices and restoration feedback
+
+- Notices is an auxiliary window for nonblocking messages. Its Notices Button in the Main Toolbar reopens it. The Notices Startup Checkbox is default-unchecked and shows “Don’t show notices at startup”. `Command+W` closes Notices while it has focus. The [session recovery policy](product-behavior.md#session-recovery) defines startup opening, message suppression, session lifetime, and tab fallback.
+
+### Automatic refresh
+
+- Inactive Browser Tabs refresh in the background. During an active-tab refresh, keep the last successful Folder Items visible with a small status cue. A newer navigation, sort, or refresh request takes precedence over an older result. Once a new listing succeeds, retain matching selected Items and cursor; drop Items that disappeared, clear a missing cursor instead of moving it onto another Item, and retain scroll position as closely as possible. A failed refresh leaves the last successful view and path available with error feedback. If the watched folder disappears or becomes inaccessible, keep that view and path with an error; retry on `Command+R` or a later file-system event without automatically navigating to a parent. `Command+R` is the only manual Refresh entry point. After an operation changes a folder, refresh every open tab showing an affected folder, including inactive tabs in either Browser.

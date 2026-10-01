@@ -4,6 +4,8 @@ Status: Done
 
 P3-M2 gives Phase 3 one application-owned model for durable choices and one serialized settings service for storage. The domain and application use typed values; the desktop driver owns SQLite, the Application Support path, native errors, and I/O scheduling.
 
+Supersession note: P3-M4 removed text filtering from Phase 3 behavior and restored session state. Filter references below preserve the historical P3-M2 contract and completed acceptance evidence; [current product scope](../product-behavior.md#included-product-scope) and the [P3-M4 handoff](milestone-04-architecture.md#contract-to-later-milestones) govern later implementation. Existing persisted records and action IDs remain untouched in this documentation milestone; any compatibility migration belongs to later implementation.
+
 ## Configuration and ownership
 
 Defaults are compiled application values and the compatibility baseline for validation and recovery. A newly created database preloads a binding row for every catalogue action from that baseline, including actions whose commands are not delivered yet. Thereafter effective shortcut settings resolve from a validated saved binding, then their compiled default if an individual row is invalid or unavailable. Fixed file-operation safeguards remain product policy; executor capacity and native paths remain runtime configuration. Only a choice the product intends people to change becomes a user setting.

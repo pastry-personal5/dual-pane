@@ -4,6 +4,8 @@ Status: Done
 
 This milestone establishes how Phase 3 defines defaults, owns settings, and stores durable state. It delivers a responsive, versioned storage foundation for folder sort memory, Favorites, future shortcut customization, and later workspace restoration.
 
+Supersession note: P3-M4 removed text filtering from Phase 3 behavior and restored session state. Filter references below record the completed P3-M2 storage handoff and acceptance evidence, not a current Phase 3 feature requirement. Follow the [current product scope](../product-behavior.md#included-product-scope) and [P3-M4 handoff](milestone-04-architecture.md#contract-to-later-milestones); later code and persisted action compatibility work must preserve existing records without presenting filtering as a Phase 3 feature.
+
 ## Scope
 
 In scope: an inventory of Phase 3 configuration and state; application-owned settings values and compiled defaults; stable canonical action IDs; a preloaded persistent action/shortcut catalogue; a SQLite settings driver under Application Support; asynchronous load and coalesced save; automatic schema upgrades, validation, explicit reset, and recoverable errors; and tests using temporary directories. The first durable values are user shortcut overrides, a shared location-keyed history of up to 100 explicitly chosen folder sorts, and the ordered Favorite Group → Favorite Item records. The Settings window, shortcut editor, and Sidebar are not part of this milestone; SQLite is the sole live configuration store, so no app-managed human-readable configuration file is read or watched.

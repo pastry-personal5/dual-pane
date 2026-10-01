@@ -6,13 +6,13 @@ This document is the active source of truth for committed product behavior, safe
 
 ## Included product scope
 
-- One application window with two side-by-side Browsers, independent current locations, and one active Browser. There is no multi-window mode.
+- One workspace window with two side-by-side Browsers, independent current locations, and one active Browser. Notices and operation UI may use auxiliary windows; there is no second workspace window.
 - Tabs in each Browser, including tab history and an active tab.
 - One level of Favorite Groups containing Favorite Items in the Sidebar. People can create, rename, reorder, move, and delete them; their hierarchy and order remain in memory and across relaunches.
 - Copy and move between Browsers; rename; create directory; move to Trash; and permanent deletion.
 - Opening a regular file with its macOS default application.
-- Restoring each Browser's open tabs, their order, active tab, locations, sort/filter state, and active Browser when the application relaunches.
-- Watching open locations and automatically refreshing Folder Items while preserving matching selection and cursor state.
+- Restoring each Browser's open tabs, their order, active tab, locations, and active Browser when the application relaunches. Folder sort choices are restored from location-shared memory; text filtering is outside Phase 3 behavior and session state.
+- Watching open tab locations and automatically refreshing Folder Items, including inactive tabs, while preserving matching selection and cursor state.
 
 ## Favorites
 
@@ -20,21 +20,26 @@ A fresh profile starts with one Favorite Group named Favorites containing, in or
 
 At launch, a Favorite Item whose target folder is missing or unavailable is automatically removed from the saved collection after a completed target probe. This includes temporary unavailability. Empty Favorite Groups remain. A database-load failure, failed validation worker, or cancelled probe does not count as a target-folder result and cannot remove an item.
 
+Favorite Group names are unique among groups, and Favorite Item Aliases are unique within their group, using exact text equality. An alias changes only an Item's displayed label, not its target. Deleting a Favorite Group removes its Favorite Items without a confirmation.
+
 ## File-operation safeguards
 
 - Delete moves items to Trash without a confirmation dialog.
 - Permanent deletion is a separate command and always requires confirmation.
-- A file whose name already exists as a file at the destination offers **Skip**, **Replace**, and **Cancel**. The dialog includes an initially unchecked option to apply the selected choice to all remaining conflicts in that operation.
+- A file whose name already exists as a file at the destination offers **Skip**, **Replace**, and **Cancel** in its Operation Decision Card. An initially unchecked option applies the selected choice to all remaining conflicts in that operation only.
 - A folder copied or moved onto an existing folder with the same name is merged into it without asking. Only the files inside that collide ask the conflict question above.
-- A file onto an existing folder with the same name, or a folder onto an existing file, offers **Try Again**, **Skip**, and **Cancel**. Neither item is replaced.
-- A recoverable error, such as permission denied, a privacy restriction, no space, or an item in use, offers **Try Again**, **Skip**, and **Cancel**.
-- Try Again/Skip/Cancel dialogs have no option to apply the choice to remaining items.
-- Opening a symbolic link to a folder navigates into it. Copy and move copy the link itself, and operations never follow links inside folders.
+- A file onto an existing folder with the same name, or a folder onto an existing file, offers **Try Again**, **Skip**, and **Cancel** in its Operation Decision Card. Neither item is replaced.
+- A recoverable error, such as permission denied, a privacy restriction, no space, or an item in use, offers **Try Again**, **Skip**, and **Cancel** in its Operation Decision Card.
+- Try Again/Skip/Cancel decisions have no option to apply the choice to remaining items.
+- A rename or New Folder name collision never overwrites the existing Item.
+- Opening a symbolic link to a folder navigates into it; activating a link to a regular file opens its target. Copy and move act on the link itself, and operations never follow links inside folders.
 - The safety invariants for replacement, cross-volume moves, symlinks, cancellation, and error handling are defined in [architecture.md](architecture.md).
 
 ## Session recovery
 
-If a saved tab location cannot be restored, Dual Pane discards that tab and restores the rest of the session normally. Back/forward history is kept during the session but is not restored after relaunch.
+If a saved tab location cannot be restored, Dual Pane discards that tab and restores the rest of the session normally. If the saved active tab is discarded, the nearest surviving tab on its right becomes active, then the nearest on its left. If a Browser has no restorable tab, it receives one clean tab at the launch directory. Back/forward history is kept during the session but is not restored after relaunch.
+
+Notices holds nonblocking messages for the current session, including discarded tabs, storage errors, and operation summaries. At startup it opens only when messages exist. The default-unchecked “Don’t show notices at startup” preference persists across relaunches and suppresses routine startup notices; actionable storage errors still open Notices. Notice history is not restored.
 
 The [Favorites policy](#favorites) governs unavailable Favorite Items independently of tab recovery.
 
