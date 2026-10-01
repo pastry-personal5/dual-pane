@@ -15,7 +15,7 @@ This document is the single source of truth for the first usable Dual Pane relea
 
 ## Standard Layout
 
-The **Standard Layout** has a **Sidebar**, **Sidebar Splitter**, **Left Browser**, **Browser Divider**, and **Right Browser**. The Sidebar contains a **Drives Group** of **Drive Item**s and **Favorites Groups** of **Favorite Group**s containing **Favorite Item**s. Each Left or Right Browser has its respective **Navigation Pane** above its **Folder Pane**. A Navigation Pane will contain **Browser Tabs** (not rendered in P2-M3) and has a read-only **Path Edit Control** showing that Browser’s absolute path. A Folder Pane has **Folder Pane Toolbar Row #1** (the concise current folder name), **Folder Pane Toolbar Row #2** (the **Up Button**), a **Folder Items List**, and a **Browser Status Bar** below the list. The Sidebar Splitter and Browser Divider are three-pixel draggable strips using the inactive Browser color. Hovering either adds a gray border; pressing the primary mouse button to drag removes that border for the duration of the drag.
+The **Standard Layout** has a **Sidebar**, **Sidebar Splitter**, **Left Browser**, **Browser Divider**, and **Right Browser**. The Sidebar contains a **Drives Group** of **Drive Item**s and **Favorites Groups** of **Favorite Group**s containing **Favorite Item**s. Each Left or Right Browser has its respective **Navigation Pane** above its **Folder Pane**. A Navigation Pane will contain **Browser Tabs** (not rendered in P2-M3) and has a read-only **Path Edit Control** showing that Browser’s absolute path. A Folder Pane has **Folder Pane Toolbar Row #1** (the concise current folder name), **Folder Pane Toolbar Row #2** (the **Up Button**), a **Folder Items List**, and a **Browser Status Bar** below the list. Both Browser layouts use zero outer margins and zero gaps between their child components for a flat, edge-to-edge appearance. The Sidebar Splitter and Browser Divider are three-pixel draggable strips using the inactive Folder Pane border color `#3A4048` at rest. Hovering either adds a gray border; pressing the primary mouse button to drag removes that border for the duration of the drag.
 
 ## Interaction
 
@@ -39,9 +39,11 @@ Mouse and keyboard are equally supported ways to invoke the same application com
 | Modified movement key | No-op. |
 | Exact Return | Activate the selected row; without a selection, no-op. |
 | Exact Command-Up | Navigate the active pane to its parent; at the root, no-op. |
+| `Command+W` | Close the current app window. In Phase 2, this is the only window, so the app exits. |
+| `Command+Q` | Quit the app. |
 | Any other key gesture, including modified Return or Command-Up | No-op. |
 
-These gestures invoke only the application-level commands to activate a pane, select a row, clear selection, activate a row, or navigate to a parent; the no-op gestures invoke none. In a key window, the active Folder Pane has a one-pixel `#2F6D9A` border and the Up control retains its neutral border. Active selected rows use `#2F6D9A` with white text; inactive-pane selected rows use `#1E4668` with white text. In an inactive application window, neither Folder Pane has an accent border and both selected rows use `#1E4668` with white text.
+Browsing gestures invoke only the application-level commands to activate a pane, select a row, clear selection, activate a row, or navigate to a parent; the no-op gestures invoke none. In a key window, the active Folder Pane has a one-pixel `#2F6D9A` border and the Up control retains its neutral border. Active selected rows use `#2F6D9A` with white text; inactive-pane selected rows use `#1E4668` with white text. In an inactive application window, neither Folder Pane has an accent border and both selected rows use `#1E4668` with white text.
 
 Dragging items from one pane to the other copies them by default. Moving is an explicit operation.
 

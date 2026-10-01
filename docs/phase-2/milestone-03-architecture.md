@@ -6,7 +6,7 @@ The Qt Widgets boundary has a single GUI-thread `WorkspaceSession`: one applicat
 
 ## Native composition
 
-The Standard Layout uses nested horizontal splitters. The outer splitter separates the Sidebar from the browser area (Sidebar Splitter); the inner splitter separates Left Browser and Right Browser (Browser Divider). Both use the same custom three-pixel native handle returned from `QSplitter::createHandle`; each handle paints the inactive Browser color at rest, adds its gray border only while hovered and not pressed, and suppresses the border throughout a primary-button drag. Splitter sizes are deliberately session-only. Each Browser renders its read-only path, concise folder label, neutral Up Button, list, and status label. Browser Tabs have no rendered state in this milestone.
+The Standard Layout uses nested horizontal splitters. The outer splitter separates the Sidebar from the browser area (Sidebar Splitter); the inner splitter separates Left Browser and Right Browser (Browser Divider). Both use the same custom three-pixel native handle returned from `QSplitter::createHandle`; each handle paints the inactive Folder Pane border color at rest, adds its gray border only while hovered and not pressed, and suppresses the border throughout a primary-button drag. Splitter sizes are deliberately session-only. Each Browser renders its read-only path, concise folder label, neutral Up Button, list, and status label. Browser Tabs have no rendered state in this milestone.
 
 ## Input and rendering
 

@@ -5,6 +5,9 @@ This file records owner decisions and changes to the active Phase 2 plan.
 
 ## Entries
 
+- 2026-10-01 — Project owner set the Sidebar Splitter and Browser Divider resting color to the inactive Folder Pane border color `#3A4048`.
+- 2026-10-01 — Project owner requested minimal margins for both Browsers; the shared native Browser layout now uses zero content margins and zero gaps for a flat appearance.
+- 2026-10-01 — Project owner specified `Command+W` to close the current window (and exit the single-window Phase 2 app) and `Command+Q` to quit the app; [mvp.md](../mvp.md#interaction) records the bindings.
 - 2026-10-01 — Project owner applied the Browser Divider’s thin resting, hover-border, and drag appearance to the Sidebar Splitter as well.
 - 2026-10-01 — Project owner specified the Browser Divider look: three pixels wide, inactive-Browser background at rest, gray hover border, and no hover border during primary-button dragging.
 - 2026-10-01 — Project owner added exact Left (parent) and Right (activate selected row) bindings and clarified that the active highlight is the Folder Pane border. The P2-M3 review fixed Command-Up verification, pane/window-active styling, scrollbar activation, and unaffected-pane model resets.

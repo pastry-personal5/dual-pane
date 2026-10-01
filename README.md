@@ -10,6 +10,8 @@ Two file panes sit side by side. Each pane browses its own directory, and files 
 
 The [MVP scope](docs/mvp.md) defines the included features, user interaction, file-operation safeguards, session behavior, and exclusions.
 
+The in-development Phase 2 build shows two independently browsable panes with compact, edge-to-edge layouts. `Command+W` closes its window and exits the app; `Command+Q` quits the app.
+
 ## Technology and architecture
 
 The [architecture](docs/architecture.md) defines the selected technologies, Clean Architecture boundaries, threading, file-operation safety, and verification strategy.

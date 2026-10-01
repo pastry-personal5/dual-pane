@@ -64,10 +64,18 @@ constexpr auto arrow_action(int key) -> ArrowAction {
     }
 }
 
+constexpr auto user_modifiers(Qt::KeyboardModifiers modifiers) -> Qt::KeyboardModifiers {
+    // Qt sets KeypadModifier for the physical arrow cluster on macOS. It
+    // describes the key's origin, not a modifier held by the user.
+    return modifiers & ~Qt::KeypadModifier;
+}
+
 static_assert(arrow_action(Qt::Key_Up) == ArrowAction::Previous);
 static_assert(arrow_action(Qt::Key_Down) == ArrowAction::Next);
 static_assert(arrow_action(Qt::Key_Left) == ArrowAction::Parent);
 static_assert(arrow_action(Qt::Key_Right) == ArrowAction::Activate);
+static_assert(user_modifiers(Qt::KeypadModifier) == Qt::NoModifier);
+static_assert(user_modifiers(Qt::ShiftModifier | Qt::KeypadModifier) == Qt::ShiftModifier);
 
 auto style_sheet() -> QString {
     return QStringLiteral(R"(
@@ -125,7 +133,7 @@ class ThinSplitterHandle final : public QSplitterHandle {
 
     void paintEvent(QPaintEvent *event) override {
         QPainter painter(this);
-        painter.fillRect(event->rect(), QColor(QString::fromLatin1(inactive_browser_color)));
+        painter.fillRect(event->rect(), QColor(QString::fromLatin1(border_color)));
         if (hovered_ && !dragging_) {
             painter.setPen(QColor(QString::fromLatin1(divider_hover_border_color)));
             painter.drawRect(rect().adjusted(0, 0, -1, -1));
@@ -214,12 +222,13 @@ class ListingView final : public QTreeView {
     void keyPressEvent(QKeyEvent *event) override {
         // Qt maps ControlModifier to the Command key on macOS unless
         // AA_MacDontSwapCtrlAndMeta is explicitly enabled (it is not here).
-        if (event->modifiers() == Qt::ControlModifier && event->key() == Qt::Key_Up) {
+        const auto modifiers = user_modifiers(event->modifiers());
+        if (modifiers == Qt::ControlModifier && event->key() == Qt::Key_Up) {
             model_->go_to_parent();
             event->accept();
             return;
         }
-        if (event->modifiers() != Qt::NoModifier || event->key() == Qt::Key_Tab) {
+        if (modifiers != Qt::NoModifier || event->key() == Qt::Key_Tab) {
             event->accept();
             return;
         }
@@ -389,8 +398,8 @@ auto browser(ListingModel *model, QWidget *parent, ListingView **out_view, QFram
     auto *root = new QWidget(parent);
     root->setObjectName(QStringLiteral("browser"));
     auto *layout = new QVBoxLayout(root);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(6);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
     auto *path = new QLineEdit(root);
     path->setReadOnly(true);
     path->setFocusPolicy(Qt::NoFocus);
@@ -399,8 +408,8 @@ auto browser(ListingModel *model, QWidget *parent, ListingView **out_view, QFram
     auto *folder = new QFrame(root);
     folder->setObjectName(QStringLiteral("folderPane"));
     auto *folder_layout = new QVBoxLayout(folder);
-    folder_layout->setContentsMargins(6, 6, 6, 6);
-    folder_layout->setSpacing(6);
+    folder_layout->setContentsMargins(0, 0, 0, 0);
+    folder_layout->setSpacing(0);
     auto *title = new QLabel(folder);
     title->setObjectName(QStringLiteral("folderName"));
     auto *up = new QToolButton(folder);
@@ -470,6 +479,10 @@ auto run_desktop(::rust::Box<PaneStartup> startup) -> int {
     right_view->setActivationHandler([&pane_highlighter, right_view] { pane_highlighter.activate(right_view); });
     auto *shortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::Key_F), &window);
     QObject::connect(shortcut, &QShortcut::activated, &window, [left_view, right_view] { (left_view->hasFocus() ? right_view : left_view)->setFocus(); });
+    auto *close_shortcut = new QShortcut(QKeySequence::Close, &window);
+    QObject::connect(close_shortcut, &QShortcut::activated, &window, [&window] { window.close(); });
+    auto *quit_shortcut = new QShortcut(QKeySequence::Quit, &window);
+    QObject::connect(quit_shortcut, &QShortcut::activated, &app, [] { QApplication::quit(); });
     {
         auto &state = scheduler_state();
         std::scoped_lock lock(state.mutex);
