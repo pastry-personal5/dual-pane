@@ -93,6 +93,7 @@ auto style_sheet() -> QString {
       QToolButton { background:%2; color:%3; border:1px solid %4; padding:4px; }
       QToolButton:disabled { color:#737A84; }
       QToolButton#sortControl { min-width:16px; max-width:16px; min-height:16px; max-height:16px; padding:0; }
+      QToolButton#upButton, QToolButton#sortControl { border:none; }
       QSplitter::handle { background:%4; }
     )")
         .arg(window_color)

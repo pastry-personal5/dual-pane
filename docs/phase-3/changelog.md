@@ -4,6 +4,10 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — Borderless Folder Pane commands
+
+- The owner removed the border from the Up Button and the eight sort buttons in Folder Pane Toolbar Row #3; [visual layout](../ux-gui.md#visual-layout-and-accessibility) records the rule.
+
 ## 2026-10-02 — Pre-M6 review fixes
 
 The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 code to be fixed before P3-M6 starts.
