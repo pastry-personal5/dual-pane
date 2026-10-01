@@ -16,7 +16,7 @@ This document is the active source of truth for committed product behavior, safe
 
 ## Favorites
 
-A fresh profile starts with one Favorite Group named Favorites containing, in order, Applications, Desktop, Documents, Screenshots, and Downloads. Applications targets `/Applications`; Desktop, Documents, and Downloads target the corresponding folders in the user's home directory. Screenshots targets `~/Documents/Screenshots` only if that folder exists; otherwise that item is omitted. Dual Pane does not create target folders when seeding Favorites. Once initialized, an intentionally empty Favorites collection stays empty across relaunches.
+A fresh profile starts with one Favorite Group named Favorites containing, in order, Applications, Desktop, Documents, Screenshots, and Downloads. Applications targets `/Applications`; Desktop, Documents, and Downloads target the corresponding folders in the user's home directory. Screenshots targets `~/Documents/Screenshots` only if a background check finds that folder; otherwise, including when the check cannot complete, that item is omitted. Dual Pane does not create target folders when seeding Favorites. Once initialized, an intentionally empty Favorites collection stays empty across relaunches.
 
 At launch, a Favorite Item whose target folder is missing or unavailable is automatically removed from the saved collection after a completed target probe. This includes temporary unavailability. Empty Favorite Groups remain. A database-load failure, failed validation worker, or cancelled probe does not count as a target-folder result and cannot remove an item.
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{FavoriteProbeOutcome, SettingsFailure, SettingsSnapshot};
+use crate::{FavoriteProbeOutcome, RowChange, SettingsFailure, SettingsSnapshot};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingErrorKind, Location, RequestToken, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,12 +45,19 @@ pub enum Command {
     SecondarySelect { browser: BrowserSide, row: usize, name: EntryName },
 }
 
+/// Externally observed facts, usually the results of work requests.
+///
+/// In `FolderItemsLoaded`, `changes` turns the request's `previous` Folder
+/// Items into `entries`, or is `None` when the request carried none.
+/// `ScreenshotsFolderProbed` answers `WorkRequest::ProbeScreenshotsFolder`;
+/// only `Available` adds Screenshots to the seeded Favorites.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    FolderItemsLoaded { browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]> },
+    FolderItemsLoaded { browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>> },
     FolderItemsFailed { browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind },
     FolderItemsCancelled { browser: BrowserSide, tab: TabId, token: RequestToken },
     FavoriteTargetProbed { item_id: i64, target: Location, outcome: FavoriteProbeOutcome },
+    ScreenshotsFolderProbed { location: Location, outcome: FavoriteProbeOutcome },
     SettingsSaved { revision: u64 },
     SettingsSaveFailed { revision: u64 },
     SettingsLoaded { snapshot: SettingsSnapshot },

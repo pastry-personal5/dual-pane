@@ -2,18 +2,20 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{Event, WorkRequest};
+use dual_pane_application::{Event, FavoriteProbeOutcome, RowChange, WorkRequest, listing_changes};
 use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, RequestToken, SortSpec, TabId};
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 pub type FolderItemsSource = Box<dyn Fn(&Location, SortSpec, &AtomicBool) -> FolderItemsOutcome + Send>;
 pub type FolderItemsSourceFactory = Arc<dyn Fn() -> FolderItemsSource + Send + Sync>;
 pub type Wake = Box<dyn Fn() + Send>;
+/// Checks one location on the probe worker, never on the GUI thread.
+pub type LocationProbe = Box<dyn Fn(&Location) -> FavoriteProbeOutcome + Send>;
 type WorkerTask = Box<dyn FnOnce() + Send>;
 
 pub trait WorkRunner {
@@ -25,11 +27,14 @@ pub trait WorkRunner {
 
 /// One bounded listing queue per browser, served by a fixed number of reader
 /// lanes so a slow or blocked folder in one tab cannot stall the Browser's
-/// other tabs. Each lane runs one job at a time; a panic is contained,
+/// other tabs. A lane reads, sorts, and diffs against the request's previous
+/// rows, so the GUI thread only applies the finished change. Each lane runs one job at a time; a panic is contained,
 /// reported safely, and followed by a replacement after backoff.
 pub struct Runtime {
     left_jobs: JobSender,
     right_jobs: JobSender,
+    /// One serialized lane for short location probes, separate from reads.
+    probes: SyncSender<ProbeJob>,
     events: Receiver<Event>,
     next_event: Option<Event>,
     wake_pending: Arc<AtomicBool>,
@@ -45,6 +50,8 @@ struct Job {
     token: RequestToken,
     location: Location,
     sort: SortSpec,
+    /// The shown Folder Items this read's result is diffed against.
+    previous: Option<Arc<[Entry]>>,
     state: Arc<JobState>,
 }
 
@@ -61,6 +68,8 @@ struct QueueState {
 }
 
 const PENDING_READ_CAPACITY: usize = 16;
+/// Probes that may wait for the probe lane before admission fails.
+const PENDING_PROBE_CAPACITY: usize = 16;
 /// Concurrent readers per Browser. Provisional: P3-M6 and later measurement may
 /// tune it, but it stays a finite bound so blocked I/O cannot grow threads.
 pub const READER_LANES_PER_BROWSER: usize = 4;
@@ -130,6 +139,12 @@ impl Drop for JobReceiver {
     }
 }
 
+/// A probe and the application event that reports its outcome.
+struct ProbeJob {
+    location: Location,
+    event: Box<dyn FnOnce(FavoriteProbeOutcome) -> Event + Send>,
+}
+
 struct JobState {
     cancelled: AtomicBool,
     terminal_claimed: AtomicBool,
@@ -148,28 +163,32 @@ struct Delivery {
     wake: Arc<Mutex<Wake>>,
 }
 
+/// A completed listing and its row change against the job's previous rows.
+type ListingOutcome = Option<Result<(Arc<[Entry]>, Option<Vec<RowChange>>), ListingErrorKind>>;
+
 enum WorkerOutcome {
-    Completed(FolderItemsOutcome),
+    Completed(ListingOutcome),
     Panicked,
 }
 
 const WORKER_THREAD_NAME: &str = "listing-worker";
+const PROBE_THREAD_NAME: &str = "location-probe";
 const INITIAL_RESTART_DELAY: Duration = Duration::from_millis(100);
 const MAX_RESTART_DELAY: Duration = Duration::from_secs(5);
 static INSTALL_PANIC_HOOK: Once = Once::new();
 
 impl Runtime {
-    pub fn start(source_factory: FolderItemsSourceFactory, wake: Wake) -> io::Result<Self> {
-        Self::start_with_lanes(source_factory, wake, READER_LANES_PER_BROWSER)
+    pub fn start(source_factory: FolderItemsSourceFactory, probe: LocationProbe, wake: Wake) -> io::Result<Self> {
+        Self::start_with_lanes(source_factory, probe, wake, READER_LANES_PER_BROWSER)
     }
 
-    fn start_with_lanes(source_factory: FolderItemsSourceFactory, wake: Wake, lanes: usize) -> io::Result<Self> {
-        Self::start_with(source_factory, wake, lanes, |browser, queue, source_factory, delivery| thread::Builder::new().name(format!("listing-supervisor-{browser:?}")).spawn(move || supervise(queue, source_factory, delivery)).map(|_| ()))
+    fn start_with_lanes(source_factory: FolderItemsSourceFactory, probe: LocationProbe, wake: Wake, lanes: usize) -> io::Result<Self> {
+        Self::start_with(source_factory, probe, wake, lanes, |browser, queue, source_factory, delivery| thread::Builder::new().name(format!("listing-supervisor-{browser:?}")).spawn(move || supervise(queue, source_factory, delivery)).map(|_| ()))
     }
 
-    /// Starts `lanes` supervisors per Browser. If any cannot start, both queues
-    /// close so the supervisors that did start finish.
-    fn start_with(source_factory: FolderItemsSourceFactory, wake: Wake, lanes: usize, mut spawn: impl FnMut(BrowserSide, JobReceiver, FolderItemsSourceFactory, Delivery) -> io::Result<()>) -> io::Result<Self> {
+    /// Starts `lanes` supervisors per Browser, then the probe lane. If any
+    /// cannot start, every queue closes so the threads that did start finish.
+    fn start_with(source_factory: FolderItemsSourceFactory, probe: LocationProbe, wake: Wake, lanes: usize, mut spawn: impl FnMut(BrowserSide, JobReceiver, FolderItemsSourceFactory, Delivery) -> io::Result<()>) -> io::Result<Self> {
         install_panic_hook();
         let lanes = lanes.max(1);
         let (left_jobs, left_queue) = job_queue();
@@ -182,7 +201,9 @@ impl Runtime {
                 spawn(browser, queue.clone(), Arc::clone(&source_factory), delivery.clone())?;
             }
         }
-        Ok(Self { left_jobs, right_jobs, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes })
+        let (probes, probe_jobs) = mpsc::sync_channel(PENDING_PROBE_CAPACITY);
+        thread::Builder::new().name(PROBE_THREAD_NAME.to_owned()).spawn(move || run_probes(probe_jobs, probe, delivery))?;
+        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes })
     }
 
     fn receive(&mut self) -> Option<Event> {
@@ -200,9 +221,13 @@ fn install_panic_hook() {
     INSTALL_PANIC_HOOK.call_once(|| {
         let previous = panic::take_hook();
         panic::set_hook(Box::new(move |information| {
-            if thread::current().name() == Some(WORKER_THREAD_NAME) {
-                let mut standard_error = io::stderr();
-                standard_error.write_all(b"Dual Pane listing worker stopped unexpectedly.\n").ok();
+            let message: Option<&[u8]> = match thread::current().name() {
+                Some(WORKER_THREAD_NAME) => Some(b"Dual Pane listing worker stopped unexpectedly.\n"),
+                Some(PROBE_THREAD_NAME) => Some(b"Dual Pane location probe stopped unexpectedly.\n"),
+                _ => None,
+            };
+            if let Some(message) = message {
+                io::stderr().write_all(message).ok();
             } else {
                 previous(information);
             }
@@ -213,7 +238,7 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
-            WorkRequest::ReadDirectory { browser, tab, token, location, sort } => {
+            WorkRequest::ReadDirectory { browser, tab, token, location, sort, previous } => {
                 if self.outstanding.values().filter(|(owner, _, _)| *owner == browser).count() >= self.read_capacity {
                     return Some(Event::FolderItemsFailed { browser, tab, token, kind: ListingErrorKind::Busy });
                 }
@@ -223,7 +248,7 @@ impl WorkRunner for Runtime {
                     BrowserSide::Left => &self.left_jobs,
                     BrowserSide::Right => &self.right_jobs,
                 };
-                if let Err((job, closed)) = jobs.send(Job { browser, tab, token, location, sort, state })
+                if let Err((job, closed)) = jobs.send(Job { browser, tab, token, location, sort, previous, state })
                     && job.state.claim_terminal()
                 {
                     self.outstanding.remove(&job.token);
@@ -246,6 +271,7 @@ impl WorkRunner for Runtime {
                 None
             }
             WorkRequest::SaveSettings { revision, .. } => Some(Event::SettingsSaveFailed { revision }),
+            WorkRequest::ProbeScreenshotsFolder { location } => self.probe(location.clone(), Box::new(move |outcome| Event::ScreenshotsFolderProbed { location, outcome })),
         }
     }
 
@@ -256,6 +282,24 @@ impl WorkRunner for Runtime {
             self.next_event = self.events.try_recv().ok();
         }
         (events, self.next_event.is_some())
+    }
+}
+
+impl Runtime {
+    /// Queues a probe without waiting. If the probe queue is full or the lane
+    /// has stopped, the outcome is `Failed` at once so no request is left
+    /// pending; a failed probe proves nothing about its location.
+    fn probe(&self, location: Location, event: Box<dyn FnOnce(FavoriteProbeOutcome) -> Event + Send>) -> Option<Event> {
+        self.probes.try_send(ProbeJob { location, event }).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| (job.event)(FavoriteProbeOutcome::Failed))
+    }
+}
+
+/// Runs probes in order. A panicking probe reports `Failed` and the lane
+/// continues, because a probe keeps no state between calls.
+fn run_probes(jobs: Receiver<ProbeJob>, probe: LocationProbe, delivery: Delivery) {
+    for job in jobs {
+        let outcome = catch_unwind(AssertUnwindSafe(|| probe(&job.location))).unwrap_or(FavoriteProbeOutcome::Failed);
+        deliver_event(&delivery, (job.event)(outcome));
     }
 }
 
@@ -283,7 +327,11 @@ fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factory: FolderIt
         let worker: WorkerTask = Box::new(move || {
             let outcome = match catch_unwind(AssertUnwindSafe(|| {
                 let source = worker_source_factory();
-                source(&worker_job.location, worker_job.sort, &worker_job.state.cancelled)
+                let entries = source(&worker_job.location, worker_job.sort, &worker_job.state.cancelled)?;
+                Some(entries.map(|entries| {
+                    let changes = worker_job.previous.as_deref().map(|previous| listing_changes(previous, &entries));
+                    (entries, changes)
+                }))
             })) {
                 Ok(outcome) => WorkerOutcome::Completed(outcome),
                 Err(payload) => {
@@ -306,8 +354,8 @@ fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factory: FolderIt
             continue;
         };
         match outcome {
-            WorkerOutcome::Completed(Some(Ok(entries))) => {
-                finish(&delivery, &job, Event::FolderItemsLoaded { browser: job.browser, tab: job.tab, token: job.token, entries });
+            WorkerOutcome::Completed(Some(Ok((entries, changes)))) => {
+                finish(&delivery, &job, Event::FolderItemsLoaded { browser: job.browser, tab: job.tab, token: job.token, entries, changes });
                 delay = INITIAL_RESTART_DELAY;
             }
             WorkerOutcome::Completed(Some(Err(kind))) => {
@@ -343,7 +391,7 @@ fn deliver_event(delivery: &Delivery, event: Event) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::FavoriteTargetProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } => None,
+        Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } => None,
     }
 }
 
@@ -369,7 +417,7 @@ mod tests {
         browser_read(BrowserSide::Left, index, name)
     }
     fn browser_read(browser: BrowserSide, index: usize, name: &str) -> WorkRequest {
-        WorkRequest::ReadDirectory { browser, tab: TabId::new(index as u64), token: token(index), location: location(name), sort: SortSpec::default() }
+        WorkRequest::ReadDirectory { browser, tab: TabId::new(index as u64), token: token(index), location: location(name), sort: SortSpec::default(), previous: None }
     }
     fn source_factory(source: impl Fn(&Location, &AtomicBool) -> FolderItemsOutcome + Send + Sync + 'static) -> FolderItemsSourceFactory {
         let source = Arc::new(source);
@@ -381,11 +429,19 @@ mod tests {
     fn runtime(source_factory: FolderItemsSourceFactory) -> (Runtime, Receiver<()>) {
         runtime_with_lanes(source_factory, 1)
     }
+    /// A probe for runtimes whose tests do not probe locations.
+    fn unused_probe() -> LocationProbe {
+        Box::new(|_| FavoriteProbeOutcome::Failed)
+    }
     fn runtime_with_lanes(source_factory: FolderItemsSourceFactory, lanes: usize) -> (Runtime, Receiver<()>) {
+        runtime_with_probe(source_factory, unused_probe(), lanes)
+    }
+    fn runtime_with_probe(source_factory: FolderItemsSourceFactory, probe: LocationProbe, lanes: usize) -> (Runtime, Receiver<()>) {
         let (sender, receiver) = mpsc::channel();
         (
             Runtime::start_with_lanes(
                 source_factory,
+                probe,
                 Box::new(move || {
                     sender.send(()).ok();
                 }),
@@ -442,7 +498,7 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
             wake_sender.send(()).ok();
         });
-        (Runtime::start_with_lanes(source_factory, wake, lanes).unwrap(), Probe { calls, gate, wakes, wake_count })
+        (Runtime::start_with_lanes(source_factory, unused_probe(), wake, lanes).unwrap(), Probe { calls, gate, wakes, wake_count })
     }
 
     impl Probe {
@@ -461,7 +517,77 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "alpha")), None);
         assert_eq!(probe.next_call(), (location("alpha"), Some("listing-worker".to_owned())));
         probe.wait_for_wake();
-        assert_eq!(runner.take_events(8), (vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]) }], false));
+        assert_eq!(runner.take_events(8), (vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]), changes: None }], false));
+    }
+
+    #[test]
+    fn the_worker_diffs_a_reload_against_the_previous_rows() {
+        let file = |name: &str| Entry::new(EntryName::new(name).unwrap(), dual_pane_domain::EntryKind::File);
+        let listed: Arc<[Entry]> = Arc::from(vec![file("a"), file("b"), file("c")]);
+        let source_rows = Arc::clone(&listed);
+        let (mut runner, wakes) = runtime(source_factory(move |_, _| Some(Ok(Arc::clone(&source_rows)))));
+        let previous: Arc<[Entry]> = Arc::from(vec![file("a"), file("c")]);
+        let reload = WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), location: location("folder"), sort: SortSpec::default(), previous: Some(previous) };
+        assert_eq!(runner.dispatch(reload), None);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::clone(&listed), changes: Some(vec![RowChange { row: 1, removed: 0, inserted: 1 }]) }]);
+        assert_eq!(runner.dispatch(read(1, "folder")), None);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: listed, changes: None }]);
+    }
+
+    #[test]
+    fn probes_run_off_the_calling_thread_and_survive_a_panicking_probe() {
+        let caller = thread::current().id();
+        let probe: LocationProbe = Box::new(move |location| {
+            assert_ne!(thread::current().id(), caller, "a probe ran on the dispatching thread");
+            if *location == self::location("panics") {
+                panic!("probe failure");
+            }
+            if *location == self::location("present") { FavoriteProbeOutcome::Available } else { FavoriteProbeOutcome::Unavailable }
+        });
+        let (mut runner, wakes) = runtime_with_probe(source_factory(|_, _| None), probe, 1);
+        let mut events = Vec::new();
+        for name in ["panics", "present", "absent"] {
+            assert_eq!(runner.dispatch(WorkRequest::ProbeScreenshotsFolder { location: location(name) }), None);
+        }
+        while events.len() < 3 {
+            events.extend(wait(&mut runner, &wakes));
+        }
+        let outcome = |location| Event::ScreenshotsFolderProbed { location, outcome: FavoriteProbeOutcome::Failed };
+        assert_eq!(events, vec![outcome(location("panics")), Event::ScreenshotsFolderProbed { location: location("present"), outcome: FavoriteProbeOutcome::Available }, Event::ScreenshotsFolderProbed { location: location("absent"), outcome: FavoriteProbeOutcome::Unavailable }]);
+    }
+
+    #[test]
+    fn a_stopped_probe_lane_fails_a_probe_at_once() {
+        let (mut runner, _wakes) = runtime(source_factory(|_, _| None));
+        runner.probes = mpsc::sync_channel(1).0;
+        assert_eq!(runner.dispatch(WorkRequest::ProbeScreenshotsFolder { location: location("any") }), Some(Event::ScreenshotsFolderProbed { location: location("any"), outcome: FavoriteProbeOutcome::Failed }));
+    }
+
+    #[test]
+    fn a_full_probe_queue_fails_further_probes_at_once() {
+        let (started, wait_started) = mpsc::channel();
+        let (release, gate) = mpsc::channel::<()>();
+        let gate = Mutex::new(gate);
+        let probe: LocationProbe = Box::new(move |_| {
+            started.send(()).ok();
+            gate.lock().unwrap().recv_timeout(TIMEOUT).ok();
+            FavoriteProbeOutcome::Available
+        });
+        let (mut runner, wakes) = runtime_with_probe(source_factory(|_, _| None), probe, 1);
+        assert_eq!(runner.dispatch(WorkRequest::ProbeScreenshotsFolder { location: location("running") }), None);
+        wait_started.recv_timeout(TIMEOUT).unwrap();
+        for index in 0..PENDING_PROBE_CAPACITY {
+            assert_eq!(runner.dispatch(WorkRequest::ProbeScreenshotsFolder { location: location(&format!("queued-{index}")) }), None);
+        }
+        assert_eq!(runner.dispatch(WorkRequest::ProbeScreenshotsFolder { location: location("overflow") }), Some(Event::ScreenshotsFolderProbed { location: location("overflow"), outcome: FavoriteProbeOutcome::Failed }));
+        for _ in 0..=PENDING_PROBE_CAPACITY {
+            release.send(()).unwrap();
+        }
+        let mut delivered = 0;
+        while delivered <= PENDING_PROBE_CAPACITY {
+            delivered += wait(&mut runner, &wakes).len();
+        }
+        assert_eq!(delivered, PENDING_PROBE_CAPACITY + 1);
     }
 
     #[test]
@@ -471,9 +597,9 @@ mod tests {
         assert_eq!(probe.next_call().0, location("blocked"));
         assert_eq!(runner.dispatch(browser_read(BrowserSide::Right, 1, "right")), None);
         assert_eq!(probe.next_call().0, location("right"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: token(1), entries: Arc::from([]), changes: None }]);
         probe.gate.send(()).unwrap();
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]), changes: None }]);
     }
 
     #[test]
@@ -487,9 +613,9 @@ mod tests {
         assert!(!runner.outstanding.get(&token(0)).unwrap().2.cancelled.load(Ordering::Relaxed));
         runner.dispatch(browser_read(BrowserSide::Right, 1, "right"));
         assert_eq!(probe.next_call().0, location("right"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: token(1), entries: Arc::from([]), changes: None }]);
         probe.gate.send(()).unwrap();
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]), changes: None }]);
     }
 
     #[test]
@@ -501,10 +627,10 @@ mod tests {
         runner.dispatch(read(1, "replacement"));
         runner.dispatch(browser_read(BrowserSide::Right, 2, "right"));
         assert_eq!(probe.next_call().0, location("right"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(2), token: token(2), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(2), token: token(2), entries: Arc::from([]), changes: None }]);
         probe.gate.send(()).unwrap();
         assert_eq!(probe.next_call().0, location("replacement"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]), changes: None }]);
         assert!(runner.take_events(8).0.is_empty());
     }
 
@@ -534,15 +660,15 @@ mod tests {
         runner.dispatch(read(2, "left-panic"));
         assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(2), token: token(2), kind: ListingErrorKind::Internal }]);
         runner.dispatch(read(3, "left-recovered"));
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(3), token: token(3), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(3), token: token(3), entries: Arc::from([]), changes: None }]);
         gate.send(()).unwrap();
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(0), token: token(0), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(0), token: token(0), entries: Arc::from([]), changes: None }]);
     }
 
     #[test]
     fn startup_closes_first_queue_when_second_supervisor_fails() {
         let (observed, closed) = mpsc::channel();
-        let result = Runtime::start_with(source_factory(|_, _| Some(Ok(Arc::from([])))), Box::new(|| {}), READER_LANES_PER_BROWSER, move |browser, queue, _, _| {
+        let result = Runtime::start_with(source_factory(|_, _| Some(Ok(Arc::from([])))), unused_probe(), Box::new(|| {}), READER_LANES_PER_BROWSER, move |browser, queue, _, _| {
             if browser == BrowserSide::Right {
                 return Err(io::Error::other("right supervisor unavailable"));
             }
@@ -697,7 +823,7 @@ mod tests {
 
         assert_eq!(runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0) }), None);
 
-        assert_eq!(runner.take_events(32), (vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]) }], false));
+        assert_eq!(runner.take_events(32), (vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]), changes: None }], false));
     }
 
     #[test]
@@ -706,7 +832,7 @@ mod tests {
         drop(queue);
         let (_event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
-        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY };
+        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY };
 
         assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());
@@ -751,7 +877,7 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..3 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), state }).unwrap();
+            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), previous: None, state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
@@ -778,7 +904,7 @@ mod tests {
             |_| {},
         );
 
-        assert_eq!(events.into_iter().collect::<Vec<_>>(), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }, Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), kind: ListingErrorKind::Internal }, Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(2), token: token(2), entries: Arc::from([]) },]);
+        assert_eq!(events.into_iter().collect::<Vec<_>>(), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }, Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), kind: ListingErrorKind::Internal }, Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(2), token: token(2), entries: Arc::from([]), changes: None },]);
     }
 
     #[test]
@@ -800,7 +926,7 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "panic")), None);
         assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]), changes: None }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -820,7 +946,7 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "panic")), None);
         assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]), changes: None }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -850,7 +976,7 @@ mod tests {
         assert_eq!(runner.dispatch(read(0, "panic")), None);
         assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }]);
         assert_eq!(runner.dispatch(read(1, "after")), None);
-        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]), changes: None }]);
         assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
@@ -869,7 +995,7 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..11 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), state }).unwrap();
+            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), previous: None, state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
@@ -912,9 +1038,9 @@ mod tests {
         assert_eq!(probe.next_call().0, location("blocked"));
         assert_eq!(runner.dispatch(read(1, "other")), None);
         assert_eq!(probe.next_call().0, location("other"));
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(1), token: token(1), entries: Arc::from([]), changes: None }]);
         probe.gate.send(()).unwrap();
-        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]) }]);
+        assert_eq!(wait(&mut runner, &probe.wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]), changes: None }]);
     }
 
     #[test]

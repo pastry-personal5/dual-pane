@@ -52,8 +52,9 @@ This tree shows the current crate boundaries and representative future homes. En
 │       │   ├── main.rs                 # composition root and executable entry point
 │       │   ├── folder_items_list_model.rs # CXX-Qt bridge: Qt list model and run_desktop
 │       │   ├── browser_session.rs      # Qt-free: workspace, presenter, bounded drain
-│       │   ├── runtime.rs              # Qt-free: Browser-local directory-read workers, cancellation, GUI wake
+│       │   ├── runtime.rs              # Qt-free: Browser-local read, sort, and diff workers, probe lane, cancellation, GUI wake
 │       │   ├── folder_items.rs         # Qt-free: native directory reader and error mapping
+│       │   ├── location_probe.rs       # Qt-free: native folder check for Favorites probes
 │       │   ├── native_location.rs      # Qt-free: byte-exact Path and Location conversion
 │       │   └── settings_storage.rs     # Qt-free: SQLite settings driver and its serialized worker
 │       ├── cpp/                        # created with C++ Qt shim source

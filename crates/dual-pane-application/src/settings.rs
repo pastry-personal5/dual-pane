@@ -188,16 +188,26 @@ pub struct FavoritesRecords {
     pub items: Vec<FavoriteItemRecord>,
 }
 
-/// The product's fresh-profile hierarchy. The caller determines whether the
-/// optional Screenshots location exists without making this Qt-free model do
-/// any path probing.
+fn fixed_name(value: &[u8]) -> EntryName {
+    EntryName::new(value).unwrap_or_else(|_| unreachable!("fixed Favorite name is valid"))
+}
+
+/// The optional fresh-profile Screenshots target, `~/Documents/Screenshots`.
+/// A worker probes it before the fresh-profile hierarchy is seeded.
+pub fn fresh_profile_screenshots(home: &Location) -> Location {
+    home.join(&fixed_name(b"Documents")).join(&fixed_name(b"Screenshots"))
+}
+
+/// The product's fresh-profile hierarchy. The caller reports whether the
+/// optional Screenshots location exists, so this Qt-free model does no path
+/// probing.
 pub fn fresh_profile_favorites(home: &Location, screenshots_exists: bool) -> FavoritesRecords {
-    let name = |value| EntryName::new(value).unwrap_or_else(|_| unreachable!("fixed Favorite name is valid"));
+    let name = |value: Vec<u8>| fixed_name(&value);
     let home_location = |value| home.join(&name(value));
     let documents = home_location(b"Documents".to_vec());
     let mut items = vec![FavoriteItemRecord { id: 1, group_id: 1, name: "Applications".into(), target: Location::root().join(&name(b"Applications".to_vec())), position: 0 }, FavoriteItemRecord { id: 2, group_id: 1, name: "Desktop".into(), target: home_location(b"Desktop".to_vec()), position: 1 }, FavoriteItemRecord { id: 3, group_id: 1, name: "Documents".into(), target: documents.clone(), position: 2 }];
     if screenshots_exists {
-        items.push(FavoriteItemRecord { id: 4, group_id: 1, name: "Screenshots".into(), target: documents.join(&name(b"Screenshots".to_vec())), position: 3 });
+        items.push(FavoriteItemRecord { id: 4, group_id: 1, name: "Screenshots".into(), target: fresh_profile_screenshots(home), position: 3 });
     }
     items.push(FavoriteItemRecord { id: 5, group_id: 1, name: "Downloads".into(), target: home_location(b"Downloads".to_vec()), position: if screenshots_exists { 4 } else { 3 } });
     FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 1, name: "Favorites".into(), position: 0 }], items }

@@ -4,6 +4,11 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — Row deltas on workers and background Screenshots probe
+
+- The owner chose to move the Folder Items diff to the workers, as [architecture §3.4](../architecture.md#34-frameworks-and-drivers--replaceable-mechanics) requires. A same-folder `ReadDirectory` request carries the tab's shown Folder Items as `previous`; the reader lane sorts, diffs against them, and returns the row change in `FolderItemsLoaded`. The reducer no longer compares listings. It accepts the change only when it was computed against the still-shown Folder Items and fits their row count; otherwise it replaces every row.
+- The owner chose to move the launch check of `~/Documents/Screenshots` off the main thread. `main.rs` no longer probes it. After a load finds uninitialized Favorites, the application requests `ProbeScreenshotsFolder`, and the runtime's new serialized probe lane answers with `ScreenshotsFolderProbed`. Favorites are seeded and saved when the result arrives, so only fresh profiles probe at all. Favorites edits wait for the probe as they wait for a load. A failed probe, such as a privacy denial, omits Screenshots, and the lane's bounded queue answers `Failed` at once when it is full or stopped, so seeding never waits indefinitely. P3-M6 Favorite target probes reuse the lane.
+
 ## 2026-10-02 — Pre-M6 codebase and docs review
 
 - Hardening for paths P3-M6 and P3-M10 make frequent: a reload reconciles selection, cursor, anchor, and scroll hint against a set of present names, so refreshing a large selected folder is linear instead of quadratic. The settings worker writes a save queued before a `Load` first, so a load reports what storage holds; a confirmed `Reset` still discards saves queued before it. Neither path is reachable from the 2.0.0 window.

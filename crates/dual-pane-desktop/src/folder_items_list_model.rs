@@ -134,12 +134,12 @@ impl ffi::FolderItemsListModel {
     }
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
-        let BrowserStartup { location, home, screenshots_exists, settings_path, source_factory } = *startup;
-        match Runtime::start(source_factory, Box::new(ffi::schedule_gui_drain)) {
+        let BrowserStartup { location, home, settings_path, source_factory, location_probe } = *startup;
+        match Runtime::start(source_factory, location_probe, Box::new(ffi::schedule_gui_drain)) {
             Ok(runtime) => {
                 let mut guard = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 let settings = settings_path.and_then(|path| SettingsWorker::start_with_wake(path, Box::new(ffi::schedule_gui_drain)).ok());
-                let mut coordinator = WorkspaceSession::with_settings(runtime, home, screenshots_exists, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
+                let mut coordinator = WorkspaceSession::with_settings(runtime, home, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
                 coordinator.start(location);
                 *guard = Some(coordinator);
                 drop(guard);

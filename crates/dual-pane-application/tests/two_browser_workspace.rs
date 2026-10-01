@@ -1,4 +1,4 @@
-use dual_pane_application::{Command, Event, FavoriteProbeOutcome, Output, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
+use dual_pane_application::{Command, Event, FavoriteProbeOutcome, Output, RowChange, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, SortDirection, SortField, SortSpec, TabId};
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ fn ready() -> Workspace {
     workspace
 }
 fn load(workspace: &mut Workspace, browser: BrowserSide, tab: TabId, token: dual_pane_domain::RequestToken, entries: Vec<Entry>) {
-    workspace.handle(Event::FolderItemsLoaded { browser, tab, token, entries: Arc::from(entries) }.into());
+    workspace.handle(Event::FolderItemsLoaded { browser, tab, token, entries: Arc::from(entries), changes: None }.into());
 }
 
 #[test]
@@ -158,16 +158,54 @@ fn invalidation_refreshes_matching_inactive_tabs_in_both_browsers() {
     assert_eq!(reads, 3);
 }
 
-#[test]
-fn uninitialized_settings_seed_favorites_once_with_startup_context() {
-    let home = location("home");
-    let mut workspace = Workspace::with_context(home, true);
+fn favorite_names(workspace: &Workspace) -> Vec<&str> {
+    workspace.favorites().items.iter().map(|item| item.name.as_str()).collect()
+}
+
+/// Loads uninitialized settings and returns the Screenshots folder the
+/// workspace asked a worker to probe.
+fn load_fresh_profile(workspace: &mut Workspace) -> Location {
     let transition = workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
-    assert!(matches!(transition.work.as_slice(), [WorkRequest::SaveSettings { .. }]));
-    assert_eq!(workspace.favorites().items.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(), ["Applications", "Desktop", "Documents", "Screenshots", "Downloads"]);
+    assert!(workspace.favorites().items.is_empty(), "nothing is seeded before the probe completes");
+    match transition.work.as_slice() {
+        [WorkRequest::ProbeScreenshotsFolder { location }] => location.clone(),
+        other => panic!("expected only a Screenshots probe, got {other:?}"),
+    }
+}
+
+#[test]
+fn uninitialized_settings_seed_favorites_once_after_the_screenshots_probe() {
+    let home = location("home");
+    let mut workspace = Workspace::with_home(home.clone());
+    let screenshots = load_fresh_profile(&mut workspace);
+    assert_eq!(screenshots, home.join(&name("Documents")).join(&name("Screenshots")));
+    let seeded = workspace.handle(Event::ScreenshotsFolderProbed { location: screenshots.clone(), outcome: FavoriteProbeOutcome::Available }.into());
+    assert!(matches!(seeded.work.as_slice(), [WorkRequest::SaveSettings { .. }]));
+    assert_eq!(favorite_names(&workspace), ["Applications", "Desktop", "Documents", "Screenshots", "Downloads"]);
+    assert!(workspace.handle(Event::ScreenshotsFolderProbed { location: screenshots, outcome: FavoriteProbeOutcome::Available }.into()).outputs.is_empty(), "a repeated probe result seeds nothing");
     let count = workspace.favorites().items.len();
     workspace.handle(Event::SettingsLoaded { snapshot: dual_pane_application::SettingsSnapshot { favorites: workspace.favorites().clone(), ..SettingsSnapshot::default() } }.into());
     assert_eq!(workspace.favorites().items.len(), count);
+}
+
+#[test]
+fn only_a_probe_that_found_screenshots_adds_it() {
+    for outcome in [FavoriteProbeOutcome::Unavailable, FavoriteProbeOutcome::Failed, FavoriteProbeOutcome::Cancelled] {
+        let mut workspace = Workspace::with_home(location("home"));
+        let screenshots = load_fresh_profile(&mut workspace);
+        workspace.handle(Event::ScreenshotsFolderProbed { location: screenshots, outcome }.into());
+        assert_eq!(favorite_names(&workspace), ["Applications", "Desktop", "Documents", "Downloads"], "{outcome:?}");
+    }
+}
+
+#[test]
+fn favorites_edits_wait_for_the_screenshots_probe() {
+    let mut workspace = Workspace::with_home(location("home"));
+    let screenshots = load_fresh_profile(&mut workspace);
+    assert_eq!(workspace.handle(Command::CreateFavoriteGroup { name: "Early".into() }.into()), Default::default());
+    workspace.handle(Event::ScreenshotsFolderProbed { location: screenshots, outcome: FavoriteProbeOutcome::Unavailable }.into());
+    assert!(!workspace.handle(Command::CreateFavoriteGroup { name: "Later".into() }.into()).outputs.is_empty());
+    assert!(workspace.favorites().groups.iter().any(|group| group.name == "Later"));
 }
 
 #[test]
@@ -276,7 +314,7 @@ fn scroll_hint_is_exposed_when_history_and_tabs_are_restored() {
     let (_, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("two") }.into()).work);
     load(&mut workspace, BrowserSide::Left, first, token, vec![]);
     let (_, token) = request(&workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work);
-    let restored = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, token, entries: Arc::from(vec![entry("anchor")]) }.into());
+    let restored = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, token, entries: Arc::from(vec![entry("anchor")]), changes: None }.into());
     assert!(restored.outputs.iter().any(|output| matches!(output, dual_pane_application::Output::FolderItemsReplaced { scroll_hint: Some((anchor, 7)), .. } if anchor == &name("anchor"))));
 
     workspace.handle(Command::NewTab { browser: BrowserSide::Left }.into());
@@ -357,7 +395,7 @@ fn a_refresh_keeps_present_selected_items_in_order_and_drops_missing_ones() {
     workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, row: 1, name: name("b") }.into());
     workspace.handle(Command::SelectAll { browser: BrowserSide::Left }.into());
     let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into()).work);
-    let refreshed = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("c"), entry("d")]) }.into());
+    let refreshed = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("c"), entry("d")]), changes: None }.into());
     assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("a"), name("c")]);
     assert!(refreshed.outputs.contains(&Output::SelectionChanged { browser: BrowserSide::Left, tab, selection: workspace.selection(BrowserSide::Left).clone(), row: None }), "the missing cursor is cleared rather than moved");
     assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, row: 2, name: name("d") }.into()).outputs.is_empty(), "the missing anchor is cleared");
@@ -374,4 +412,41 @@ fn reordering_a_tab_to_its_current_position_reports_nothing() {
     let moved = workspace.handle(Command::ReorderTab { browser: BrowserSide::Left, tab: second, position: 0 }.into());
     assert_eq!(moved.outputs, vec![Output::TabsChanged { browser: BrowserSide::Left, active_tab: second }]);
     assert_eq!(workspace.tabs(BrowserSide::Left).collect::<Vec<_>>(), vec![second, first]);
+}
+
+fn read_previous(work: &[WorkRequest]) -> Option<Arc<[Entry]>> {
+    match work.last() {
+        Some(WorkRequest::ReadDirectory { previous, .. }) => previous.clone(),
+        _ => panic!("read"),
+    }
+}
+
+#[test]
+fn a_reload_asks_the_gateway_to_diff_against_the_shown_rows_and_forwards_its_change() {
+    let mut workspace = Workspace::new();
+    let first = workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("folder") }.into());
+    assert_eq!(read_previous(&first.work), None, "a new folder has nothing to diff against");
+    let (tab, token) = request(&first.work);
+    load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b")]);
+    let refresh = workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into());
+    assert_eq!(read_previous(&refresh.work).as_deref(), Some(&[entry("a"), entry("b")][..]));
+    let (_, token) = request(&refresh.work);
+    let change = RowChange { row: 1, removed: 0, inserted: 1 };
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("ab"), entry("b")]), changes: Some(vec![change.clone()]) }.into());
+    assert_eq!(loaded.outputs[0], Output::FolderItemsRowsChanged { browser: BrowserSide::Left, tab, changes: vec![change] });
+    let other = workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("other") }.into());
+    assert_eq!(read_previous(&other.work), None);
+}
+
+#[test]
+fn a_gateway_change_that_does_not_fit_the_shown_rows_replaces_every_row() {
+    let mut workspace = Workspace::new();
+    let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("folder") }.into()).work);
+    load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b")]);
+    for wrong in [RowChange { row: 2, removed: 1, inserted: 1 }, RowChange { row: 0, removed: 0, inserted: 5 }] {
+        let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into()).work);
+        let shown = workspace.entries(BrowserSide::Left).len();
+        let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("c")]), changes: Some(vec![wrong]) }.into());
+        assert_eq!(loaded.outputs[0], Output::FolderItemsRowsChanged { browser: BrowserSide::Left, tab, changes: vec![RowChange { row: 0, removed: shown, inserted: 2 }] });
+    }
 }

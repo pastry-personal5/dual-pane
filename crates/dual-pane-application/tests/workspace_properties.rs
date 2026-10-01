@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use dual_pane_application::{Command, Event, Input, SettingsSnapshot, WorkRequest, Workspace};
+use dual_pane_application::{Command, Event, Input, Output, SettingsSnapshot, WorkRequest, Workspace, listing_changes};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingErrorKind, Location, RequestToken, SortDirection, SortField, SortSpec, TabId};
 use proptest::prelude::*;
 
@@ -43,10 +43,13 @@ fn entries(mask: u8) -> Arc<[Entry]> {
     ["a", "b", "c", "d"].iter().enumerate().filter(|(bit, _)| mask & (1 << bit) != 0).map(|(_, name)| Entry::new(EntryName::new(*name).unwrap(), EntryKind::File)).collect()
 }
 
+/// One requested read with the Folder Items it asked the gateway to diff against.
+type IssuedRead = (BrowserSide, TabId, RequestToken, Option<Arc<[Entry]>>);
+
 /// Every read the workspace requested, and which one each tab still awaits.
 #[derive(Default)]
 struct Reads {
-    issued: Vec<(BrowserSide, TabId, RequestToken)>,
+    issued: Vec<IssuedRead>,
     live: HashMap<(BrowserSide, TabId), RequestToken>,
 }
 
@@ -54,8 +57,8 @@ impl Reads {
     fn record(&mut self, work: &[WorkRequest]) {
         for request in work {
             match request {
-                WorkRequest::ReadDirectory { browser, tab, token, .. } => {
-                    self.issued.push((*browser, *tab, *token));
+                WorkRequest::ReadDirectory { browser, tab, token, previous, .. } => {
+                    self.issued.push((*browser, *tab, *token, previous.clone()));
                     self.live.insert((*browser, *tab), *token);
                 }
                 WorkRequest::Cancel { browser, tab, token } => {
@@ -63,7 +66,7 @@ impl Reads {
                         self.live.remove(&(*browser, *tab));
                     }
                 }
-                WorkRequest::SaveSettings { .. } => {}
+                WorkRequest::SaveSettings { .. } | WorkRequest::ProbeScreenshotsFolder { .. } => {}
             }
         }
     }
@@ -141,12 +144,28 @@ proptest! {
                 if reads.issued.is_empty() {
                     continue;
                 }
-                let (browser, tab, token) = reads.issued[pick % reads.issued.len()];
+                let (browser, tab, token, previous) = reads.issued[pick % reads.issued.len()].clone();
                 let live = reads.live.get(&(browser, tab)) == Some(&token);
                 let before = (visible(&workspace, BrowserSide::Left), visible(&workspace, BrowserSide::Right));
-                let event = if fail { Event::FolderItemsFailed { browser, tab, token, kind: ListingErrorKind::ItemMissing } } else { Event::FolderItemsLoaded { browser, tab, token, entries: entries(mask) } };
+                let shown_tab = workspace.active_tab(browser) == tab;
+                // The gateway diffs on its worker against the rows the request carried.
+                let event = if fail { Event::FolderItemsFailed { browser, tab, token, kind: ListingErrorKind::ItemMissing } } else { Event::FolderItemsLoaded { browser, tab, token, entries: entries(mask), changes: previous.map(|previous| listing_changes(&previous, &entries(mask))) } };
                 let transition = workspace.handle(Input::from(event));
                 reads.record(&transition.work);
+                if live && shown_tab {
+                    let old = if browser == BrowserSide::Left { &before.0.1 } else { &before.1.1 };
+                    let new = workspace.entries(browser);
+                    for output in &transition.outputs {
+                        if let Output::FolderItemsRowsChanged { changes, .. } = output {
+                            let mut rows = old.clone();
+                            for change in changes {
+                                prop_assert!(change.row + change.removed <= rows.len(), "a row change leaves the shown rows");
+                                rows.splice(change.row..change.row + change.removed, new[change.row..change.row + change.inserted].iter().cloned());
+                            }
+                            prop_assert_eq!(&rows, &new.to_vec(), "applying the row changes to the shown rows does not yield the new rows");
+                        }
+                    }
+                }
                 if live {
                     reads.live.remove(&(browser, tab));
                 } else {
