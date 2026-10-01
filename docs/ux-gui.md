@@ -46,7 +46,7 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 
 ### Folder Items fields and display
 
-- The columns appear from left to right as Name, Type, Relative Date Column, Exact Date Column, and Size. The two date columns show the same modification timestamp in different forms.
+- The columns appear from left to right as Item Icon Column, Name, Type, Relative Date Column, Exact Date Column, and Size. The Item Icon Column shows each Folder Item's macOS native icon, as Finder shows it; it has no header text and no sort buttons. Icons load off the GUI thread, so a row may appear before its icon. The two date columns show the same modification timestamp in different forms.
 - The Relative Date Column uses compact elapsed units such as `17 h`, `2 d`, `11 M`, and `2 y`. Its text updates when the folder reloads; no periodic timer updates it.
 - The Relative Date Column shows `now` for a timestamp less than one minute old or in the future, and `N min` for less than one hour; larger values use the units above.
 - The Exact Date Column uses a local timestamp such as `2026-09-30 20:21`. Size uses decimal units such as `112.5 KB`, with one decimal place from KB upward and whole bytes below that, such as `512 B`. Unavailable values show `—`.
@@ -62,7 +62,7 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 
 ### Narrow Browser behavior
 
-- As a Browser narrows, hide columns in this order: Size, Exact Date Column, Relative Date Column, Type. Name remains visible while the Browser is usable. Hide each field's sort controls with it.
+- As a Browser narrows, hide columns in this order: Size, Exact Date Column, Relative Date Column, Type, Item Icon Column. Name remains visible while the Browser is usable. Hide each field's sort controls with it.
 - Below a 280-pixel Browser width, cover that Browser with a semi-transparent layer and center large, legible `Expand` text both horizontally and vertically. The text is an instruction, not a button; the person drags the Browser Divider to expand the Browser.
 
 ### Future shortcut editor

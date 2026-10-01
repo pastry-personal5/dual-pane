@@ -4,6 +4,10 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — Item Icon Column
+
+- The owner added an [Item Icon Column](../ux-gui.md#folder-items-fields-and-display) as the first Folder Items column. It shows macOS native icons loaded off the GUI thread, has no header or sort buttons, and is the last column hidden as a Browser narrows. P3-M6 delivers it with the other columns.
+
 ## 2026-10-02 — Borderless Folder Pane commands
 
 - The owner removed the border from the Up Button and the eight sort buttons in Folder Pane Toolbar Row #3; [visual layout](../ux-gui.md#visual-layout-and-accessibility) records the rule.

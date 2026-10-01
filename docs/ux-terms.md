@@ -62,6 +62,7 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Notices Button | `notices_button` |
 | Notice | `notice` |
 | Notices Startup Checkbox | `notices_startup_checkbox` |
+| Item Icon Column | `item_icon_column` |
 | Relative Date Column | `relative_date_column` |
 | Exact Date Column | `exact_date_column` |
 | Browser Status Bar | `browser_status_bar` |
@@ -104,4 +105,4 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 
 ## Deferred components
 
-Browser Tabs Strip is currently rendered as an inert current-folder label only. Favorite Groups, Favorite Items, the Relative Date Column, and the Exact Date Column are not rendered as interactive components by the current desktop UI. Their planned GUI behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions). The Sidebar currently displays static group labels; its navigation and editing behavior is deferred to a later Phase 3 milestone.
+Browser Tabs Strip is currently rendered as an inert current-folder label only. Favorite Groups, Favorite Items, the Item Icon Column, the Relative Date Column, and the Exact Date Column are not rendered as interactive components by the current desktop UI. Their planned GUI behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions). The Sidebar currently displays static group labels; its navigation and editing behavior is deferred to a later Phase 3 milestone.
