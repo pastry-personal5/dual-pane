@@ -4,6 +4,22 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — P3-M6 third plan review
+
+- The owner settled the open cursor question. Movement keys start from the cursor even when no Item is selected, so after a Command-click deselects the last selected Item, Down selects the next row. Return and Right activate only when exactly one Item is selected. [Selection rules](../ux-gui.md#selection-and-file-commands) record both.
+- [Sidebar Favorites](../ux-gui.md#sidebar-favorites):
+  - A single click opens a Favorite Item and focuses the active Browser's Folder Items List.
+  - New Group starts as an empty draft row that exists only after a valid name is committed.
+  - Inline editors commit on Return and cancel on Escape. Focus loss commits valid text and silently cancels invalid or duplicate text.
+- While an inline editor has focus, only `Command+Q` remains active, and quitting discards the draft. `CloseWindow` loses its default shortcut when `Command+W` moves to `CloseTab`. The Folder Items List has no column header row and sizes its columns automatically.
+- Plan fixes:
+  - All five delivered action IDs join the catalogue. Every delivered shortcut binds from the effective settings.
+  - Schema version 3 unbinds the stored default `CloseWindow` `Command+W` before preload, so `CloseTab` is not left unbound. Tests check the effective bindings, including a v1-to-v3 chained upgrade.
+  - The tab limit becomes a domain `BrowserTabs` invariant. Favorites edits gain a not-ready rejection, and Sidebar editing stays disabled until Favorites are known.
+  - The root volume name is read off the GUI thread. Tab labels use the confirmed location.
+  - Reset Settings requires a settings worker, warns that current-session changes will be replaced, and reports where the failed database was preserved.
+  - Icons are requested lazily into a bounded cache, and column hiding follows minimum widths.
+
 ## 2026-10-02 — Tab history and visit state in the domain
 
 - The owner moved tab history, cursor, range anchor, and scroll position into the domain, as the [P3-M5 plan](milestone-05-architecture.md) intended. This supersedes the "application state" wording in the architecture review entry below. [Architecture §3.1](../architecture.md#31-domain--stable-file-manager-policy) now names the domain types:
