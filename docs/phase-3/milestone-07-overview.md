@@ -20,3 +20,5 @@ In scope: Qt-free intents for copy, move, rename, new folder, Trash, and permane
 - [x] Directly affected docs reflect the implemented boundary. `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass.
 
 Acceptance evidence: `operation_workflow.rs` exercises the frozen workspace command and synthetic result contract; the desktop runtime test verifies executor-unavailable delivery. The four listed commands passed on 2026-10-02.
+
+Safety review evidence (2026-10-02): The expanded Qt-free suite covers recoverable scan decisions and unread-subtree skips, contiguous plans, kind-aware conflicts, exact byte targets, skip progress, stale results, and cleanup outcomes. The four listed commands and `git diff --check` passed after the review fixes.

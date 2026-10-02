@@ -30,6 +30,7 @@ Favorite Group names and Favorite Item Aliases reject empty or whitespace-only t
 - A folder copied or moved onto an existing folder with the same name is merged into it without asking. Only the files inside that collide ask the conflict question above.
 - A file onto an existing folder with the same name, or a folder onto an existing file, offers **Try Again**, **Skip**, and **Cancel** in its Operation Decision Card. Neither item is replaced.
 - A recoverable error, such as permission denied, a privacy restriction, no space, or an item in use, offers **Try Again**, **Skip**, and **Cancel** in its Operation Decision Card.
+- If a recursive source scan cannot read a folder, **Skip** omits that folder's unread subtree and continues with other targets. Any containing directory that still holds skipped content must remain during permanent deletion.
 - Try Again/Skip/Cancel decisions have no option to apply the choice to remaining items.
 - A rename or New Folder name collision never overwrites the existing Item.
 - Opening a symbolic link to a folder navigates into it; activating a link to a regular file opens its target. Copy and move act on the link itself, and operations never follow links inside folders.

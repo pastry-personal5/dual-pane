@@ -218,7 +218,11 @@ impl Workspace {
         let targets = if matches!(kind, OperationKind::NewFolder { .. }) {
             vec![]
         } else {
-            let targets = items.entries.iter().filter(|entry| selected.iter().any(|name| name == entry.name())).map(|entry| OperationTarget { name: entry.name().clone(), kind: entry.kind() }).collect::<Vec<_>>();
+            let selected_names: HashSet<_> = selected.iter().collect();
+            if selected_names.len() != selected.len() {
+                return Err(OperationRejection::StaleSelection);
+            }
+            let targets = items.entries.iter().filter(|entry| selected_names.contains(entry.name())).map(|entry| OperationTarget { name: entry.name().clone(), kind: entry.kind() }).collect::<Vec<_>>();
             if targets.len() != selected.len() {
                 return Err(OperationRejection::StaleSelection);
             }

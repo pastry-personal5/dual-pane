@@ -2,6 +2,12 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M7 safety review
+
+- The owner chose **Skip** on a recursive scan error to omit the unread subtree and continue scanning other targets. A containing directory with skipped content remains during permanent deletion.
+- Review fixes require contiguous depth-first scan plans, typed scan-skip placeholders, destination-kind evidence for conflicts, and progress that accounts only for chosen skips and completed entries. A recoverable execution error retains its native error kind for the pending decision. Clean cancellation with no completed changes remains clean even after skips.
+- The Qt-free regression suite now covers scan retry and skip, subtree and conflict-result validation, skip accounting, cancellation outcomes, and stale results. The review keeps native execution and visible controls with P3-M8.
+
 ## 2026-10-02 — P3-M7 complete
 
 - The workspace-owned Qt-free operation workflow and fail-closed desktop request path are implemented. All P3-M7 completion items are checked; direct Cargo format, Clippy, and test commands and `make check` passed.

@@ -437,7 +437,7 @@ mod tests {
         let (mut runner, _) = runtime(source_factory(|_, _| Some(Ok(Arc::from([])))));
         let id = OperationId::new(7);
         let intent = OperationIntent::new(OperationKind::MoveToTrash, location("source"), vec![OperationTarget { name: EntryName::new("item").unwrap(), kind: dual_pane_domain::EntryKind::File }], None).unwrap();
-        assert_eq!(runner.dispatch(WorkRequest::Operation(OperationEffect::Scan { id, generation: 3, intent })), Some(Event::OperationExecutorUnavailable { id, generation: 3 }));
+        assert_eq!(runner.dispatch(WorkRequest::Operation(OperationEffect::Scan { id, generation: 3, intent, skipped: Arc::from([]) })), Some(Event::OperationExecutorUnavailable { id, generation: 3 }));
     }
     fn source_factory(source: impl Fn(&Location, &AtomicBool) -> FolderItemsOutcome + Send + Sync + 'static) -> FolderItemsSourceFactory {
         let source = Arc::new(source);

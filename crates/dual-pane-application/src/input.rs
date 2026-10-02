@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{CleanupResult, FavoriteProbeOutcome, OperationFailure, PlannedItem, RowChange, SettingsFailure, SettingsSnapshot, StepResult};
+use crate::{CleanupResult, FavoriteProbeOutcome, PlannedItem, RowChange, ScanFailure, SettingsFailure, SettingsSnapshot, StepResult};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,7 +181,7 @@ pub enum Command {
 /// the replaced database was preserved, when there was one to preserve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    OperationScanned { id: OperationId, generation: u64, plan: Result<Arc<[PlannedItem]>, OperationFailure> },
+    OperationScanned { id: OperationId, generation: u64, plan: Result<Arc<[PlannedItem]>, ScanFailure> },
     OperationStepped { id: OperationId, generation: u64, result: StepResult },
     OperationCleaned { id: OperationId, generation: u64, result: CleanupResult },
     OperationExecutorUnavailable { id: OperationId, generation: u64 },
