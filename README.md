@@ -20,7 +20,7 @@ The current development build adds Phase 3 workspace features that are not in a 
 - Folder Items show six columns, including native icons and age-colored Relative Dates that dim with their Browser, with direct sort buttons and a summary row.
 - Multiple Items can be selected with Command-click, Shift-click, Shift-arrow, and `Command+A`.
 - A Notices window reports settings and Favorites problems and offers a confirmed Reset Settings.
-- File operations, in progress for milestone P3-M8, are in the development build but not yet fully verified:
+- File operations, delivered by milestone P3-M8, are in the development build; their native interface is not yet fully verified:
   - Copy and Move to the other Browser, Rename, New Folder, Move to Trash, and Delete Permanently, from the Folder Items Context Menu or their shortcuts.
   - Each operation runs off the GUI thread, never overwrites without a choice, and reports its progress and decisions in an Operation Panel and its result in Notices.
   - Activating a file, an application, or another package opens it with its default application.

@@ -2,6 +2,14 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M8 Done
+
+- The owner marked P3-M8 Done without the native human check, as an explicit exception to the definition of done. Every automated item is checked, and `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` passed. The twelve items that need the native interface stay unchecked. Their verification, and any fixes or enhancements it leads to, moves to a later phase, tracked in [open items](open-items.md#p3-m8-native-behavior-is-unverified).
+
+## 2026-10-02 — P3-M8 Trash on a worker thread
+
+- With the owner's approval, the ignored `moving_to_the_trash_works_on_a_worker_thread` test ran once on Qt 6.11.2. `QFile::moveToTrash` moved its temporary file into the real Trash from a worker thread and returned the path in the Trash. Trash therefore stays on the file-operation workers; the GUI-thread queue is not needed.
+
 ## 2026-10-02 — P3-M8 shortcut scope and runtime tests
 
 - **Shortcut scope:** the application catalogue now records where each action's shortcut acts (`ActionId::scope`): the five file commands and Show Package Contents need a focused Folder Items List, Quit works in every window, and every other action is window-wide. The workspace bridge reports it as `bindingScope`, and the Qt binder installs shortcuts from it instead of its own list of action names, so the focus scope has a Qt-free test.

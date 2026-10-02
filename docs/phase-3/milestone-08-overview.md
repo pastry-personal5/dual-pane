@@ -1,6 +1,6 @@
 # P3-M8: Execute file operations and open files
 
-Status: Active
+Status: Done
 
 This milestone connects the P3-M7 operation workflow to macOS. It delivers the native scanner and executor, the P3-M7 contract extensions that native work needs, file-command entry points, inline name editors, Operation Panels and Decision Cards, Notices summaries, affected-listing refresh, and default-application opening. [Architecture](milestone-08-architecture.md) describes the approach; this checklist defines completion.
 
@@ -47,6 +47,8 @@ Out of scope: session restoration and the Notices startup preference (P3-M9), na
 
 Ordered by dependency; each later group builds on the earlier ones.
 
+The owner marked P3-M8 Done on 2026-10-02 without the human check. The items still unchecked are implemented, and their command, presenter, and bridge logic has automated tests, but their native behavior is unverified. That verification, and any fixes or enhancements it leads to, moves to a later phase; see [Deferred human check](#deferred-human-check).
+
 ### Application contract extensions
 
 - [x] `OperationErrorKind` gains read-only, privacy-restricted, changed-since-scan, unsupported item, Trash unavailable, source-removal-failed, journal-unavailable, and folder-not-empty kinds, each tested for its permitted choices. A worker panic or lost worker reuses the `OperationExecutorUnavailable` terminal path, renamed if useful, so it never becomes a Skip decision on a root.
@@ -78,7 +80,7 @@ Ordered by dependency; each later group builds on the earlier ones.
 - [x] Native errors map to the application error kinds with operation and item context; raw OS detail stays in logs.
 - [x] The file-operation lane runs scan, execute, finalize, and cleanup requests on two workers. It leases write scopes, yields on a time budget, coalesces progress, and never waits for a decision. It contains a panic without replaying the step, then removes that operation's temporaries through its journal records; whatever remains is swept at the next launch.
 - [x] The journal writes its per-directory record before the first temporary in that directory, clears it after terminal cleanup, and survives a simulated crash. The sweep follows the decided rules. A test proves Reset Settings never touches the journal file.
-- [ ] A temp-directory test settles whether `QFile::moveToTrash` is safe on a worker thread. If it is not, Trash goes through a serialized GUI-thread queue, one root per turn, cancellable between roots.
+- [x] A temp-directory test settles whether `QFile::moveToTrash` is safe on a worker thread. If it is not, Trash goes through a serialized GUI-thread queue, one root per turn, cancellable between roots.
 
 ### Commands and inline editors
 
@@ -99,9 +101,9 @@ Ordered by dependency; each later group builds on the earlier ones.
 - [ ] The Missing Folder Overlay shows centered “Command+R to Refresh” text over dimmed last-good rows for the decided error kinds and disappears after a successful refresh.
 - [ ] Panels, cards, editors, the overlay, and the confirmation windows use the [ux-terms](../ux-terms.md) accessible names. Cards are announced; floating panels join window cycling (``Command+` ``), and docked panels are in the main window's Tab order.
 
-### Awaiting the human check
+### Deferred human check
 
-The items below are implemented. Their command, presenter, and bridge logic has automated tests; what remains needs the native interface, which an agent session does not launch. Each stays unchecked until a person verifies it:
+The items below are implemented. Their command, presenter, and bridge logic has automated tests; what remains needs the native interface, which an agent session does not launch. The owner deferred this check to a later phase, tracked in [open items](open-items.md#p3-m8-native-behavior-is-unverified). Each related checklist item stays unchecked until a person verifies it:
 
 - the Folder Items Context Menu and its disabled items
 - file-command shortcuts acting only from a focused Folder Items List, and the Status Bar reason clearing after three seconds
@@ -111,12 +113,12 @@ The items below are implemented. Their command, presenter, and bridge logic has 
 - the Missing Folder Overlay
 - real Trash, default-application and package opening, and a volume without `RENAME_EXCL` such as exFAT
 
-The Trash thread-safety test is ignored by default because it moves a file into the real Trash. Run it with `cargo test -p dual-pane-desktop -- --ignored moving_to_the_trash`.
+The Trash thread-safety test is ignored by default because it moves a file into the real Trash. Run it with `cargo test -p dual-pane-desktop -- --ignored moving_to_the_trash`; it passed on 2026-10-02 with the owner's approval.
 
 ### Evidence and gate
 
 - [x] Native tests run only in `tempfile` directories and cover each executor item above: conflict, merge, link, case-only rename, destination within source through a symlink, cross-volume behavior (injected where a second volume cannot be built), finalization, cancellation, forced failure, panic, and journal crash recovery.
 - [x] Runtime, bridge, and presenter tests cover dispatch, stale results, decision round trips, panel and card state, reveal timing, Notices entries, Status Bar expiry, shortcut focus scope, the quit confirmation, and refresh targets.
-- [ ] A human check of what automation cannot cover (drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual panel behavior) is recorded after the automated gate, or the item stays unchecked with its blocker.
+- [ ] A human check of what automation cannot cover (drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual panel behavior) is recorded after the automated gate, or the item stays unchecked with its blocker. Blocker: the owner deferred the check to a later phase.
 - [x] Directly affected docs and `AGENTS.md` reflect the executor, dependency, journal, and contract extensions; `docs/README.md` indexes these files.
 - [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass.

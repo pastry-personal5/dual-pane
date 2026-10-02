@@ -2,7 +2,13 @@
 
 Status: Active
 
-Unresolved design and product questions found during Phase 3 reviews. Each item names the milestone that must settle it; record the decision in the [phase changelog](changelog.md) and remove the item here once it is resolved.
+Unresolved design and product questions, and deferred verification, found during Phase 3 reviews. Each item names the milestone or phase that must settle it; record the decision in the [phase changelog](changelog.md) and remove the item here once it is resolved.
+
+## P3-M8 native behavior is unverified
+
+Target: a later phase, not yet planned
+
+The owner marked P3-M8 Done on 2026-10-02 without its human check. Its file commands, inline name editors, confirmation windows, Operation Panels and Decision Cards, Missing Folder Overlay, and accessibility behavior are implemented, and their logic has automated tests, but nobody has verified them in the native interface. The [deferred human check](milestone-08-overview.md#deferred-human-check) lists what to verify and which checklist items stay unchecked. Fixes and enhancements found during that check belong to the same later phase.
 
 ## Refreshes could keep cancelling each other
 
