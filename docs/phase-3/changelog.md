@@ -2,6 +2,11 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M6 complete
+
+- The owner accepted the native macOS verification, including the Favorites group-menu refinement that removes the detached downward caret and keeps the three-dot menu and add button.
+- Every P3-M6 checklist item is complete. `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` passed.
+
 Chronological record of decisions and plan changes for Phase 3.
 
 ## 2026-10-02 — P3-M6 Relative Date strip refinement

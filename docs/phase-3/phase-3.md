@@ -47,7 +47,7 @@ Plan: [overview](milestone-05-overview.md), [architecture](milestone-05-architec
 
 ### P3-M6: Deliver tabbed browser UI
 
-Status: Active
+Status: Done
 Goal: Render and operate independent Browser tab sets, Sidebar Favorites, sort controls, and their agreed focus and selection behavior in the desktop interface.
 Plan: [overview](milestone-06-overview.md), [architecture](milestone-06-architecture.md)
 
