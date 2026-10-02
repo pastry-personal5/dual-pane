@@ -2,6 +2,11 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M7 follow-up review
+
+- A Rename or New Folder name collision no longer leaves an uncancellable job. Cancelling it, like cancelling a pending permanent-delete confirmation, closes the job as cancelled without a cleanup request.
+- New Qt-free tests cover the domain intent and decision policy (`operation_intent.rs`) and plan validation for root order, missing or duplicate roots, and Rename destination mapping.
+
 ## 2026-10-02 — P3-M7 safety review
 
 - The owner chose **Skip** on a recursive scan error to omit the unread subtree and continue scanning other targets. A containing directory with skipped content remains during permanent deletion.

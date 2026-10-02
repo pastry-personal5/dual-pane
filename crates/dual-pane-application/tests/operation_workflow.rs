@@ -222,6 +222,9 @@ fn directory_skip_accounts_for_descendants_and_name_collision_has_no_overwrite()
     let (_, generation, _, _) = execute(&execution);
     ws.handle(Event::OperationStepped { id, generation, result: StepResult::NameCollision { item: root.clone(), progress: progress(0, 0, 0) } }.into());
     assert_eq!(ws.operation_jobs()[1].status(), &OperationStatus::NameCollision { item: root });
+    let closed = ws.handle(Command::CancelOperation { id }.into());
+    assert!(closed.work.is_empty());
+    assert_eq!(ws.operation_jobs()[1].status(), &OperationStatus::Finished(OperationOutcome::Cancelled));
 }
 
 #[test]
@@ -447,4 +450,27 @@ fn frozen_target_keeps_non_utf8_name_bytes() {
     let WorkRequest::Operation(OperationEffect::Scan { intent, .. }) = &work[0] else { panic!() };
     assert_eq!(intent.targets()[0].name.as_bytes(), &[b'x', 0xff]);
     assert_eq!(intent.destination(), Some(&path("to")));
+}
+
+#[test]
+fn plans_must_list_roots_in_frozen_order_and_map_rename_destinations() {
+    let (mut ws, tab) = setup_copy(vec![item("a", EntryKind::File), item("b", EntryKind::File)]);
+    select(&mut ws, tab, 0, "a");
+    ws.handle(Command::ToggleEntry { browser: BrowserSide::Left, tab, row: 1, name: name("b") }.into());
+    let (id, work) = start(&mut ws, BrowserSide::Left, tab, OperationKind::MoveToTrash);
+    let (_, generation) = scan(&work);
+    let planned = |text: &str| PlannedItem { source: path("from").join(&name(text)), destination: None, kind: EntryKind::File };
+    assert!(scanned(&mut ws, id, generation, vec![planned("b"), planned("a")]).is_empty(), "roots out of listing order");
+    assert!(scanned(&mut ws, id, generation, vec![planned("a")]).is_empty(), "missing root");
+    assert!(scanned(&mut ws, id, generation, vec![planned("a"), planned("a"), planned("b")]).is_empty(), "duplicate root");
+    assert_eq!(ws.operation_jobs()[0].status(), &OperationStatus::Scanning);
+    assert!(!scanned(&mut ws, id, generation, vec![planned("a"), planned("b")]).is_empty());
+
+    let (mut ws, tab) = setup_copy(vec![item("a", EntryKind::File)]);
+    select(&mut ws, tab, 0, "a");
+    let (id, work) = start(&mut ws, BrowserSide::Left, tab, OperationKind::Rename { to: name("z") });
+    let (_, generation) = scan(&work);
+    let renamed = |to: &str| PlannedItem { source: path("from").join(&name("a")), destination: Some(path("from").join(&name(to))), kind: EntryKind::File };
+    assert!(scanned(&mut ws, id, generation, vec![renamed("elsewhere")]).is_empty(), "destination must be the frozen new name");
+    assert!(!scanned(&mut ws, id, generation, vec![renamed("z")]).is_empty());
 }

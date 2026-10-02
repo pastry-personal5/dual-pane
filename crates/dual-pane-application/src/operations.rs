@@ -326,10 +326,11 @@ impl OperationCoordinator {
     }
     pub fn cancel(&mut self, id: OperationId) -> Option<Vec<OperationEffect>> {
         let job = self.job_mut(id)?;
-        if matches!(job.status, OperationStatus::Finished(_) | OperationStatus::NameCollision { .. } | OperationStatus::Cancelling) {
+        if matches!(job.status, OperationStatus::Finished(_) | OperationStatus::Cancelling) {
             return None;
         }
-        if matches!(job.status, OperationStatus::AwaitingConfirmation { .. }) {
+        // These states hold no worker and have changed nothing, so cancelling closes them without cleanup.
+        if matches!(job.status, OperationStatus::AwaitingConfirmation { .. } | OperationStatus::NameCollision { .. }) {
             job.status = OperationStatus::Finished(OperationOutcome::Cancelled);
             return Some(vec![]);
         }
