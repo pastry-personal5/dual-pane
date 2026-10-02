@@ -62,7 +62,6 @@ Plan: [overview](milestone-07-overview.md), [architecture](milestone-07-architec
 Status: Done
 Goal: Deliver macOS-backed safe file operations, Operation Panels and Decision Cards, Notices summaries, and regular-file opening with the default application.
 Plan: [overview](milestone-08-overview.md), [architecture](milestone-08-architecture.md)
-Notes: The automated gate passed. The owner marked it Done without the native human check; that check, and any fixes or enhancements it needs, moves to a later phase ([open item](open-items.md#p3-m8-native-behavior-is-unverified)).
 
 ### P3-M9: Persist and restore the workspace
 

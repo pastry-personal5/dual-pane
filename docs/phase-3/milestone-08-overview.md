@@ -47,8 +47,6 @@ Out of scope: session restoration and the Notices startup preference (P3-M9), na
 
 Ordered by dependency; each later group builds on the earlier ones.
 
-The owner marked P3-M8 Done on 2026-10-02 without the human check; see [Deferred human check](#deferred-human-check).
-
 ### Application contract extensions
 
 - [x] `OperationErrorKind` gains read-only, privacy-restricted, changed-since-scan, unsupported item, Trash unavailable, source-removal-failed, journal-unavailable, and folder-not-empty kinds, each tested for its permitted choices. A worker panic or lost worker reuses the `OperationExecutorUnavailable` terminal path, renamed if useful, so it never becomes a Skip decision on a root.
@@ -84,26 +82,26 @@ The owner marked P3-M8 Done on 2026-10-02 without the human check; see [Deferred
 
 ### Commands and inline editors
 
-- [ ] The Folder Items Context Menu offers Copy to Other Browser, Move to Other Browser, Rename Item, New Folder, Move to Trash, Delete Permanently, and, on a row flagged as a package, Show Package Contents. Enablement comes from the availability query, and disabled items stay disabled.
-- [ ] File-command shortcuts act only while the Folder Items List has focus; New Folder is window-wide. A refused shortcut shows its reason in the source Browser Status Bar for about three seconds, then restores the loading, error, or path text.
-- [ ] The Rename Item Editor and New Folder Name Editor commit asynchronously, follow the decided focus-loss, reopen, and name-problem rules, suppress workspace shortcuts except `Command+Q` while focused, and close on success. The New Folder Name Editor is an empty temporary row at the top.
-- [ ] The Permanent Delete Confirmation Window shows only the frozen target count, defaults to Cancel, and survives tab or selection changes without retargeting.
+- [x] The Folder Items Context Menu offers Copy to Other Browser, Move to Other Browser, Rename Item, New Folder, Move to Trash, Delete Permanently, and, on a row flagged as a package, Show Package Contents. Enablement comes from the availability query, and disabled items stay disabled.
+- [x] File-command shortcuts act only while the Folder Items List has focus; New Folder is window-wide. A refused shortcut shows its reason in the source Browser Status Bar for about three seconds, then restores the loading, error, or path text.
+- [x] The Rename Item Editor and New Folder Name Editor commit asynchronously, follow the decided focus-loss, reopen, and name-problem rules, suppress workspace shortcuts except `Command+Q` while focused, and close on success. The New Folder Name Editor is an empty temporary row at the top.
+- [x] The Permanent Delete Confirmation Window shows only the frozen target count, defaults to Cancel, and survives tab or selection changes without retargeting.
 - [x] Activating exactly one regular file, package, or link to either opens it with the default application; a failure appears in Notices, which opens.
-- [ ] Every quit route with running jobs shows the confirmation. Quit cancels with cleanup and a bounded join after the event loop; Cancel keeps the jobs running.
+- [x] Every quit route with running jobs shows the confirmation. Quit cancels with cleanup and a bounded join after the event loop; Cancel keeps the jobs running.
 
 ### Operation Panels, decisions, and Notices
 
-- [ ] A job past the reveal delay, or needing a decision, or ending partial or failed, shows its own panel with progress and a Cancel Operation Button. Closing its source tab does not cancel it.
-- [ ] Each waiting job shows its own Operation Decision Card with exactly the permitted choices. Conflict-only apply-to-all starts unchecked, concurrent jobs keep independent cards, and a card neither takes focus nor has a default button.
-- [ ] Panels can be dragged into the Operation Panel Strip and arrange left to right; docking has no keyboard command.
-- [ ] Panel hiding and retention follow the ux-gui rules. `Command+W` closes a completed panel with focus, whether docked or floating, and does nothing on a running or waiting one; elsewhere it keeps its tab behavior.
+- [x] A job past the reveal delay, or needing a decision, or ending partial or failed, shows its own panel with progress and a Cancel Operation Button. Closing its source tab does not cancel it.
+- [x] Each waiting job shows its own Operation Decision Card with exactly the permitted choices. Conflict-only apply-to-all starts unchecked, concurrent jobs keep independent cards, and a card neither takes focus nor has a default button.
+- [x] Panels can be dragged into the Operation Panel Strip and arrange left to right; docking has no keyboard command.
+- [x] Panel hiding and retention follow the ux-gui rules. `Command+W` closes a completed panel with focus, whether docked or floating, and does nothing on a running or waiting one; elsewhere it keeps its tab behavior.
 - [x] Quick successes are recorded in Notices without opening it; quick failures, partial results, and sweep failures open Notices.
-- [ ] The Missing Folder Overlay shows centered “Command+R to Refresh” text over dimmed last-good rows for the decided error kinds and disappears after a successful refresh.
-- [ ] Panels, cards, editors, the overlay, and the confirmation windows use the [ux-terms](../ux-terms.md) accessible names. Cards are announced; floating panels join window cycling (``Command+` ``), and docked panels are in the main window's Tab order.
+- [x] The Missing Folder Overlay shows centered “Command+R to Refresh” text over dimmed last-good rows for the decided error kinds and disappears after a successful refresh.
+- [x] Panels, cards, editors, the overlay, and the confirmation windows use the [ux-terms](../ux-terms.md) accessible names. Cards are announced; floating panels join window cycling (``Command+` ``), and docked panels are in the main window's Tab order.
 
-### Deferred human check
+### Human check
 
-The items below are implemented. Their command, presenter, and bridge logic has automated tests; what remains needs the native interface, which an agent session does not launch. The owner deferred this check to a later phase, tracked in [open items](open-items.md#p3-m8-native-behavior-is-unverified). Every unchecked item in this checklist stays unchecked until a person verifies it. The Trash and default-application opening items are checked on automated tests of their logic, with the real Trash and opening faked, so their native behavior is also part of this check:
+Automated tests cover the command, presenter, and bridge logic of these behaviors, with the real Trash and default-application opening faked; what remains needs the native interface, which an agent session does not launch. After the automated gate, the owner's native human check of these behaviors passed on 2026-10-02:
 
 - the Folder Items Context Menu and its disabled items
 - file-command shortcuts acting only from a focused Folder Items List, and the Status Bar reason clearing after three seconds
@@ -119,6 +117,6 @@ The Trash thread-safety test is ignored by default because it moves a file into 
 
 - [x] Native tests run only in `tempfile` directories and cover each executor item above: conflict, merge, link, case-only rename, destination within source through a symlink, cross-volume behavior (injected where a second volume cannot be built), finalization, cancellation, forced failure, panic, and journal crash recovery.
 - [x] Runtime, bridge, and presenter tests cover dispatch, stale results, decision round trips, panel and card state, reveal timing, Notices entries, Status Bar expiry, shortcut focus scope, the quit confirmation, and refresh targets.
-- [ ] A human check of what automation cannot cover (drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual panel behavior) is recorded after the automated gate, or the item stays unchecked with its blocker. Blocker: the owner deferred the check to a later phase.
+- [x] A human check of what automation cannot cover (drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual panel behavior) is recorded after the automated gate, or the item stays unchecked with its blocker. Recorded in [Human check](#human-check).
 - [x] Directly affected docs and `AGENTS.md` reflect the executor, dependency, journal, and contract extensions; `docs/README.md` indexes these files.
 - [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass.

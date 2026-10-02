@@ -4,12 +4,6 @@ Status: Active
 
 Unresolved design and product questions, and deferred verification, found during Phase 3 reviews. Each item names the milestone or phase that must settle it; record the decision in the [phase changelog](changelog.md) and remove the item here once it is resolved.
 
-## P3-M8 native behavior is unverified
-
-Target: a later phase, not yet planned
-
-The owner marked P3-M8 Done on 2026-10-02 without its human check. Its native interface is implemented and its logic has automated tests, but nobody has verified it natively. The [deferred human check](milestone-08-overview.md#deferred-human-check) lists everything to verify and which checklist items stay unchecked. Fixes and enhancements found during that check belong to the same later phase.
-
 ## Refreshes could keep cancelling each other
 
 Target: [P3-M10](phase-3.md#p3-m10-watch-open-locations)

@@ -4,9 +4,13 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-02 — P3-M8 human check
+
+- The deferred native [human check](milestone-08-overview.md#human-check) passed. The twelve items that waited for it are now checked, so every P3-M8 checklist item is checked and the milestone meets its definition of done without the exception recorded below. The open item that tracked the check is resolved and removed. `make check` passed.
+
 ## 2026-10-02 — P3-M8 Done
 
-- The owner marked P3-M8 Done without the native human check, as an explicit exception to the definition of done. Every automated item is checked, and `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` passed. The twelve items that depend on the native interface stay unchecked, and the native behavior of the checked Trash and default-application opening items is part of the same check. Their verification, and any fixes or enhancements it leads to, moves to a later phase, tracked in [open items](open-items.md#p3-m8-native-behavior-is-unverified).
+- The owner marked P3-M8 Done without the native human check, as an explicit exception to the definition of done. Every automated item is checked, and `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` passed. The twelve items that depend on the native interface stay unchecked, and the native behavior of the checked Trash and default-application opening items is part of the same check. Their verification, and any fixes or enhancements it leads to, moves to a later phase, tracked in open items until the [human check](#2026-10-02--p3-m8-human-check) resolved it.
 
 ## 2026-10-02 — P3-M8 Trash on a worker thread
 

@@ -67,7 +67,7 @@ Follow the existing MVVM path: application output, presenter, bridge model, widg
 2. **Application tests:** the contract extensions, with the P3-M7 suite unchanged.
 3. **Runtime and bridge tests:** admission, lease serialization, per-operation ordering of cancel after a step, time-budget yields, coalesced progress, exactly-once terminal events, stale results, and decision round trips.
 4. **Presenter and widget tests:** panel and card state, reveal timing with a fake clock, Status Bar expiry, shortcut focus scope, editor pending and reopen states, Notices entries, refresh targets, the overlay, and the quit prompt.
-5. **Human check at the end** for drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual behavior. Then run the repository gate. The owner deferred this check to a later phase ([open item](open-items.md#p3-m8-native-behavior-is-unverified)).
+5. **Human check at the end** for drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual behavior. Then run the repository gate. It passed on 2026-10-02 ([evidence](milestone-08-overview.md#human-check)).
 
 ## Risks
 
