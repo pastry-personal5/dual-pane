@@ -4,6 +4,23 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — P3-M6 Relative Date strip refinement
+
+- The owner set the active strip to HSL hue 0° through 270°, 55% saturation, and 80% lightness. The dimmed strip keeps the previous 15-point saturation and six-point lightness reductions, so it uses 40% saturation and 74% lightness. Qt measured active endpoints `#E8B0B0` and `#CCB0E8`, dimmed endpoints `#D7A2A2` and `#BDA2D7`, and minimum black-text contrast above 8.68:1 in both states.
+- The owner deepened the inactive strip to 25% saturation and 68% lightness. Its endpoints are `#C29999` and `#AD99C2`; Qt measured at least 7.68:1 contrast with black text and lower luminance than the active strip at every sampled position.
+
+## 2026-10-02 — P3-M6 Relative Date color implementation
+
+- The adapter now maps each Item's age from its listing-time snapshot to the planned strip position. It retains that snapshot per tab and updates Relative Date cells on a reload even if the rows did not change.
+- The desktop model supplies the position to the Qt delegate, which paints black Relative Date text over the planned color or a neutral background for missing metadata. Qt-free mapping and reload tests pass, and a Qt color probe confirms the endpoints and black-text contrast. Native visual verification remains open, so the [completion item](milestone-06-overview.md#completion-checklist) stays unchecked.
+- The owner reduced the strip's saturation by 25 percentage points to 75%. A Qt color probe measured `#EC7979` and `#B379EC` at the endpoints and at least 5.76:1 contrast with black text.
+- The Relative Date background now dims with its Browser or the window, using a darker, muted strip and neutral missing-date background. The list repaints on active-state changes, and a Qt color probe measured at least 4.79:1 black-text contrast for the dimmed strip.
+
+## 2026-10-02 — P3-M6 Relative Date color plan
+
+- The owner added a black foreground and an age-colored background behind Relative Date text. The virtual strip runs from bright red at one hour or less through positions 0.25 at one day, 0.50 at seven days, and 0.75 at 30 days to bright violet at 365 days or more. The [GUI rule](../ux-gui.md#folder-items-fields-and-display) defines the interpolation, missing-date treatment, and selection visibility; the [M6 architecture plan](milestone-06-architecture.md#relative-date-color-plan) identifies the adapter and Qt work.
+- This is an unchecked addition to the active [M6 checklist](milestone-06-overview.md#completion-checklist). The earlier implementation and verification evidence does not cover it.
+
 ## 2026-10-02 — P3-M6 interpretation review
 
 - The owner reviewed the implementation interpretations. The [open item](open-items.md) is removed.

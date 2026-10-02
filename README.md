@@ -17,7 +17,7 @@ The current development build adds Phase 3 workspace features that are not in a 
 - Each Browser has up to eight tabs with Back, Forward, Up, and `Command+R` refresh.
 - `Command+T` opens a tab and `Command+W` closes the active tab; Close Window has no default shortcut.
 - Sidebar Favorites can be edited.
-- Folder Items show six columns, including native icons, with direct sort buttons and a summary row.
+- Folder Items show six columns, including native icons and age-colored Relative Dates that dim with their Browser, with direct sort buttons and a summary row.
 - Multiple Items can be selected with Command-click, Shift-click, Shift-arrow, and `Command+A`.
 - A Notices window reports settings and Favorites problems and offers a confirmed Reset Settings.
 

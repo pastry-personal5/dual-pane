@@ -169,6 +169,8 @@ const ACCESSIBLE_TEXT_ROLE: i32 = 11;
 const TEXT_ALIGNMENT_ROLE: i32 = 7;
 /// `Qt::UserRole`: the Item's full path, which keys its native icon.
 const PATH_ROLE: i32 = 0x0100;
+/// `Qt::UserRole + 1`: Relative Date age as millionths of strip position.
+const RELATIVE_AGE_ROLE: i32 = 0x0101;
 /// `Qt::AlignRight | Qt::AlignVCenter`.
 const ALIGN_RIGHT: i32 = 0x0002 | 0x0080;
 
@@ -239,6 +241,7 @@ impl ffi::FolderItemsListModel {
             DISPLAY_ROLE | ACCESSIBLE_TEXT_ROLE if column != FolderItemsColumn::Icon => shown.cell_text(row, column).map_or_else(QVariant::default, |text| QVariant::from(&QString::from(text.as_str()))),
             TOOL_TIP_ROLE if column == FolderItemsColumn::Name => shown.cell_text(row, column).map_or_else(QVariant::default, |text| QVariant::from(&QString::from(text.as_str()))),
             PATH_ROLE => shown.row_path(row).map_or_else(QVariant::default, |path| QVariant::from(&QString::from(path.as_str()))),
+            RELATIVE_AGE_ROLE if column == FolderItemsColumn::RelativeDate => shown.relative_age_position(row).map_or_else(QVariant::default, |position| QVariant::from(&((position * 1_000_000.0).round() as i32))),
             TEXT_ALIGNMENT_ROLE if column == FolderItemsColumn::Size => QVariant::from(&ALIGN_RIGHT),
             _ => QVariant::default(),
         }
@@ -288,6 +291,7 @@ impl ffi::FolderItemsListModel {
     /// Replaces the shown view, notifying Qt of only the rows that changed
     /// when the new listing is a same-folder reload of the shown one.
     fn show(mut self: Pin<&mut Self>, view: BrowserViewModel) {
+        let repaint_relative_dates = view.relative_dates_changed_from(&self.rust().shown);
         let update = view.update_from(&self.rust().shown);
         let FolderItemsUpdate::Rows { changed, inserted, removed } = update else {
             let reset = update == FolderItemsUpdate::Reset;
@@ -297,6 +301,8 @@ impl ffi::FolderItemsListModel {
             self.as_mut().rust_mut().get_mut().shown = view;
             if reset {
                 self.as_mut().end_reset_model();
+            } else if repaint_relative_dates {
+                self.as_mut().repaint_relative_dates();
             }
             return;
         };
@@ -324,6 +330,17 @@ impl ffi::FolderItemsListModel {
             let bottom_right = self.index(last, qt_int(FolderItemsColumn::ALL.len() - 1), &root);
             self.as_mut().data_changed(&top_left, &bottom_right, &QList::default());
         }
+        if repaint_relative_dates {
+            self.as_mut().repaint_relative_dates();
+        }
+    }
+    fn repaint_relative_dates(mut self: Pin<&mut Self>) {
+        let Some(last) = self.rust().shown.row_count().checked_sub(1) else { return };
+        let root = QModelIndex::default();
+        let column = FolderItemsColumn::RelativeDate as i32;
+        let top_left = self.index(0, column, &root);
+        let bottom_right = self.index(qt_int(last), column, &root);
+        self.as_mut().data_changed(&top_left, &bottom_right, &QList::default());
     }
     fn activate_browser(mut self: Pin<&mut Self>) {
         self.as_mut().submit_ui(UiEvent::FocusBrowser);

@@ -1,7 +1,9 @@
-use dual_pane_adapters::{BrowserPresenter, FolderItemsUpdate, InputController, SelectionMovement, UiEvent};
+use dual_pane_adapters::{BrowserPresenter, FolderItemsColumn, FolderItemsUpdate, InputController, SelectionMovement, UiEvent};
 use dual_pane_application::{Command, Output, RowChange};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, ScrollAnchor, Selection, TabId};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryMetadata, EntryName, Location, ScrollAnchor, Selection, TabId};
+use jiff::tz::TimeZone;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 #[test]
 fn controller_uses_exact_row_identity() {
@@ -58,6 +60,57 @@ fn an_identical_reload_is_unchanged_and_a_missed_revision_resets() {
     assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Unchanged);
     reload(&mut presenter, TabId::new(0), Some(RowChange { row: 2, removed: 0, inserted: 1 }), &["a", "b", "c"]);
     assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
+}
+
+#[test]
+fn an_unchanged_listing_repaints_relative_dates_after_time_advances() {
+    let now = Arc::new(AtomicI64::new(1_000_000_000));
+    let clock = Arc::clone(&now);
+    let mut presenter = BrowserPresenter::with_clock(BrowserSide::Left, Arc::new(move || clock.load(Ordering::Relaxed)), TimeZone::UTC);
+    let dated = Entry::with_metadata(EntryName::new("dated").unwrap(), EntryKind::File, EntryMetadata::new(Some(1_000_000_000 - 3_600), None));
+    let missing = Entry::new(EntryName::new("missing").unwrap(), EntryKind::File);
+    let entries: Arc<[Entry]> = Arc::from([dated, missing]);
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::clone(&entries), changes: None, scroll_hint: None });
+    let before = presenter.view().clone();
+    assert_eq!(before.relative_age_position(0), Some(0.0));
+    assert_eq!(before.relative_age_position(1), None);
+    assert_eq!(before.cell_text(0, FolderItemsColumn::RelativeDate).as_deref(), Some("1 h"));
+
+    now.fetch_add(86_400 - 3_600, Ordering::Relaxed);
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries, changes: Some(vec![]), scroll_hint: None });
+    let after = presenter.view();
+    assert_eq!(after.update_from(&before), FolderItemsUpdate::Unchanged);
+    assert!(after.relative_dates_changed_from(&before));
+    assert_eq!(after.relative_age_position(0), Some(0.25));
+    assert_eq!(after.cell_text(0, FolderItemsColumn::RelativeDate).as_deref(), Some("1 d"));
+    assert_eq!(after.relative_age_position(1), None);
+}
+
+#[test]
+fn a_tab_switch_keeps_the_listings_captured_time() {
+    let now = Arc::new(AtomicI64::new(1_000_000_000));
+    let clock = Arc::clone(&now);
+    let mut presenter = BrowserPresenter::with_clock(BrowserSide::Left, Arc::new(move || clock.load(Ordering::Relaxed)), TimeZone::UTC);
+    let first = TabId::new(1);
+    let second = TabId::new(2);
+    let dated = Entry::with_metadata(EntryName::new("dated").unwrap(), EntryKind::File, EntryMetadata::new(Some(1_000_000_000 - 3_600), None));
+    let entries: Arc<[Entry]> = Arc::from([dated]);
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::clone(&entries), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, location: Location::root(), entries: Arc::clone(&entries), changes: Some(vec![]), scroll_hint: None });
+    assert_eq!(presenter.view().relative_age_position(0), Some(0.0));
+
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: second, location: Some(Location::root()), entries: Arc::from([]), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    now.fetch_add(86_400, Ordering::Relaxed);
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::clone(&entries), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    assert_eq!(presenter.view().relative_age_position(0), Some(0.0));
+    assert_eq!(presenter.view().cell_text(0, FolderItemsColumn::RelativeDate).as_deref(), Some("1 h"));
+
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: second, location: Some(Location::root()), entries: Arc::from([]), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    now.fetch_add(86_400, Ordering::Relaxed);
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, location: Location::root(), entries: Arc::clone(&entries), changes: Some(vec![]), scroll_hint: None });
+    now.fetch_add(86_400, Ordering::Relaxed);
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries, selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    assert_eq!(presenter.view().cell_text(0, FolderItemsColumn::RelativeDate).as_deref(), Some("2 d"));
 }
 
 #[test]

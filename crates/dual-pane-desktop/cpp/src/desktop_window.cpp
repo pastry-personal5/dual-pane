@@ -19,6 +19,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractFileIconProvider>
+#include <QtGui/QColor>
 #include <QtGui/QDrag>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QFontDatabase>
@@ -48,6 +49,7 @@
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QSplitterHandle>
 #include <QtWidgets/QStyle>
+#include <QtWidgets/QStyleOptionViewItem>
 #include <QtWidgets/QStyledItemDelegate>
 #include <QtWidgets/QToolButton>
 #include <QtWidgets/QTreeView>
@@ -79,6 +81,7 @@ constexpr int icon_column_width = 18;
 constexpr int relative_date_column_width = 44;
 constexpr int type_column_width = 44;
 constexpr int path_role = Qt::UserRole;
+constexpr int relative_age_role = Qt::UserRole + 1;
 constexpr int max_pending_icons = 128;
 constexpr int icon_cache_size = 1024;
 constexpr int tab_limit = 8;
@@ -301,6 +304,29 @@ class ItemIconDelegate final : public QStyledItemDelegate {
         }
         if (index.column() == 3 || index.column() == 5)
             cell_option.displayAlignment = Qt::AlignRight | Qt::AlignVCenter;
+        if (index.column() == 3) {
+            // Let Qt paint the row selection and focus first. The inset keeps
+            // those states visible around the age-colored text background.
+            initStyleOption(&cell_option, index);
+            const auto date_text = cell_option.text;
+            cell_option.text.clear();
+            const auto *widget = cell_option.widget;
+            auto *style = widget != nullptr ? widget->style() : QApplication::style();
+            style->drawControl(QStyle::CE_ItemViewItem, &cell_option, painter, widget);
+            const auto age = index.data(relative_age_role);
+            const auto position = std::clamp(age.toDouble() / 1'000'000.0, 0.0, 1.0);
+            const bool active = view_->property("browserActive").toBool() && view_->property("windowActive").toBool();
+            const auto background = age.isValid() ? QColor::fromHslF(static_cast<float>(0.75 * position), active ? 0.55F : 0.25F, active ? 0.8F : 0.68F) : QColor(active ? QStringLiteral("#D0D0D0") : QStringLiteral("#989898"));
+            const auto swatch = option.rect.adjusted(2, 2, -2, -2);
+            painter->save();
+            painter->fillRect(swatch, background);
+            painter->setClipRect(swatch);
+            painter->setPen(Qt::black);
+            painter->setFont(cell_option.font);
+            painter->drawText(swatch.adjusted(2, 0, -2, 0), Qt::AlignRight | Qt::AlignVCenter, date_text);
+            painter->restore();
+            return;
+        }
         QStyledItemDelegate::paint(painter, cell_option, index);
         if (index.column() != 0)
             return;
@@ -1553,6 +1579,7 @@ class BrowserHighlightController final : public QObject {
             for (QWidget *child : folder->findChildren<QWidget *>())
                 apply_state(child);
             apply_state(views_.at(browser));
+            views_.at(browser)->viewport()->update();
         }
     }
 

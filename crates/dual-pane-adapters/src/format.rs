@@ -63,6 +63,24 @@ pub fn format_relative(modified: i64, now: i64) -> String {
     format!("{} y", (days / 365).max(1))
 }
 
+/// Position on the Relative Date color strip for an Item's elapsed age.
+/// Anchors are one hour, one day, seven days, 30 days, and 365 days.
+pub fn relative_age_position(modified: i64, now: i64) -> f64 {
+    const HOUR: i64 = 3_600;
+    const DAY: i64 = 86_400;
+    const ANCHORS: [i64; 5] = [HOUR, DAY, 7 * DAY, 30 * DAY, 365 * DAY];
+    let elapsed = now.saturating_sub(modified);
+    if elapsed <= ANCHORS[0] {
+        return 0.0;
+    }
+    for (segment, ages) in ANCHORS.windows(2).enumerate() {
+        if elapsed <= ages[1] {
+            return (segment as f64 + (elapsed - ages[0]) as f64 / (ages[1] - ages[0]) as f64) / 4.0;
+        }
+    }
+    1.0
+}
+
 /// A local timestamp such as `2026-09-30 20:21`, or `—` when it cannot be
 /// represented.
 pub fn format_exact(seconds: i64, time_zone: &TimeZone) -> String {
@@ -106,6 +124,25 @@ mod tests {
             assert_eq!(format_relative(modified, now), expected, "{modified}");
         }
         assert_eq!(format_relative(i64::MIN, i64::MAX), format!("{} y", i64::MAX / 86_400 / 365));
+    }
+
+    #[test]
+    fn relative_age_position_interpolates_and_clamps() {
+        const DAY: i64 = 86_400;
+        let now = 1_000_000_000;
+        let anchors = [(3_600, 0.0), (DAY, 0.25), (7 * DAY, 0.5), (30 * DAY, 0.75), (365 * DAY, 1.0)];
+        for (age, position) in anchors {
+            assert_eq!(relative_age_position(now - age, now), position);
+        }
+        for segment in anchors.windows(2) {
+            let midpoint = (segment[0].0 + segment[1].0) / 2;
+            let expected = (segment[0].1 + segment[1].1) / 2.0;
+            assert!((relative_age_position(now - midpoint, now) - expected).abs() < 0.00001);
+        }
+        assert_eq!(relative_age_position(now + DAY, now), 0.0);
+        assert_eq!(relative_age_position(now - 3_599, now), 0.0);
+        assert_eq!(relative_age_position(now - 366 * DAY, now), 1.0);
+        assert_eq!(relative_age_position(i64::MIN, i64::MAX), 1.0);
     }
 
     #[test]

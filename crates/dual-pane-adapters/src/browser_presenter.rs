@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6,7 +6,7 @@ use dual_pane_application::{BrowserChrome, Output, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
-use crate::format::{UNAVAILABLE, format_exact, format_relative, format_size, item_count, location_text, total_size};
+use crate::format::{UNAVAILABLE, format_exact, format_relative, format_size, item_count, location_text, relative_age_position, total_size};
 
 /// The current time in Unix seconds, read when a listing arrives so relative
 /// dates change on reload rather than by timer.
@@ -261,6 +261,18 @@ impl BrowserViewModel {
         })
     }
 
+    /// A visible row's position on the Relative Date color strip, or `None`
+    /// when its modification time is unavailable.
+    pub fn relative_age_position(&self, row: usize) -> Option<f64> {
+        self.entry(row)?.metadata().modified_unix_seconds().map(|modified| relative_age_position(modified, self.listed_at))
+    }
+
+    /// A same-folder listing acquired at a different time needs its Relative
+    /// Date cells repainted even when its entry delta is empty.
+    pub fn relative_dates_changed_from(&self, shown: &Self) -> bool {
+        self.folder_items_revision != shown.folder_items_revision && self.location == shown.location && self.listed_at != shown.listed_at && !self.entries.is_empty()
+    }
+
     /// The full path of the Item in `row`, for loading its native icon.
     pub fn row_path(&self, row: usize) -> Option<String> {
         let entry = self.entry(row)?;
@@ -349,6 +361,7 @@ pub struct BrowserPresenter {
     view: BrowserViewModel,
     clock: Clock,
     chrome: Option<BrowserChrome>,
+    listed_at_by_tab: HashMap<TabId, i64>,
 }
 
 impl std::fmt::Debug for BrowserPresenter {
@@ -370,7 +383,7 @@ impl BrowserPresenter {
     }
 
     pub fn with_clock(browser: BrowserSide, clock: Clock, time_zone: TimeZone) -> Self {
-        Self { browser, view: BrowserViewModel { time_zone, ..BrowserViewModel::default() }, clock, chrome: None }
+        Self { browser, view: BrowserViewModel { time_zone, ..BrowserViewModel::default() }, clock, chrome: None, listed_at_by_tab: HashMap::new() }
     }
 
     pub fn view(&self) -> &BrowserViewModel {
@@ -392,6 +405,7 @@ impl BrowserPresenter {
         if self.chrome.as_ref() == Some(chrome) {
             return;
         }
+        self.listed_at_by_tab.retain(|id, _| chrome.tabs.iter().any(|tab| tab.id == *id));
         self.view.active_tab = Some(chrome.active_tab);
         let tabs = chrome.tabs.iter().map(|tab| TabViewModel { id: tab.id, label: self.view.tab_label(tab.location.as_ref()), path: tab.location.as_ref().map(location_text).unwrap_or_default(), active: tab.id == chrome.active_tab, loading: tab.loading, failed: tab.failed }).collect::<Vec<_>>();
         if tabs != self.view.tabs {
@@ -410,6 +424,15 @@ impl BrowserPresenter {
         if output_browser != self.browser {
             return;
         }
+        // Keep each tab's most recent listing time even when it is inactive.
+        // A later tab switch must reuse it instead of aging that view early.
+        let loaded_at = if let Output::FolderItemsLoaded { tab, .. } = output {
+            let listed_at = (self.clock)();
+            self.listed_at_by_tab.insert(*tab, listed_at);
+            Some(listed_at)
+        } else {
+            None
+        };
         match output {
             Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => self.view.active_tab = Some(*tab),
             Output::LoadingStarted { tab, .. } | Output::FolderItemsLoaded { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
@@ -422,7 +445,7 @@ impl BrowserPresenter {
         }
         let view = &mut self.view;
         match output {
-            Output::TabViewChanged { location, entries, selection, row, scroll_hint, loading, error, .. } => {
+            Output::TabViewChanged { tab, location, entries, selection, row, scroll_hint, loading, error, .. } => {
                 view.location.clone_from(location);
                 view.location_text = location.as_ref().map_or_else(String::new, location_text);
                 view.entries = Arc::clone(entries);
@@ -435,7 +458,7 @@ impl BrowserPresenter {
                 view.status_text = if *loading { "Loading…".to_owned() } else { view.error.clone().unwrap_or_else(|| view.location_text.clone()) };
                 view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
                 view.folder_items_delta = None;
-                view.listed_at = (self.clock)();
+                view.listed_at = *self.listed_at_by_tab.entry(*tab).or_insert_with(|| (self.clock)());
                 view.refresh_summary();
             }
             Output::LoadingStarted { .. } => {
@@ -453,7 +476,7 @@ impl BrowserPresenter {
                 view.status_text = view.location_text.clone();
                 view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
                 view.folder_items_delta = changes.clone();
-                view.listed_at = (self.clock)();
+                view.listed_at = loaded_at.unwrap_or_else(|| (self.clock)());
                 view.refresh_summary();
             }
             Output::SelectionChanged { selection, row, .. } => {
