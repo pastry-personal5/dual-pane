@@ -549,6 +549,32 @@ mod tests {
         let intent = OperationIntent::new(OperationKind::MoveToTrash, location("source"), vec![OperationTarget { name: EntryName::new("item").unwrap(), kind: dual_pane_domain::EntryKind::File }], None).unwrap();
         assert_eq!(runner.dispatch(WorkRequest::Operation(OperationEffect::Scan { id, generation: 3, intent, skipped: Arc::from([]) })), Some(Event::OperationExecutorUnavailable { id, generation: 3 }));
     }
+    #[test]
+    fn an_attached_lane_runs_operation_requests_and_delivers_their_events() {
+        use crate::operation_journal::{JOURNAL_FILE_NAME, Journal, LaunchId};
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("from")).unwrap();
+        std::fs::create_dir(root.path().join("to")).unwrap();
+        std::fs::write(root.path().join("from/a.txt"), b"a").unwrap();
+        let (mut runner, wakes) = runtime(source_factory(|_, _| None));
+        let journal = Journal::new(Some(root.path().join(JOURNAL_FILE_NAME)), LaunchId::from_bytes([9; 16]));
+        runner.attach_operations(Services { fs: Arc::new(crate::operation_step::NativeFileSystem), journal, budget: crate::operation_lane::STEP_BUDGET }).unwrap();
+        let folder = |name: &str| crate::native_location::location_from_path(&root.path().join(name)).unwrap();
+        let id = OperationId::new(1);
+        let intent = OperationIntent::new(OperationKind::Copy, folder("from"), vec![OperationTarget { name: EntryName::new("a.txt").unwrap(), kind: dual_pane_domain::EntryKind::File }], Some(folder("to"))).unwrap();
+        assert_eq!(runner.dispatch(WorkRequest::Operation(OperationEffect::Scan { id, generation: 1, intent, skipped: Arc::from([]) })), None, "the lane accepts the request");
+        let mut events = Vec::new();
+        // The startup journal report and the scan result arrive in either order.
+        while !(events.iter().any(|event| matches!(event, Event::OperationScanned { .. })) && events.contains(&Event::JournalStatus { available: true })) {
+            events.extend(wait(&mut runner, &wakes));
+        }
+        let scanned = events.iter().find_map(|event| match event {
+            Event::OperationScanned { id: owner, generation, plan } if *owner == id => Some((*generation, plan.clone())),
+            _ => None,
+        });
+        let Some((1, Ok(plan))) = scanned else { panic!("the scan result for generation 1: {scanned:?}") };
+        assert_eq!(plan.iter().map(|item| item.source.clone()).collect::<Vec<_>>(), vec![folder("from").join(&EntryName::new("a.txt").unwrap())]);
+    }
     fn source_factory(source: impl Fn(&Location, &AtomicBool) -> FolderItemsOutcome + Send + Sync + 'static) -> FolderItemsSourceFactory {
         let source = Arc::new(source);
         Arc::new(move || {

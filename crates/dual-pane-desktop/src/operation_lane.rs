@@ -627,6 +627,64 @@ mod tests {
         assert_eq!(fixture.ws.operation_jobs().iter().find(|job| job.id() == second).unwrap().decision().unwrap().issue, dual_pane_domain::OperationIssue::FileConflict, "it then finds the first copy's result");
     }
 
+    /// Copies `a.txt` onto an existing one, waits for the conflict, and
+    /// answers it with `choice`.
+    fn decide_conflict(choice: dual_pane_domain::OperationChoice) -> (Fixture, OperationId) {
+        let mut fixture = Fixture::new(STEP_BUDGET, false);
+        fs::write(fixture.root.path().join("from/a.txt"), b"new").unwrap();
+        fs::write(fixture.root.path().join("to/a.txt"), b"old").unwrap();
+        fixture.show(&["a.txt"]);
+        let id = fixture.start("a.txt", OperationKind::Copy);
+        fixture.until(|ws| ws.operation_jobs().iter().any(|job| job.id() == id && job.decision().is_some()));
+        let decision = fixture.ws.operation_jobs()[0].decision().unwrap();
+        assert_eq!(decision.issue, dual_pane_domain::OperationIssue::FileConflict);
+        let (token, item) = (decision.token, decision.item.clone());
+        let decided = fixture.ws.handle(Command::DecideOperation { id, token, item, choice, apply_to_all: false }.into()).work;
+        fixture.submit(decided);
+        (fixture, id)
+    }
+
+    fn leftovers(fixture: &Fixture) -> usize {
+        fs::read_dir(fixture.root.path().join("to")).unwrap().filter_map(Result::ok).filter(|entry| entry.file_name().to_string_lossy().contains(".dual-pane-")).count()
+    }
+
+    #[test]
+    fn a_replace_decision_round_trips_through_the_lane_and_a_stale_result_is_ignored() {
+        let (mut fixture, id) = decide_conflict(dual_pane_domain::OperationChoice::Replace);
+        let stale = fixture.log.iter().rev().find(|event| matches!(event, Event::OperationStepped { result: dual_pane_application::StepResult::DecisionRequired { .. }, .. })).cloned().expect("the conflict result");
+        let before = fixture.status(id);
+        let replayed = fixture.ws.handle(stale.into());
+        assert!(replayed.work.is_empty(), "the pre-decision result asks for nothing");
+        assert_eq!(fixture.status(id), before, "and changes nothing");
+        fixture.until(finished(id));
+        assert_eq!(fixture.status(id), OperationStatus::Finished(OperationOutcome::Succeeded));
+        assert_eq!(fs::read(fixture.root.path().join("to/a.txt")).unwrap(), b"new");
+        assert_eq!(leftovers(&fixture), 0, "the replacement's temporary is gone");
+    }
+
+    #[test]
+    fn a_skip_decision_leaves_the_destination_untouched() {
+        let (mut fixture, id) = decide_conflict(dual_pane_domain::OperationChoice::Skip);
+        fixture.until(finished(id));
+        assert_eq!(fixture.status(id), OperationStatus::Finished(OperationOutcome::Partial));
+        assert_eq!(fs::read(fixture.root.path().join("to/a.txt")).unwrap(), b"old");
+        assert_eq!(leftovers(&fixture), 0);
+    }
+
+    #[test]
+    fn shutting_down_waits_no_longer_than_its_bound_for_a_stuck_step() {
+        let mut fixture = Fixture::new(STEP_BUDGET, true);
+        fs::write(fixture.root.path().join("from/a.txt"), b"a").unwrap();
+        fixture.show(&["a.txt"]);
+        let id = fixture.start("a.txt", OperationKind::Copy);
+        fixture.until(running(id));
+        fixture.started.recv_timeout(TIMEOUT).expect("the copy is stuck at its gate");
+        let started = Instant::now();
+        fixture.lane.shut_down(Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_secs(2), "quitting is not held up by a step that ignores cancellation");
+        fixture.release.send(()).unwrap();
+    }
+
     #[test]
     fn dismissing_a_finished_job_releases_what_the_lane_kept() {
         let mut fixture = Fixture::new(STEP_BUDGET, false);

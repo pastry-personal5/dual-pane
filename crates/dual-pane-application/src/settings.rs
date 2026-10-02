@@ -72,6 +72,28 @@ impl ActionId {
     pub fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|id| id.as_str() == value)
     }
+
+    /// Where this action's shortcut acts.
+    pub const fn scope(self) -> ShortcutScope {
+        match self {
+            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents => ShortcutScope::FolderItemsList,
+            Self::QuitApplication => ShortcutScope::Application,
+            Self::FocusOtherBrowser | Self::NavigateParent | Self::CloseWindow | Self::NewFolder | Self::SortByNameAscending | Self::SortByNameDescending | Self::SortByTypeAscending | Self::SortByTypeDescending | Self::SortByDateAscending | Self::SortByDateDescending | Self::SortBySizeAscending | Self::SortBySizeDescending | Self::NewTab | Self::CloseTab | Self::NavigateBack | Self::NavigateForward | Self::RefreshFolder => ShortcutScope::Window,
+        }
+    }
+}
+
+/// Where a shortcut acts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShortcutScope {
+    /// Only while a Folder Items List has keyboard focus, on that list's
+    /// Browser.
+    FolderItemsList,
+    /// Anywhere in the workspace window, on the active Browser. Suppressed
+    /// while an inline name editor has focus.
+    Window,
+    /// In every window, even while an inline name editor has focus.
+    Application,
 }
 
 /// A platform-neutral key. Characters are uppercase ASCII letters or digits.
@@ -486,6 +508,21 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::DeletePermanently), shortcut(true, true, Key::Delete));
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
         assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 6..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents], "new IDs are appended");
+    }
+    #[test]
+    fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
+        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents];
+        for action in ActionId::ALL {
+            let expected = if list.contains(&action) {
+                ShortcutScope::FolderItemsList
+            } else if action == ActionId::QuitApplication {
+                ShortcutScope::Application
+            } else {
+                ShortcutScope::Window
+            };
+            assert_eq!(action.scope(), expected, "{action:?}");
+        }
+        assert_eq!(ActionId::NewFolder.scope(), ShortcutScope::Window, "New Folder stays window-wide");
     }
     #[test]
     fn settings_saved_before_the_file_commands_load_their_defaults() {

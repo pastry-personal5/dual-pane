@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, favorite_rejection_text, reader_start_failure_status};
-use dual_pane_application::{Key, Shortcut};
+use dual_pane_application::{Key, Shortcut, ShortcutScope};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
@@ -117,6 +117,10 @@ pub mod ffi {
         /// The binding as Qt portable key-sequence text, empty when unbound.
         #[cxx_name = "bindingSequence"]
         fn binding_sequence(self: &WorkspaceBridge, binding: i32) -> QString;
+        /// Where the binding acts: 0 for a focused Folder Items List, 1 for
+        /// the workspace window, 2 for every window, or -1 for no binding.
+        #[cxx_name = "bindingScope"]
+        fn binding_scope(self: &WorkspaceBridge, binding: i32) -> i32;
     }
 }
 
@@ -310,6 +314,9 @@ impl ffi::WorkspaceBridge {
     fn binding_sequence(&self, binding: i32) -> QString {
         usize::try_from(binding).ok().and_then(|binding| self.rust().shown.bindings().get(binding)).and_then(|binding| binding.shortcut).map_or_else(QString::default, |shortcut| QString::from(key_sequence(shortcut).as_str()))
     }
+    fn binding_scope(&self, binding: i32) -> i32 {
+        usize::try_from(binding).ok().and_then(|binding| self.rust().shown.bindings().get(binding)).map_or(-1, |binding| scope_code(binding.action.scope()))
+    }
 
     fn set_active_browser(mut self: Pin<&mut Self>, value: i32) {
         if self.rust().active_browser != value {
@@ -359,6 +366,16 @@ fn count(length: usize) -> i32 {
     i32::try_from(length).unwrap_or(i32::MAX)
 }
 
+/// The Qt code for `scope`, matching the `scope_*` constants in
+/// `desktop_window.cpp`.
+fn scope_code(scope: ShortcutScope) -> i32 {
+    match scope {
+        ShortcutScope::FolderItemsList => 0,
+        ShortcutScope::Window => 1,
+        ShortcutScope::Application => 2,
+    }
+}
+
 /// Qt portable key-sequence text for `shortcut`. Qt names the Command key
 /// `Ctrl` and the Control key `Meta` on macOS.
 pub(crate) fn key_sequence(shortcut: Shortcut) -> String {
@@ -401,5 +418,12 @@ mod tests {
         assert_eq!(sequence(ActionId::CloseWindow), None);
         assert_eq!(key_sequence(Shortcut::new(true, false, true, true, Key::Delete)), "Meta+Alt+Ctrl+Backspace");
         assert_eq!(key_sequence(Shortcut::new(false, false, false, false, Key::Function(2))), "F2");
+    }
+
+    #[test]
+    fn scope_codes_match_the_qt_constants() {
+        assert_eq!(scope_code(ActionId::MoveToTrash.scope()), 0, "scope_folder_items_list");
+        assert_eq!(scope_code(ActionId::NewFolder.scope()), 1, "scope_window");
+        assert_eq!(scope_code(ActionId::QuitApplication.scope()), 2, "scope_application");
     }
 }

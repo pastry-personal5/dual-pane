@@ -96,6 +96,8 @@ constexpr auto favorite_item_mime = "application/x-dual-pane-favorite-item";
 constexpr auto operation_panel_mime = "application/x-dual-pane-operation-panel";
 // File command codes of the Folder Items model.
 constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_new_folder = 3, command_trash = 4, command_delete = 5;
+// Shortcut scope codes of the workspace bridge.
+constexpr int scope_folder_items_list = 0, scope_application = 2;
 constexpr int status_reason_milliseconds = 3000;
 constexpr auto window_color = "#1B1D21", surface_color = "#23262B", text_color = "#ECEFF3", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#1E4668", divider_hover_border_color = "#737A84", error_color = "#E5737A";
 
@@ -2345,7 +2347,14 @@ class ShortcutBinder final {
         for (int index = 0; index < bridge_->bindingCount(); ++index) {
             const auto action = bridge_->bindingAction(index);
             const auto sequence = bridge_->bindingSequence(index);
-            if (const auto list_handler = list_handlers_.value(action); list_handler && !sequence.isEmpty()) {
+            const auto scope = bridge_->bindingScope(index);
+            if (sequence.isEmpty())
+                continue;
+            // File commands act only on the Folder Items List that has focus.
+            if (scope == scope_folder_items_list) {
+                const auto list_handler = list_handlers_.value(action);
+                if (!list_handler)
+                    continue;
                 for (int browser = 0; browser < 2; ++browser) {
                     auto *shortcut = new QShortcut(QKeySequence::fromString(sequence, QKeySequence::PortableText), lists_.at(browser));
                     shortcut->setContext(Qt::WidgetShortcut);
@@ -2355,14 +2364,14 @@ class ShortcutBinder final {
                 continue;
             }
             const auto handler = handlers_.value(action);
-            if (sequence.isEmpty() || !handler)
+            if (!handler)
                 continue;
             auto *shortcut = new QShortcut(QKeySequence::fromString(sequence, QKeySequence::PortableText), window_);
-            const bool quit = action == QStringLiteral("QuitApplication");
+            const bool application = scope == scope_application;
             // Quit works from every window, including Notices; workspace
             // actions belong to the main window only.
-            shortcut->setContext(quit ? Qt::ApplicationShortcut : Qt::WindowShortcut);
-            shortcut->setProperty("quit", quit);
+            shortcut->setContext(application ? Qt::ApplicationShortcut : Qt::WindowShortcut);
+            shortcut->setProperty("application", application);
             QObject::connect(shortcut, &QShortcut::activated, window_, handler);
             shortcuts_.push_back(shortcut);
         }
@@ -2376,7 +2385,7 @@ class ShortcutBinder final {
   private:
     void apply() {
         for (auto *shortcut : shortcuts_)
-            shortcut->setEnabled(!editing_ || shortcut->property("quit").toBool());
+            shortcut->setEnabled(!editing_ || shortcut->property("application").toBool());
     }
 
     QWidget *window_;
@@ -2614,6 +2623,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     const std::array<QString, 8> sorts = {QStringLiteral("SortByNameAscending"), QStringLiteral("SortByNameDescending"), QStringLiteral("SortByTypeAscending"), QStringLiteral("SortByTypeDescending"), QStringLiteral("SortByDateAscending"), QStringLiteral("SortByDateDescending"), QStringLiteral("SortBySizeAscending"), QStringLiteral("SortBySizeDescending")};
     for (int choice = 0; choice < static_cast<int>(sorts.size()); ++choice)
         handlers.insert(sorts.at(choice), [active_model, choice] { active_model()->setSort(choice); });
+    // The bridge decides which actions are scoped to a focused list.
     QHash<QString, ShortcutBinder::ListHandler> list_handlers;
     const std::array<std::pair<QString, int>, 5> file_commands = {{{QStringLiteral("CopyToOtherBrowser"), command_copy}, {QStringLiteral("MoveToOtherBrowser"), command_move}, {QStringLiteral("RenameItem"), command_rename}, {QStringLiteral("MoveToTrash"), command_trash}, {QStringLiteral("DeletePermanently"), command_delete}}};
     for (const auto &file_command : file_commands)

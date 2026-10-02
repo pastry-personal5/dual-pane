@@ -117,6 +117,17 @@ pub struct OperationsModelRust {
 /// The Qt code of each choice.
 const CHOICES: [OperationChoice; 4] = [OperationChoice::Replace, OperationChoice::TryAgain, OperationChoice::Skip, OperationChoice::Cancel];
 
+/// The Qt code for `choice`.
+fn choice_code(choice: OperationChoice) -> i32 {
+    CHOICES.iter().position(|candidate| *candidate == choice).map_or(-1, qt_int)
+}
+
+/// The choice a Qt code names, or `None` for an unknown code, which a
+/// decision then ignores rather than defaulting to any choice.
+fn choice_from_code(code: i32) -> Option<OperationChoice> {
+    usize::try_from(code).ok().and_then(|code| CHOICES.get(code)).copied()
+}
+
 fn qt_int(value: usize) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
@@ -203,7 +214,7 @@ impl ffi::OperationsModel {
         self.decision_choice(panel, choice).map_or_else(QString::default, |choice| QString::from(choice.label))
     }
     fn decision_choice_code(&self, panel: i32, choice: i32) -> i32 {
-        self.decision_choice(panel, choice).and_then(|choice| CHOICES.iter().position(|candidate| *candidate == choice.choice)).map_or(-1, qt_int)
+        self.decision_choice(panel, choice).map_or(-1, |choice| choice_code(choice.choice))
     }
     fn decision_offers_apply_to_all(&self, panel: i32) -> bool {
         self.panel(panel).and_then(|panel| panel.decision.as_ref()).is_some_and(|card| card.offers_apply_to_all)
@@ -219,8 +230,8 @@ impl ffi::OperationsModel {
         }
     }
     fn decide(mut self: Pin<&mut Self>, job: i64, token: i64, choice: i32, apply_to_all: bool) {
-        let (Some(id), Ok(token), Some(choice)) = (operation_id(job), u64::try_from(token), usize::try_from(choice).ok().and_then(|choice| CHOICES.get(choice))) else { return };
-        with_session(|session| session.decide(id, DecisionToken::new(token), *choice, apply_to_all));
+        let (Some(id), Ok(token), Some(choice)) = (operation_id(job), u64::try_from(token), choice_from_code(choice)) else { return };
+        with_session(|session| session.decide(id, DecisionToken::new(token), choice, apply_to_all));
         self.as_mut().session_changed();
     }
     fn close_panel(mut self: Pin<&mut Self>, job: i64) {
@@ -262,5 +273,20 @@ impl ffi::OperationsModel {
     fn submit(mut self: Pin<&mut Self>, command: Command) {
         with_session(|session| session.submit(command));
         self.as_mut().session_changed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_choice_survives_its_qt_code_and_unknown_codes_choose_nothing() {
+        for choice in [OperationChoice::Replace, OperationChoice::TryAgain, OperationChoice::Skip, OperationChoice::Cancel] {
+            assert_eq!(choice_from_code(choice_code(choice)), Some(choice), "{choice:?}");
+        }
+        for code in [-1, 4, i32::MAX, i32::MIN] {
+            assert_eq!(choice_from_code(code), None, "code {code} must not become a choice such as Replace");
+        }
     }
 }

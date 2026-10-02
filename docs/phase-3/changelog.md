@@ -2,6 +2,12 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M8 shortcut scope and runtime tests
+
+- **Shortcut scope:** the application catalogue now records where each action's shortcut acts (`ActionId::scope`): the five file commands and Show Package Contents need a focused Folder Items List, Quit works in every window, and every other action is window-wide. The workspace bridge reports it as `bindingScope`, and the Qt binder installs shortcuts from it instead of its own list of action names, so the focus scope has a Qt-free test.
+- **Runtime and bridge tests:** an attached file-operation lane delivers its events through the runtime; a Replace or Skip decision round-trips through the lane, and a replayed pre-decision result changes nothing; lane shutdown returns within its bound while a step ignores cancellation; Decision Card choice codes and file-command codes match their Qt constants, and an unknown choice code chooses nothing.
+- **Action terms:** [ux-terms](../ux-terms.md) now lists New Folder and the six P3-M8 action IDs as catalogued current commands.
+
 ## 2026-10-02 — Relative Date hue range
 
 - The owner narrowed the Relative Date strip hue from 0°–270° to 10°–260°; saturation and lightness are unchanged. A Qt 6.11.2 color probe measured active endpoints `#E8B9B0` and `#C3B0E8` with at least 10.22:1 black-text contrast, and dimmed endpoints `#C2A099` and `#A799C2` with at least 7.69:1 contrast. The dimmed color had lower luminance at each of 10,001 sampled positions. The [GUI rule](../ux-gui.md#folder-items-fields-and-display) records the new range.

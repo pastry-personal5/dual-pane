@@ -116,7 +116,7 @@ The Trash thread-safety test is ignored by default because it moves a file into 
 ### Evidence and gate
 
 - [x] Native tests run only in `tempfile` directories and cover each executor item above: conflict, merge, link, case-only rename, destination within source through a symlink, cross-volume behavior (injected where a second volume cannot be built), finalization, cancellation, forced failure, panic, and journal crash recovery.
-- [ ] Runtime, bridge, and presenter tests cover dispatch, stale results, decision round trips, panel and card state, reveal timing, Notices entries, Status Bar expiry, shortcut focus scope, the quit confirmation, and refresh targets.
+- [x] Runtime, bridge, and presenter tests cover dispatch, stale results, decision round trips, panel and card state, reveal timing, Notices entries, Status Bar expiry, shortcut focus scope, the quit confirmation, and refresh targets.
 - [ ] A human check of what automation cannot cover (drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual panel behavior) is recorded after the automated gate, or the item stays unchecked with its blocker.
 - [x] Directly affected docs and `AGENTS.md` reflect the executor, dependency, journal, and contract extensions; `docs/README.md` indexes these files.
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass.

@@ -85,7 +85,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Navigate Parent | `NavigateParent` | Catalogued; current command |
 | Close Window | `CloseWindow` | Catalogued; current command, no default shortcut |
 | Quit Application | `QuitApplication` | Catalogued; current command |
-| New Folder | `NewFolder` | Catalogued; planned command |
+| New Folder | `NewFolder` | Catalogued; current command |
 | Sort by Name Ascending | `SortByNameAscending` | Catalogued; current command |
 | Sort by Name Descending | `SortByNameDescending` | Catalogued; current command |
 | Sort by Type Ascending | `SortByTypeAscending` | Catalogued; current command |
@@ -99,12 +99,12 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Back | `NavigateBack` | Catalogued; current command |
 | Forward | `NavigateForward` | Catalogued; current command |
 | Refresh Folder | `RefreshFolder` | Catalogued; current command |
-| Copy to Other Browser | `CopyToOtherBrowser` | Planned ID |
-| Move to Other Browser | `MoveToOtherBrowser` | Planned ID |
-| Rename Item | `RenameItem` | Planned ID |
-| Move to Trash | `MoveToTrash` | Planned ID |
-| Delete Permanently | `DeletePermanently` | Planned ID |
-| Show Package Contents | `ShowPackageContents` | Planned ID, no default shortcut |
+| Copy to Other Browser | `CopyToOtherBrowser` | Catalogued; current command |
+| Move to Other Browser | `MoveToOtherBrowser` | Catalogued; current command |
+| Rename Item | `RenameItem` | Catalogued; current command |
+| Move to Trash | `MoveToTrash` | Catalogued; current command |
+| Delete Permanently | `DeletePermanently` | Catalogued; current command |
+| Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
 
 ## Deferred components
 
