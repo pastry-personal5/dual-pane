@@ -94,33 +94,54 @@ pub fn listing_sort_key(entry: &Entry) -> ListingSortKey {
     ListingSortKey { group: u8::from(!entry.can_enter()), name: name_tokens(&text), exact: entry.name.as_bytes().into() }
 }
 
+/// The Type text shown for `entry` and compared by Type sort: `[DIR]` for a
+/// folder, `[LNK]` for any symbolic link, otherwise the lowercase text after
+/// the last `.` in the name, which is empty for a name without one.
+pub fn entry_type_text(entry: &Entry) -> String {
+    match entry.kind {
+        EntryKind::Directory => "[DIR]".to_owned(),
+        EntryKind::Symlink { .. } => "[LNK]".to_owned(),
+        EntryKind::File | EntryKind::Other => {
+            let name = entry.name.to_text_lossy();
+            name.rfind('.').map_or_else(String::new, |dot| name[dot + 1..].to_lowercase())
+        }
+    }
+}
+
+/// A sort value in its requested direction. One sort uses one variant, so the
+/// variant order never decides a comparison.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Directed<T> {
+    Ascending(T),
+    Descending(Reverse<T>),
+}
+
+impl<T> Directed<T> {
+    fn new(value: T, direction: SortDirection) -> Self {
+        match direction {
+            SortDirection::Ascending => Self::Ascending(value),
+            SortDirection::Descending => Self::Descending(Reverse(value)),
+        }
+    }
+}
+
 /// Sorts entries according to one location-shared choice. Folders and links to
 /// folders always lead; unavailable metadata follows known values. Every field
 /// falls back to natural Name ascending so the order remains deterministic.
 pub fn sort_entries(entries: &mut [Entry], spec: SortSpec) {
-    match (spec.field(), spec.direction()) {
-        (SortField::Name, SortDirection::Ascending) => entries.sort_by_cached_key(listing_sort_key),
-        (SortField::Name, SortDirection::Descending) => entries.sort_by_cached_key(|entry| (u8::from(!entry.can_enter()), Reverse(listing_sort_key(entry)))),
-        (field, direction) => entries.sort_by_cached_key(|entry| {
-            let value: Option<i128> = match field {
-                SortField::Type => Some(i128::from(type_key(entry))),
+    let direction = spec.direction();
+    let group = |entry: &Entry| u8::from(!entry.can_enter());
+    match spec.field() {
+        SortField::Name if direction == SortDirection::Ascending => entries.sort_by_cached_key(listing_sort_key),
+        SortField::Name => entries.sort_by_cached_key(|entry| (group(entry), Reverse(listing_sort_key(entry)))),
+        SortField::Type => entries.sort_by_cached_key(|entry| (group(entry), Directed::new(entry_type_text(entry), direction), listing_sort_key(entry))),
+        field @ (SortField::Modified | SortField::Size) => entries.sort_by_cached_key(|entry| {
+            let value = match field {
                 SortField::Modified => entry.metadata.modified_unix_seconds.map(i128::from),
-                SortField::Size => entry.metadata.size_bytes.map(i128::from),
-                SortField::Name => unreachable!("Name is handled above"),
+                _ => entry.metadata.size_bytes.map(i128::from),
             };
-            let ordered_value = value.map_or(0, |value| if direction == SortDirection::Descending { -value } else { value });
-            (u8::from(!entry.can_enter()), u8::from(value.is_none()), ordered_value, listing_sort_key(entry))
+            (group(entry), u8::from(value.is_none()), value.map(|value| Directed::new(value, direction)), listing_sort_key(entry))
         }),
-    }
-}
-
-fn type_key(entry: &Entry) -> u8 {
-    match entry.kind {
-        EntryKind::Directory => 0,
-        EntryKind::File => 1,
-        EntryKind::Symlink { points_to_directory: true } => 2,
-        EntryKind::Symlink { points_to_directory: false } => 3,
-        EntryKind::Other => 4,
     }
 }
 

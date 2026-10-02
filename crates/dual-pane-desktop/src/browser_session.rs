@@ -2,10 +2,11 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, InputController, UiEvent};
-use dual_pane_application::{Command, Event, Input, SettingsFailure, WorkRequest, Workspace};
+use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, FavoritesEvent, InputController, UiEvent, WorkspacePresenter, WorkspaceViewModel};
+use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteRejection, Input, Output, SettingsFailure, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Location};
 
+use crate::native_location::location_from_path;
 use crate::runtime::{FolderItemsSourceFactory, LocationProbe, Runtime, WorkRunner};
 use crate::settings_storage::{SettingsJob, SettingsResult, SettingsWorker};
 
@@ -38,6 +39,7 @@ pub struct WorkspaceSession<R = Runtime> {
     controller: InputController,
     left: BrowserPresenter,
     right: BrowserPresenter,
+    sidebar: WorkspacePresenter,
     runner: R,
     settings_worker: Option<SettingsWorker>,
     drain_slice: usize,
@@ -53,12 +55,17 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     }
 
     pub fn with_settings(runner: R, home: Location, settings_worker: Option<SettingsWorker>, drain_slice: usize, drain_time_budget: Duration) -> Self {
+        Self::with_presenters(runner, home, settings_worker, drain_slice, drain_time_budget, BrowserPresenter::new)
+    }
+
+    fn with_presenters(runner: R, home: Location, settings_worker: Option<SettingsWorker>, drain_slice: usize, drain_time_budget: Duration, presenter: impl Fn(BrowserSide) -> BrowserPresenter) -> Self {
         assert!(drain_slice > 0, "a drain must be able to handle at least one event");
         if let Some(worker) = &settings_worker {
             worker.submit(SettingsJob::Load);
         }
         let missing_worker = settings_worker.is_none();
-        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: BrowserPresenter::new(BrowserSide::Left), right: BrowserPresenter::new(BrowserSide::Right), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false };
+        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false };
+        session.apply_chrome();
         if missing_worker {
             session.submit(Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable });
         }
@@ -83,23 +90,48 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     }
 
     pub fn submit(&mut self, input: impl Into<Input>) {
-        let mut inputs = VecDeque::from([input.into()]);
+        self.submit_and_report(input.into());
+    }
+
+    /// Handles `input` and every terminal event its work returns at once, and
+    /// reports a Favorites rejection among the results.
+    fn submit_and_report(&mut self, input: Input) -> Option<(FavoriteEdit, FavoriteRejection)> {
+        let mut rejection = None;
+        let mut inputs = VecDeque::from([input]);
         while let Some(input) = inputs.pop_front() {
             let transition = self.workspace.handle(input);
             for output in &transition.outputs {
+                if let Output::FavoriteEditRejected { edit, reason } = output {
+                    rejection = Some((*edit, *reason));
+                }
                 self.left.apply(output);
                 self.right.apply(output);
+                self.sidebar.apply(output);
             }
             for request in transition.work {
-                if let WorkRequest::SaveSettings { revision, snapshot } = request {
-                    if !self.settings_worker.as_ref().is_some_and(|worker| worker.submit(SettingsJob::Save { revision, snapshot })) {
-                        inputs.push_back(Event::SettingsSaveFailed { revision }.into());
-                    }
-                } else if let Some(event) = self.runner.dispatch(request) {
-                    inputs.push_back(event.into());
-                }
+                inputs.extend(self.dispatch(request).map(Input::from));
             }
         }
+        self.apply_chrome();
+        rejection
+    }
+
+    /// Sends settings work to the settings worker and everything else to the
+    /// runtime. A request that cannot start returns its failure at once.
+    fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
+        let (job, failed) = match request {
+            WorkRequest::SaveSettings { revision, snapshot } => (SettingsJob::Save { revision, snapshot }, Event::SettingsSaveFailed { revision, failure: SettingsFailure::WorkerUnavailable }),
+            WorkRequest::LoadSettings => (SettingsJob::Load, Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable }),
+            WorkRequest::ResetSettings => (SettingsJob::Reset, Event::SettingsResetFailed { failure: SettingsFailure::WorkerUnavailable }),
+            request => return self.runner.dispatch(request),
+        };
+        if self.settings_worker.as_ref().is_some_and(|worker| worker.submit(job)) { None } else { Some(failed) }
+    }
+
+    fn apply_chrome(&mut self) {
+        self.left.apply_chrome(&self.workspace.browser_chrome(BrowserSide::Left));
+        self.right.apply_chrome(&self.workspace.browser_chrome(BrowserSide::Right));
+        self.sidebar.apply_chrome(&self.workspace.workspace_chrome());
     }
 
     pub fn submit_ui(&mut self, browser: BrowserSide, event: UiEvent) {
@@ -109,19 +141,39 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         }
     }
 
+    /// Records view state, such as a scroll position, that a Browser reports
+    /// without the person acting on it, so it never activates that Browser.
+    pub fn submit_view_state(&mut self, browser: BrowserSide, event: UiEvent) {
+        if let Some(command) = self.controller.command(browser, event, self.view(browser)) {
+            self.submit(command);
+        }
+    }
+
+    /// Handles a Sidebar gesture for the active Browser and reports whether
+    /// the application rejected it, so an inline editor can stay open.
+    pub fn submit_favorites(&mut self, event: FavoritesEvent) -> Option<(FavoriteEdit, FavoriteRejection)> {
+        let browser = self.workspace.active_browser();
+        let command = self.controller.favorites_command(event, self.sidebar.view(), browser, self.view(browser))?;
+        self.submit_and_report(command.into())
+    }
+
+    /// Names the root volume for tab labels and root Favorite aliases.
+    pub fn set_root_label(&mut self, label: &str) {
+        self.left.set_root_label(label);
+        self.right.set_root_label(label);
+    }
+
     pub fn drain(&mut self) -> bool {
-        if let Some(worker) = &self.settings_worker {
-            for result in worker.take_results() {
-                match result {
-                    SettingsResult::Loaded(snapshot) => self.submit(Event::SettingsLoaded { snapshot }),
-                    SettingsResult::LoadFailed(error) => self.submit(Event::SettingsLoadFailed { failure: error.failure() }),
-                    SettingsResult::Saved { revision } => self.submit(Event::SettingsSaved { revision }),
-                    SettingsResult::SaveFailed { revision, .. } => self.submit(Event::SettingsSaveFailed { revision }),
-                    // Nothing submits a reset until P3-M6 adds its confirmed
-                    // recovery flow, which also reloads the fresh settings.
-                    SettingsResult::Reset { .. } | SettingsResult::ResetFailed(_) => {}
-                }
-            }
+        let results = self.settings_worker.as_ref().map(SettingsWorker::take_results).unwrap_or_default();
+        for result in results {
+            self.submit(match result {
+                SettingsResult::Loaded(snapshot) => Event::SettingsLoaded { snapshot },
+                SettingsResult::LoadFailed(error) => Event::SettingsLoadFailed { failure: error.failure() },
+                SettingsResult::Saved { revision } => Event::SettingsSaved { revision },
+                SettingsResult::SaveFailed { revision, error } => Event::SettingsSaveFailed { revision, failure: error.failure() },
+                SettingsResult::Reset { backup } => Event::SettingsReset { backup: backup.as_deref().and_then(location_from_path) },
+                SettingsResult::ResetFailed(error) => Event::SettingsResetFailed { failure: error.failure() },
+            });
         }
         let started = Instant::now();
         if self.buffered_events.is_empty() {
@@ -153,13 +205,17 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             BrowserSide::Right => self.right.view(),
         }
     }
+
+    pub fn workspace_view(&self) -> &WorkspaceViewModel {
+        self.sidebar.view()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use dual_pane_adapters::SelectionMovement;
+    use dual_pane_adapters::{FavoritesEvent, SelectionMovement};
     use dual_pane_application::{Command, Event, WorkRequest};
     use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken, Selection, SortSpec, TabId};
 
@@ -200,7 +256,7 @@ mod tests {
             assert_eq!(view.row(index).map(|row| row.name), Some((*name).to_owned()));
         }
         let expected_row = selected.and_then(|name| rows.iter().position(|row| *row == name));
-        assert_eq!(view.selected_row(), expected_row);
+        assert_eq!(view.cursor_row(), expected_row);
         let mut selection = Selection::default();
         if let Some(name) = selected {
             selection.select(EntryName::new(name).unwrap());
@@ -283,8 +339,8 @@ mod tests {
         session.submit_ui(BrowserSide::Right, UiEvent::SelectRow { row: 0 });
         assert_eq!(session.view(BrowserSide::Left).folder_items_revision(), 1);
         assert_eq!(session.view(BrowserSide::Right).folder_items_revision(), 1);
-        assert_eq!(session.view(BrowserSide::Left).selected_row(), None);
-        assert_eq!(session.view(BrowserSide::Right).selected_row(), Some(0));
+        assert_eq!(session.view(BrowserSide::Left).cursor_row(), None);
+        assert_eq!(session.view(BrowserSide::Right).cursor_row(), Some(0));
     }
 
     #[test]
@@ -293,18 +349,18 @@ mod tests {
         session.start(Location::root());
 
         session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
-        assert_eq!(session.view(BrowserSide::Left).selected_row(), None);
+        assert_eq!(session.view(BrowserSide::Left).cursor_row(), None);
 
         session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("first"), entry("second"), entry("third")]), changes: None });
         session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
-        assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
+        assert_eq!(session.view(BrowserSide::Left).cursor_row(), Some(0));
         session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
-        assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
+        assert_eq!(session.view(BrowserSide::Left).cursor_row(), Some(0));
         session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Next));
         session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Next));
         session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Next));
-        assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(2));
-        assert_eq!(session.view(BrowserSide::Right).selected_row(), None);
+        assert_eq!(session.view(BrowserSide::Left).cursor_row(), Some(2));
+        assert_eq!(session.view(BrowserSide::Right).cursor_row(), None);
     }
 
     #[test]
@@ -313,11 +369,11 @@ mod tests {
         session.start(Location::root());
         session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("first"), entry("second")]), changes: None });
         session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 });
-        session.submit(Command::SelectAll { browser: BrowserSide::Left });
+        session.submit_ui(BrowserSide::Left, UiEvent::SelectAll);
         assert_eq!(session.view(BrowserSide::Left).selection().entries().len(), 2);
         session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
         assert_eq!(session.view(BrowserSide::Left).selection().entries(), &[EntryName::new("first").unwrap()]);
-        assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
+        assert_eq!(session.view(BrowserSide::Left).cursor_row(), Some(0));
     }
 
     #[test]
@@ -360,7 +416,7 @@ mod tests {
         session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: second });
         assert_view(&session, BrowserSide::Left, ("/first", &["two"], None, "/first", false, 4));
 
-        session.submit(Command::Refresh { browser: BrowserSide::Left });
+        session.submit_ui(BrowserSide::Left, UiEvent::Refresh);
         let refresh = match session.runner.dispatched.last() {
             Some(WorkRequest::ReadDirectory { token, .. }) => *token,
             _ => panic!("refresh read"),
@@ -381,6 +437,97 @@ mod tests {
         let new = session.workspace.active_tab(BrowserSide::Left);
         assert_ne!(old, new);
         assert!(matches!(session.runner.dispatched.last(), Some(WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, location, .. }) if *tab == new && *location == home));
+    }
+
+    /// Completes the latest read `browser` requested with `names` as folders.
+    fn deliver(session: &mut WorkspaceSession<FakeRunner>, browser: BrowserSide, names: &[&str]) {
+        let Some(WorkRequest::ReadDirectory { tab, token, .. }) = session.runner.dispatched.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { browser: requested, .. } if *requested == browser)).cloned() else { panic!("a read") };
+        session.submit(Event::FolderItemsLoaded { browser, tab, token, entries: names.iter().map(|name| entry(name)).collect(), changes: None });
+    }
+
+    #[test]
+    fn a_sort_in_one_browser_rereads_inactive_tabs_at_that_location_in_both() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("shared"));
+        deliver(&mut session, BrowserSide::Left, &["a"]);
+        deliver(&mut session, BrowserSide::Right, &["a"]);
+        session.submit_ui(BrowserSide::Left, UiEvent::NewTab);
+        deliver(&mut session, BrowserSide::Left, &["a"]);
+        session.submit(Command::Navigate { browser: BrowserSide::Left, location: path("other") });
+        deliver(&mut session, BrowserSide::Left, &[]);
+        session.runner.dispatched.clear();
+        let size = SortSpec::new(dual_pane_domain::SortField::Size, dual_pane_domain::SortDirection::Descending);
+        session.submit_ui(BrowserSide::Right, UiEvent::Sort(size));
+        let reads = session.runner.dispatched.iter().filter_map(|work| match work {
+            WorkRequest::ReadDirectory { browser, location, sort, .. } if *sort == size => Some((*browser, location.clone())),
+            _ => None,
+        });
+        assert_eq!(reads.collect::<Vec<_>>(), vec![(BrowserSide::Left, path("shared")), (BrowserSide::Right, path("shared"))], "the inactive Left tab rereads; the active one elsewhere does not");
+        assert_eq!(session.view(BrowserSide::Right).toolbar().sort, Some(size));
+        assert_eq!(session.view(BrowserSide::Left).toolbar().sort, Some(SortSpec::default()), "the Left active tab shows another folder");
+    }
+
+    #[test]
+    fn selection_cursor_and_scroll_return_with_their_tab() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("items"));
+        deliver(&mut session, BrowserSide::Left, &["a", "b", "c", "d"]);
+        let first = session.view(BrowserSide::Left).active_tab().unwrap();
+        session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 1 });
+        session.submit_ui(BrowserSide::Left, UiEvent::ExtendToRow { row: 2 });
+        session.submit_ui(BrowserSide::Left, UiEvent::Scrolled { row: Some(2), offset: 4 });
+        session.submit_ui(BrowserSide::Left, UiEvent::NewTab);
+        deliver(&mut session, BrowserSide::Left, &["a", "b", "c", "d"]);
+        assert!(session.view(BrowserSide::Left).selected_rows().is_empty(), "a new tab starts clean");
+        session.submit_ui(BrowserSide::Left, UiEvent::ActivateTab { tab: first });
+        let view = session.view(BrowserSide::Left);
+        assert_eq!((view.selected_rows(), view.cursor_row(), view.scroll_hint_row()), (vec![1, 2], Some(2), Some((2, 4))));
+        assert!(session.view(BrowserSide::Right).selected_rows().is_empty(), "the other Browser is untouched");
+    }
+
+    #[test]
+    fn a_scroll_report_does_not_activate_its_browser() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("items"));
+        deliver(&mut session, BrowserSide::Left, &["a", "b"]);
+        deliver(&mut session, BrowserSide::Right, &["a", "b"]);
+        session.submit_ui(BrowserSide::Left, UiEvent::FocusBrowser);
+        session.submit_view_state(BrowserSide::Right, UiEvent::Scrolled { row: Some(1), offset: 3 });
+        assert_eq!(session.workspace.active_browser(), BrowserSide::Left);
+        assert_eq!(session.workspace_view().active_browser(), BrowserSide::Left);
+        let right = session.view(BrowserSide::Right).active_tab().unwrap();
+        session.submit_ui(BrowserSide::Right, UiEvent::NewTab);
+        deliver(&mut session, BrowserSide::Right, &[]);
+        session.submit_ui(BrowserSide::Right, UiEvent::ActivateTab { tab: right });
+        assert_eq!(session.view(BrowserSide::Right).scroll_hint_row(), Some((1, 3)), "the scroll is still recorded");
+    }
+
+    #[test]
+    fn a_closed_tab_cannot_receive_a_delayed_gesture() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("items"));
+        deliver(&mut session, BrowserSide::Left, &["a", "b"]);
+        let stale = session.controller.command(BrowserSide::Left, UiEvent::SelectRow { row: 0 }, session.view(BrowserSide::Left)).unwrap();
+        session.submit_ui(BrowserSide::Left, UiEvent::NewTab);
+        deliver(&mut session, BrowserSide::Left, &["a", "b"]);
+        session.submit(stale);
+        assert!(session.view(BrowserSide::Left).selected_rows().is_empty(), "a gesture observed on the first tab does not select in the second");
+    }
+
+    #[test]
+    fn stored_favorites_are_probed_on_the_runner_and_an_unavailable_item_adds_a_notice() {
+        use dual_pane_application::{FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoritesRecords, SettingsSnapshot};
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        let favorites = FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 1, name: "Places".into(), position: 0 }], items: vec![FavoriteItemRecord { id: 3, group_id: 1, name: "Gone".into(), target: path("gone"), position: 0 }] };
+        // A session without a worker settled as failed; this load stands in
+        // for the worker's answer so the probe path can be followed.
+        session.workspace = Workspace::with_home(Location::root());
+        session.submit(Event::SettingsLoaded { snapshot: SettingsSnapshot { favorites, ..SettingsSnapshot::default() } });
+        assert!(session.runner.dispatched.contains(&WorkRequest::ProbeFavoriteTarget { item_id: 3, target: path("gone") }));
+        session.runner.delivered.push_back(Event::FavoriteTargetProbed { item_id: 3, target: path("gone"), outcome: FavoriteProbeOutcome::Unavailable });
+        session.drain();
+        assert!(session.workspace_view().groups()[0].items.is_empty());
+        assert!(session.workspace_view().notices().iter().any(|notice| notice.text == "Removed Favorite “Gone” because “/gone” is unavailable."));
     }
 
     mod stored_settings {
@@ -409,8 +556,13 @@ mod tests {
         fn stored_groups(path: &std::path::Path) -> Vec<String> {
             SettingsDatabase::open(path).unwrap().load().unwrap().favorites.groups.into_iter().map(|group| group.name).collect()
         }
+        /// Shows the root in the Left Browser, then sorts it by Size.
         fn sort_click(session: &mut WorkspaceSession<FakeRunner>) {
-            session.submit(Command::SetSort { location: Location::root(), sort: SortSpec::new(dual_pane_domain::SortField::Size, dual_pane_domain::SortDirection::Ascending) });
+            session.submit(Command::Navigate { browser: BrowserSide::Left, location: Location::root() });
+            let Some(WorkRequest::ReadDirectory { tab, token, .. }) = session.runner.dispatched.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })).cloned() else { panic!("a read") };
+            session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from([]), changes: None });
+            let tab = session.workspace.active_tab(BrowserSide::Left);
+            session.submit(Command::SetSort { browser: BrowserSide::Left, tab, location: Location::root(), sort: SortSpec::new(dual_pane_domain::SortField::Size, dual_pane_domain::SortDirection::Ascending) });
         }
 
         #[test]
@@ -461,6 +613,120 @@ mod tests {
         fn a_session_without_storage_settles_as_failed() {
             let session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
             assert_eq!(session.workspace.settings_status(), SettingsStatus::LoadFailed(SettingsFailure::WorkerUnavailable));
+            let notices = session.workspace_view().notices();
+            assert_eq!(notices.len(), 1);
+            assert!(!notices[0].offers_reset, "with no settings worker there is nothing to reset");
+            assert_eq!(session.workspace_view().open_requests(), 0);
+        }
+
+        /// A stored database damaged so that loading it fails as corrupt.
+        fn corrupt_database() -> (tempfile::TempDir, PathBuf) {
+            let (directory, path) = stored_database();
+            rusqlite::Connection::open(&path).unwrap().execute("UPDATE action_binding SET command = 'damaged' WHERE action = 'NewFolder'", []).unwrap();
+            (directory, path)
+        }
+        fn drain_until(session: &mut WorkspaceSession<FakeRunner>, done: impl Fn(&WorkspaceSession<FakeRunner>) -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done(session) {
+                assert!(Instant::now() < deadline, "the session never reached the expected state");
+                session.drain();
+                std::thread::yield_now();
+            }
+        }
+        fn notice_texts(session: &WorkspaceSession<FakeRunner>) -> Vec<String> {
+            session.workspace_view().notices().iter().map(|notice| notice.text.clone()).collect()
+        }
+
+        #[test]
+        fn a_corrupt_or_newer_database_opens_notices_with_reset_offered() {
+            let (_directory, path) = corrupt_database();
+            let mut session = session(&path);
+            drain_until_settled(&mut session);
+            let view = session.workspace_view();
+            assert_eq!(view.open_requests(), 1, "an actionable storage error opens Notices at launch");
+            assert!(view.notices()[0].offers_reset);
+            assert!(view.notices()[0].text.contains("damaged"));
+
+            let (_directory, path) = stored_database();
+            rusqlite::Connection::open(&path).unwrap().pragma_update(None, "user_version", 99).unwrap();
+            let mut session = self::session(&path);
+            drain_until_settled(&mut session);
+            assert_eq!(session.workspace.settings_status(), SettingsStatus::LoadFailed(SettingsFailure::UnsupportedSchema));
+            assert!(session.workspace_view().notices()[0].offers_reset);
+        }
+
+        #[test]
+        fn a_confirmed_reset_preserves_the_failed_database_and_reloads_fresh_settings() {
+            let (directory, path) = corrupt_database();
+            let mut session = session(&path);
+            drain_until_settled(&mut session);
+            session.submit(Command::ResetSettings);
+            assert!(!session.workspace_view().favorites_ready());
+            drain_until(&mut session, |session| session.workspace.settings_status() == SettingsStatus::Loaded);
+            let backups = std::fs::read_dir(directory.path()).unwrap().filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).filter(|name| name.starts_with("settings.failed-") && !name.ends_with("-wal") && !name.ends_with("-shm")).collect::<Vec<_>>();
+            assert_eq!(backups.len(), 1, "the failed database is preserved");
+            let damaged: String = rusqlite::Connection::open(directory.path().join(&backups[0])).unwrap().query_row("SELECT command FROM action_binding WHERE action = 'NewFolder'", [], |row| row.get(0)).unwrap();
+            assert_eq!(damaged, "damaged");
+            let success = notice_texts(&session).into_iter().find(|text| text.starts_with("Settings were reset.")).expect("a success Notice");
+            assert!(success.contains(&backups[0]), "the Notice names where the database was preserved: {success}");
+            assert!(session.runner.dispatched.iter().any(|work| matches!(work, WorkRequest::ProbeScreenshotsFolder { .. })), "fresh Favorites are seeded again");
+            assert!(session.workspace.favorites().groups.is_empty(), "the stored Work group was replaced");
+        }
+
+        #[test]
+        fn a_reset_discards_a_save_queued_before_it() {
+            let (_directory, path) = stored_database();
+            let mut session = session(&path);
+            drain_until_settled(&mut session);
+            assert_eq!(session.submit_favorites(FavoritesEvent::CreateGroup { name: "Unsaved".into() }), None);
+            session.submit(Command::ResetSettings);
+            drain_until(&mut session, |session| session.workspace.settings_status() == SettingsStatus::Loaded);
+            session.shutdown(Duration::from_secs(10));
+            assert!(!stored_groups(&path).contains(&"Unsaved".to_owned()), "an older queued save cannot reach the fresh database");
+        }
+
+        #[test]
+        fn a_failed_reset_keeps_the_error_and_leaves_the_database_untouched() {
+            use std::os::unix::fs::PermissionsExt;
+            let (directory, path) = corrupt_database();
+            let mut session = session(&path);
+            drain_until_settled(&mut session);
+            // A read-only folder makes preserving the database fail.
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+            session.submit(Command::ResetSettings);
+            drain_until(&mut session, |session| session.workspace.settings_status() != SettingsStatus::Loading);
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(session.workspace.settings_status(), SettingsStatus::LoadFailed(SettingsFailure::Corrupt));
+            let texts = notice_texts(&session);
+            assert!(texts.iter().any(|text| text == "Settings couldn’t be reset. The stored settings were not changed."), "{texts:?}");
+            assert!(!texts.iter().any(|text| text.starts_with("Settings were reset")));
+            assert!(session.workspace_view().notices().iter().all(|notice| notice.offers_reset), "reset stays available");
+            let damaged: String = rusqlite::Connection::open(&path).unwrap().query_row("SELECT command FROM action_binding WHERE action = 'NewFolder'", [], |row| row.get(0)).unwrap();
+            assert_eq!(damaged, "damaged");
+        }
+
+        #[test]
+        fn a_save_failure_keeps_the_edit_and_adds_one_notice() {
+            let (directory, path) = stored_database();
+            let mut session = session(&path);
+            drain_until_settled(&mut session);
+            // Removing the database and making its folder read-only makes
+            // every later save fail.
+            std::fs::remove_file(&path).unwrap();
+            for sidecar in ["settings.sqlite3-wal", "settings.sqlite3-shm"] {
+                std::fs::remove_file(directory.path().join(sidecar)).ok();
+            }
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+            session.submit_favorites(FavoritesEvent::CreateGroup { name: "Kept".into() });
+            session.submit_favorites(FavoritesEvent::CreateGroup { name: "Also kept".into() });
+            drain_until(&mut session, |session| !session.workspace_view().notices().is_empty());
+            std::thread::sleep(Duration::from_millis(200));
+            session.drain();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(session.workspace.favorites().groups.iter().any(|group| group.name == "Kept"));
+            let notices = notice_texts(&session);
+            assert_eq!(notices, ["Dual Pane couldn’t save settings. Your changes stay in effect until you quit."]);
         }
     }
 }

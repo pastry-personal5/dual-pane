@@ -7,7 +7,7 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{Event, FavoriteProbeOutcome, RowChange, WorkRequest, listing_changes};
+use dual_pane_application::{Event, FavoriteProbeOutcome, RowChange, SettingsFailure, WorkRequest, listing_changes};
 use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, RequestToken, SortSpec, TabId};
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
@@ -270,8 +270,13 @@ impl WorkRunner for Runtime {
                 }
                 None
             }
-            WorkRequest::SaveSettings { revision, .. } => Some(Event::SettingsSaveFailed { revision }),
+            // Settings work belongs to the settings worker; reaching the
+            // listing runtime means there is none.
+            WorkRequest::SaveSettings { revision, .. } => Some(Event::SettingsSaveFailed { revision, failure: SettingsFailure::WorkerUnavailable }),
+            WorkRequest::LoadSettings => Some(Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable }),
+            WorkRequest::ResetSettings => Some(Event::SettingsResetFailed { failure: SettingsFailure::WorkerUnavailable }),
             WorkRequest::ProbeScreenshotsFolder { location } => self.probe(location.clone(), Box::new(move |outcome| Event::ScreenshotsFolderProbed { location, outcome })),
+            WorkRequest::ProbeFavoriteTarget { item_id, target } => self.probe(target.clone(), Box::new(move |outcome| Event::FavoriteTargetProbed { item_id, target, outcome })),
         }
     }
 
@@ -391,7 +396,7 @@ fn deliver_event(delivery: &Delivery, event: Event) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::LocationInvalidated { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } => None,
+        Event::LocationInvalidated { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
@@ -554,6 +559,21 @@ mod tests {
         }
         let outcome = |location| Event::ScreenshotsFolderProbed { location, outcome: FavoriteProbeOutcome::Failed };
         assert_eq!(events, vec![outcome(location("panics")), Event::ScreenshotsFolderProbed { location: location("present"), outcome: FavoriteProbeOutcome::Available }, Event::ScreenshotsFolderProbed { location: location("absent"), outcome: FavoriteProbeOutcome::Unavailable }]);
+    }
+
+    #[test]
+    fn favorite_target_probes_share_the_probe_lane() {
+        let probe: LocationProbe = Box::new(|location| if *location == self::location("present") { FavoriteProbeOutcome::Available } else { FavoriteProbeOutcome::Unavailable });
+        let (mut runner, wakes) = runtime_with_probe(source_factory(|_, _| None), probe, 1);
+        assert_eq!(runner.dispatch(WorkRequest::ProbeFavoriteTarget { item_id: 7, target: location("missing") }), None);
+        assert_eq!(runner.dispatch(WorkRequest::ProbeFavoriteTarget { item_id: 8, target: location("present") }), None);
+        let mut events = Vec::new();
+        while events.len() < 2 {
+            events.extend(wait(&mut runner, &wakes));
+        }
+        assert_eq!(events, vec![Event::FavoriteTargetProbed { item_id: 7, target: location("missing"), outcome: FavoriteProbeOutcome::Unavailable }, Event::FavoriteTargetProbed { item_id: 8, target: location("present"), outcome: FavoriteProbeOutcome::Available }]);
+        runner.probes = mpsc::sync_channel(1).0;
+        assert_eq!(runner.dispatch(WorkRequest::ProbeFavoriteTarget { item_id: 9, target: location("any") }), Some(Event::FavoriteTargetProbed { item_id: 9, target: location("any"), outcome: FavoriteProbeOutcome::Failed }), "a stopped lane fails, which removes nothing");
     }
 
     #[test]

@@ -8,7 +8,7 @@ fn controller_uses_exact_row_identity() {
     let entry = Entry::new(EntryName::new("docs").unwrap(), EntryKind::Directory);
     let mut presenter = BrowserPresenter::new(BrowserSide::Left);
     presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::from(vec![entry.clone()]), changes: None, scroll_hint: None });
-    assert_eq!(InputController::new().command(BrowserSide::Left, UiEvent::ActivateRow { row: 0 }, presenter.view()), Some(Command::OpenEntry { browser: BrowserSide::Left, row: 0, name: entry.name().clone() }));
+    assert_eq!(InputController::new().command(BrowserSide::Left, UiEvent::ActivateRow { row: 0 }, presenter.view()), Some(Command::OpenEntry { browser: BrowserSide::Left, tab: TabId::new(0), row: 0, name: entry.name().clone() }));
 }
 
 #[test]
@@ -141,10 +141,12 @@ fn activation_and_clearing_map_to_their_commands() {
     let controller = InputController::new();
     let mut presenter = shown(&["a", "b"]);
     assert_eq!(controller.command(BrowserSide::Left, UiEvent::FocusBrowser, presenter.view()), None);
-    assert_eq!(controller.command(BrowserSide::Left, UiEvent::ClearSelection, presenter.view()), Some(Command::ClearSelection { browser: BrowserSide::Left }));
+    assert_eq!(controller.command(BrowserSide::Left, UiEvent::ClearSelection, presenter.view()), Some(Command::ClearSelection { browser: BrowserSide::Left, tab: TabId::new(0) }));
     assert_eq!(controller.command(BrowserSide::Left, UiEvent::ActivateSelection, presenter.view()), None);
-    presenter.apply(&Output::SelectionChanged { browser: BrowserSide::Left, tab: TabId::new(0), selection: Selection::default(), row: Some(1) });
-    assert_eq!(controller.command(BrowserSide::Left, UiEvent::ActivateSelection, presenter.view()), Some(Command::OpenEntry { browser: BrowserSide::Left, row: 1, name: EntryName::new("b").unwrap() }));
+    let mut selection = Selection::default();
+    selection.select(EntryName::new("b").unwrap());
+    presenter.apply(&Output::SelectionChanged { browser: BrowserSide::Left, tab: TabId::new(0), selection, row: Some(1) });
+    assert_eq!(controller.command(BrowserSide::Left, UiEvent::ActivateSelection, presenter.view()), Some(Command::OpenEntry { browser: BrowserSide::Left, tab: TabId::new(0), row: 1, name: EntryName::new("b").unwrap() }));
 }
 
 #[test]

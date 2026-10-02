@@ -1,4 +1,4 @@
-use crate::{FavoritesRecords, SettingsFailure};
+use crate::{FavoriteEdit, FavoriteRejection, FavoritesRecords, Notice, SettingsFailure};
 use dual_pane_domain::{BrowserSide, Entry, ListingError, Location, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
@@ -18,18 +18,77 @@ pub struct RowChange {
 /// folder, a first listing, or a gateway change that does not fit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
-    ActiveBrowserChanged { browser: BrowserSide },
-    ActiveTabChanged { browser: BrowserSide, tab: TabId },
-    TabsChanged { browser: BrowserSide, active_tab: TabId },
-    TabViewChanged { browser: BrowserSide, tab: TabId, location: Option<Location>, entries: Arc<[Entry]>, selection: Selection, row: Option<usize>, scroll_hint: Option<ScrollAnchor>, loading: bool, error: Option<ListingError> },
-    LoadingStarted { browser: BrowserSide, tab: TabId, location: Location },
-    FolderItemsLoaded { browser: BrowserSide, tab: TabId, location: Location, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>>, scroll_hint: Option<ScrollAnchor> },
-    SelectionChanged { browser: BrowserSide, tab: TabId, selection: Selection, row: Option<usize> },
-    FolderItemsFailed { browser: BrowserSide, tab: TabId, error: ListingError },
-    FolderItemsCancelled { browser: BrowserSide, tab: TabId },
-    FavoritesChanged { favorites: FavoritesRecords },
-    SettingsSaveFailed { revision: u64 },
-    SettingsLoadFailed { failure: SettingsFailure },
+    ActiveBrowserChanged {
+        browser: BrowserSide,
+    },
+    ActiveTabChanged {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    TabsChanged {
+        browser: BrowserSide,
+        active_tab: TabId,
+    },
+    TabViewChanged {
+        browser: BrowserSide,
+        tab: TabId,
+        location: Option<Location>,
+        entries: Arc<[Entry]>,
+        selection: Selection,
+        row: Option<usize>,
+        scroll_hint: Option<ScrollAnchor>,
+        loading: bool,
+        error: Option<ListingError>,
+    },
+    LoadingStarted {
+        browser: BrowserSide,
+        tab: TabId,
+        location: Location,
+    },
+    FolderItemsLoaded {
+        browser: BrowserSide,
+        tab: TabId,
+        location: Location,
+        entries: Arc<[Entry]>,
+        changes: Option<Vec<RowChange>>,
+        scroll_hint: Option<ScrollAnchor>,
+    },
+    SelectionChanged {
+        browser: BrowserSide,
+        tab: TabId,
+        selection: Selection,
+        row: Option<usize>,
+    },
+    FolderItemsFailed {
+        browser: BrowserSide,
+        tab: TabId,
+        error: ListingError,
+    },
+    FolderItemsCancelled {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    FavoritesChanged {
+        favorites: FavoritesRecords,
+    },
+    /// A Favorites edit left the hierarchy unchanged, and why.
+    FavoriteEditRejected {
+        edit: FavoriteEdit,
+        reason: FavoriteRejection,
+    },
+    SettingsSaveFailed {
+        revision: u64,
+        failure: SettingsFailure,
+    },
+    SettingsLoadFailed {
+        failure: SettingsFailure,
+    },
+    /// A message for Notices. `open` asks to show Notices because the person
+    /// can act on it.
+    NoticeAdded {
+        notice: Notice,
+        open: bool,
+    },
 }
 
 /// The smallest single contiguous change that turns `old` into `new`: rows

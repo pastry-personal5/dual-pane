@@ -42,7 +42,7 @@ Automatic refresh, session persistence, and file operations are committed produc
 
 ## Planned Phase 3 GUI decisions
 
-Implementation status: Planned. These owner decisions describe future behavior; the table above continues to describe version 2.0.0. P3-M5 through P3-M10 deliver the corresponding behavior.
+Implementation status: Partly delivered. The table above still describes the released version 2.0.0. The P3-M6 development build implements these sections: Folder Items fields and display, Sort controls and remembered choice, Narrow Browser behavior, Sidebar Favorites, Browser Tabs Strip and navigation, the selection gestures in Selection and file commands, the inline-editor shortcut rule, and the storage and Favorite-probe parts of Notices. Its native behavior awaits verification; see the [P3-M6 checklist](phase-3/milestone-06-overview.md#completion-checklist). File commands, Operation Panels, restoration messages, and automatic refresh follow in P3-M7 through P3-M10. The owner reviewed the P3-M6 interpretations in the [changelog](phase-3/changelog.md#2026-10-02--p3-m6-interpretation-review).
 
 ### Folder Items fields and display
 
@@ -51,7 +51,7 @@ Implementation status: Planned. These owner decisions describe future behavior; 
 - The Relative Date Column shows `now` for a timestamp less than one minute old or in the future, and `N min` for less than one hour; larger values use the units above.
 - The Exact Date Column uses a local timestamp such as `2026-09-30 20:21`. Size uses decimal units such as `112.5 KB`, with one decimal place from KB upward and whole bytes below that, such as `512 B`. Unavailable values show `—`.
 - Type shows `[DIR]` for a folder and `[LNK]` for any symbolic link, whatever its target. Other Items show the lowercase text after the last `.` in their name, so `.gitignore` shows `gitignore` and `a.tar.gz` shows `gz`; a name without a `.` shows a blank Type. Type sort compares this displayed text.
-- Folders show a blank Size cell, not `—`, and are excluded from Folder Pane size totals. The Folder Pane summary shows the selected total when Items are selected, otherwise the folder total; both are non-recursive sums over the included non-folder Items and show `—` when any included size is unknown.
+- Folders show a blank Size cell, not `—`, and are excluded from Folder Pane size totals. Links to folders count as folders. Folder Pane Toolbar Row #2 shows the Item count and, when Items are selected, `N selected` in a muted dark blue at the left. At the right it shows `selected size / folder size` when Items are selected, otherwise the folder size; both are non-recursive sums over the included non-folder Items and show `—` when any included size is unknown.
 
 ### Sort controls and remembered choice
 

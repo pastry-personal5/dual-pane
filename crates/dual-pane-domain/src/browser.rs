@@ -1,8 +1,9 @@
 use crate::TabId;
 
-/// Ordered, nonempty tab identity state for one Browser. Listing and history
-/// data live in the application layer; this value protects structural tab
-/// invariants independently of the UI.
+/// Ordered, nonempty tab identity state for one Browser, holding at most
+/// [`BrowserTabs::LIMIT`] tabs. Listing and history data live in the
+/// application layer; this value protects structural tab invariants
+/// independently of the UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserTabs {
     tabs: Vec<TabId>,
@@ -10,6 +11,9 @@ pub struct BrowserTabs {
 }
 
 impl BrowserTabs {
+    /// The most tabs one Browser holds.
+    pub const LIMIT: usize = 8;
+
     pub fn new(initial: TabId) -> Self {
         Self { tabs: vec![initial], active: initial }
     }
@@ -27,9 +31,19 @@ impl BrowserTabs {
             false
         }
     }
-    pub fn insert_active(&mut self, tab: TabId) {
+    /// Whether another tab can be added.
+    pub fn can_insert(&self) -> bool {
+        self.tabs.len() < Self::LIMIT
+    }
+    /// Appends `tab` and activates it, or refuses at the tab limit or when
+    /// `tab` is already present.
+    pub fn insert_active(&mut self, tab: TabId) -> bool {
+        if !self.can_insert() || self.tabs.contains(&tab) {
+            return false;
+        }
         self.tabs.push(tab);
         self.active = tab;
+        true
     }
     /// Moves `tab` to `position`, clamped to the end, and reports whether the
     /// order changed.
@@ -90,6 +104,20 @@ mod tests {
         assert!(!tabs.reorder(TabId::new(9), 0));
         assert!(tabs.reorder(TabId::new(1), 7));
         assert_eq!(tabs.tabs(), &[TabId::new(2), TabId::new(1)]);
+    }
+
+    #[test]
+    fn refuses_a_tab_past_the_limit() {
+        let mut tabs = BrowserTabs::new(TabId::new(0));
+        for id in 1..BrowserTabs::LIMIT as u64 {
+            assert!(tabs.insert_active(TabId::new(id)));
+        }
+        assert!(!tabs.can_insert());
+        assert!(!tabs.insert_active(TabId::new(99)));
+        assert_eq!(tabs.tabs().len(), BrowserTabs::LIMIT);
+        assert_eq!(tabs.active(), TabId::new(BrowserTabs::LIMIT as u64 - 1));
+        assert_eq!(tabs.close(TabId::new(3)), Some(TabId::new(BrowserTabs::LIMIT as u64 - 1)));
+        assert!(tabs.insert_active(TabId::new(99)));
     }
 
     #[test]

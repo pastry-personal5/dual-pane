@@ -11,6 +11,7 @@ license = "Apache-2.0"
 dual-pane-adapters = { path = "crates/dual-pane-adapters" }
 dual-pane-application = { path = "crates/dual-pane-application" }
 dual-pane-domain = { path = "crates/dual-pane-domain" }
+jiff = { version = "=0.2.37", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 rusqlite = { version = "=0.38.0", default-features = false }
 tempfile = "=3.27.0"

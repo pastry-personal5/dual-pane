@@ -9,11 +9,16 @@ use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, Tab
 /// tab's shown Folder Items when the read reloads that same location; the
 /// gateway reports its row change against them in `FolderItemsLoaded`.
 /// `ProbeScreenshotsFolder` checks whether the optional fresh-profile
-/// Screenshots folder exists before Favorites are seeded.
+/// Screenshots folder exists before Favorites are seeded, and
+/// `ProbeFavoriteTarget` checks a Favorite Item's target at launch.
+/// `LoadSettings` and `ResetSettings` go to the settings service.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRequest {
     ReadDirectory { browser: BrowserSide, tab: TabId, token: RequestToken, location: Location, sort: SortSpec, previous: Option<Arc<[Entry]>> },
     Cancel { browser: BrowserSide, tab: TabId, token: RequestToken },
     SaveSettings { revision: u64, snapshot: SettingsSnapshot },
     ProbeScreenshotsFolder { location: Location },
+    ProbeFavoriteTarget { item_id: i64, target: Location },
+    LoadSettings,
+    ResetSettings,
 }

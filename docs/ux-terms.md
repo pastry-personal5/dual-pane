@@ -81,22 +81,22 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 |---|---|---|
 | Focus Other Browser | `FocusOtherBrowser` | Catalogued; current command |
 | Navigate Parent | `NavigateParent` | Catalogued; current command |
-| Close Window | `CloseWindow` | Catalogued; current command |
+| Close Window | `CloseWindow` | Catalogued; current command, no default shortcut |
 | Quit Application | `QuitApplication` | Catalogued; current command |
 | New Folder | `NewFolder` | Catalogued; planned command |
-| Sort by Name Ascending | `SortByNameAscending` | Catalogued; planned command |
-| Sort by Name Descending | `SortByNameDescending` | Catalogued; planned command |
-| Sort by Type Ascending | `SortByTypeAscending` | Catalogued; planned command |
-| Sort by Type Descending | `SortByTypeDescending` | Catalogued; planned command |
-| Sort by Date Ascending | `SortByDateAscending` | Catalogued; planned command |
-| Sort by Date Descending | `SortByDateDescending` | Catalogued; planned command |
-| Sort by Size Ascending | `SortBySizeAscending` | Catalogued; planned command |
-| Sort by Size Descending | `SortBySizeDescending` | Catalogued; planned command |
-| New Tab | `NewTab` | Planned ID |
-| Close Tab | `CloseTab` | Planned ID |
-| Back | `NavigateBack` | Planned ID |
-| Forward | `NavigateForward` | Planned ID |
-| Refresh Folder | `RefreshFolder` | Planned ID |
+| Sort by Name Ascending | `SortByNameAscending` | Catalogued; current command |
+| Sort by Name Descending | `SortByNameDescending` | Catalogued; current command |
+| Sort by Type Ascending | `SortByTypeAscending` | Catalogued; current command |
+| Sort by Type Descending | `SortByTypeDescending` | Catalogued; current command |
+| Sort by Date Ascending | `SortByDateAscending` | Catalogued; current command |
+| Sort by Date Descending | `SortByDateDescending` | Catalogued; current command |
+| Sort by Size Ascending | `SortBySizeAscending` | Catalogued; current command |
+| Sort by Size Descending | `SortBySizeDescending` | Catalogued; current command |
+| New Tab | `NewTab` | Catalogued; current command |
+| Close Tab | `CloseTab` | Catalogued; current command |
+| Back | `NavigateBack` | Catalogued; current command |
+| Forward | `NavigateForward` | Catalogued; current command |
+| Refresh Folder | `RefreshFolder` | Catalogued; current command |
 | Copy to Other Browser | `CopyToOtherBrowser` | Planned ID |
 | Move to Other Browser | `MoveToOtherBrowser` | Planned ID |
 | Rename Item | `RenameItem` | Planned ID |
@@ -105,4 +105,4 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 
 ## Deferred components
 
-Browser Tabs Strip is currently rendered as an inert current-folder label only. Favorite Groups, Favorite Items, the Item Icon Column, the Relative Date Column, and the Exact Date Column are not rendered as interactive components by the current desktop UI. Their planned GUI behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions). The Sidebar currently displays static group labels; its navigation and editing behavior is deferred to a later Phase 3 milestone.
+Since P3-M6, the development build renders the Browser Tabs Strip, Browser Tabs, Sidebar Favorites, the six Folder Items columns, the eight sort buttons, the Notices Button, and Notices. Their accessible names use the terms above; each sort button's accessible name and tooltip read like "Sort items by type (A-Z)". The Folder Items Context Menu, Rename Item Editor, New Folder Name Editor, Operation Panel components, Permanent Delete Confirmation Window, and Notices Startup Checkbox are not rendered yet; their planned behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions).

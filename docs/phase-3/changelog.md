@@ -4,6 +4,30 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — P3-M6 interpretation review
+
+- The owner reviewed the implementation interpretations. The [open item](open-items.md) is removed.
+- Changed:
+  - **Folder Pane summary:** Row #2 shows the Item count at the left, followed by `N selected` in a muted dark blue when Items are selected. The right-aligned size shows `selected / total`, such as `1.2 MB / 4.5 MB`, or only the total with no selection. A folder with no non-folder Items totals `0 B`.
+  - **Links to folders:** they count as folders. Size is blank and they are excluded from totals; Type stays `[LNK]`.
+  - **Sort buttons:** tooltip and accessible name read `Sort items by type (A-Z)` and `(Z-A)`. The agent chose `name (A-Z)`, `date (oldest first)`, `date (newest first)`, and `size (smallest first)` for the other fields, pending owner confirmation.
+  - **Type column:** its minimum width drops from 52 to 40 pixels.
+- Confirmed unchanged: relative date units, Notice wording and behavior, keyboard traversal, and focus on activation.
+
+## 2026-10-02 — P3-M6 implementation
+
+- The agent implemented all four [P3-M6](milestone-06-overview.md) steps, and the automated gate passes. The milestone stays Active. The launch-probe checklist item is checked. The other items wait for the owner's native-verification decision; the [acceptance evidence](milestone-06-overview.md#acceptance-evidence) lists what automated tests cover and what they cannot.
+- Design changes from the plan text:
+  - **Tab-addressed gestures:** every gesture on a Browser's visible content (selection, open, Back, Forward, Up, Refresh, and scroll hint) names the tab it observed, and the application ignores it once that tab is no longer active.
+  - **`SetSort`:** it names the Browser, tab, and confirmed location, and is ignored unless that tab still shows that location. In P3-M5, sorting a pending target location was also possible.
+  - **Settings events:** `SettingsSaveFailed` carries the failure category. `ResetSettings` and `LoadSettings` are work requests that the session routes to the settings worker. A reset is accepted only after the current load has settled.
+  - **Projections:** the application exposes `BrowserChrome` and `WorkspaceChrome`, typed `FavoriteEditRejected` outputs, and application-owned Notices. Scroll reports update the tab's scroll hint without activating its Browser.
+  - **Bridge:** the desktop gains a second CXX-Qt object, `WorkspaceBridge`, for the shared session, Favorites, Notices, and shortcuts. The Folder Items model became a six-column table model.
+- Dependencies and native evidence:
+  - `jiff` 0.2.37 was added to `dual-pane-adapters` as approved, with `std`, `tz-system`, and `tzdb-zoneinfo` only. It brings in `jiff-core` 0.1.1, which has the same Unlicense OR MIT license.
+  - A local Qt 6.11.2 spike confirmed that the Cocoa platform supports pixmaps off the GUI thread. Native icons therefore render on a worker thread through `QAbstractFileIconProvider` without Objective-C++ or a build change.
+- The [interpretation review](#2026-10-02--p3-m6-interpretation-review) settled the implementation interpretations.
+
 ## 2026-10-02 — P3-M6 third plan review
 
 - The owner settled the open cursor question. Movement keys start from the cursor even when no Item is selected, so after a Command-click deselects the last selected Item, Down selects the next row. Return and Right activate only when exactly one Item is selected. [Selection rules](../ux-gui.md#selection-and-file-commands) record both.

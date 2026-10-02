@@ -6,6 +6,7 @@ fn main() {
     unsafe {
         CxxQtBuilder::new()
             .file("src/folder_items_list_model.rs")
+            .file("src/workspace_bridge.rs")
             .cpp_file("cpp/src/desktop_window.cpp")
             .qt_module("Widgets")
             .cc_builder(|builder| {

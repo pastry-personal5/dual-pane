@@ -113,3 +113,28 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn type_text_names_folders_links_and_lowercase_extensions() {
+    let text = |name: &str, kind| dual_pane_domain::entry_type_text(&entry(name.as_bytes(), kind));
+    assert_eq!(text("photos", EntryKind::Directory), "[DIR]");
+    assert_eq!(text("photos.d", EntryKind::Directory), "[DIR]");
+    assert_eq!(text("to-folder", EntryKind::Symlink { points_to_directory: true }), "[LNK]");
+    assert_eq!(text("to-file.txt", EntryKind::Symlink { points_to_directory: false }), "[LNK]");
+    assert_eq!(text(".gitignore", EntryKind::File), "gitignore");
+    assert_eq!(text("a.tar.GZ", EntryKind::File), "gz");
+    assert_eq!(text("Makefile", EntryKind::File), "");
+    assert_eq!(text("trailing.", EntryKind::File), "");
+    assert_eq!(text("socket.sock", EntryKind::Other), "sock");
+}
+
+#[test]
+fn type_sort_compares_the_displayed_type_text_then_name() {
+    let names = |spec| {
+        let mut entries = vec![file("b.txt"), file("a.zip"), file("c"), file("d.TXT"), entry(b"link", EntryKind::Symlink { points_to_directory: false }), entry(b"dir", EntryKind::Directory)];
+        sort_entries(&mut entries, spec);
+        entries.iter().map(|entry| entry.name().to_text_lossy().into_owned()).collect::<Vec<_>>()
+    };
+    assert_eq!(names(SortSpec::new(SortField::Type, SortDirection::Ascending)), ["dir", "c", "link", "b.txt", "d.TXT", "a.zip"]);
+    assert_eq!(names(SortSpec::new(SortField::Type, SortDirection::Descending)), ["dir", "a.zip", "b.txt", "d.TXT", "link", "c"]);
+}

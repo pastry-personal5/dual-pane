@@ -11,7 +11,7 @@ use dual_pane_application::{ActionBinding, ActionId, FavoriteGroupRecord, Favori
 use dual_pane_domain::{EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(50);
 type BindingParameters = (&'static str, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>);
 
@@ -161,6 +161,13 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
         for binding in dual_pane_application::default_bindings().iter().filter(|binding| binding.shortcut.is_some()) {
             tx.execute("UPDATE action_binding SET command = ?2, shift = ?3, option = ?4, control = ?5, key = ?6 WHERE action = ?1 AND key IS NULL", binding_params(binding))?;
         }
+    }
+    if version < 3 {
+        // Command+W moves from CloseWindow to the new CloseTab, which preload
+        // adds after this migration. A CloseWindow still on that default
+        // becomes unbound so CloseTab can take it; any other CloseWindow
+        // choice is kept, and the ID keeps its close-window meaning.
+        tx.execute("UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'CloseWindow' AND IFNULL(command, 0) = 1 AND IFNULL(shift, 0) = 0 AND IFNULL(option, 0) = 0 AND IFNULL(control, 0) = 0 AND key = 'W'", [])?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
@@ -604,21 +611,52 @@ mod tests {
         assert!(results.iter().any(|result| matches!(result, SettingsResult::Saved { revision: 9 })));
         assert_eq!(stored_sorts(&path), snapshot.folder_sorts);
     }
-    /// A version 1 database whose bindings are rewritten by `sql`.
-    fn version_one_database(sql: &str) -> (TempDir, PathBuf) {
+    /// The action catalogue before schema version 3 added the tab actions.
+    const LEGACY_ACTIONS: [&str; 13] = ["FocusOtherBrowser", "NavigateParent", "CloseWindow", "QuitApplication", "NewFolder", "SortByNameAscending", "SortByNameDescending", "SortByTypeAscending", "SortByTypeDescending", "SortByDateAscending", "SortByDateDescending", "SortBySizeAscending", "SortBySizeDescending"];
+
+    /// A database as schema `version` (1 or 2) wrote it, built by hand so the
+    /// current migrations and catalogue cannot shape it, then changed by `sql`.
+    /// Version 1 stored NavigateParent as a plain `L`; both stored CloseWindow
+    /// as Command+W and had no tab actions.
+    fn legacy_database(version: i64, sql: &str) -> (TempDir, PathBuf) {
         let (directory, path) = temp_database();
-        drop(SettingsDatabase::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TABLE action_binding(action TEXT PRIMARY KEY NOT NULL, command INTEGER, shift INTEGER, option INTEGER, control INTEGER, key TEXT); CREATE TABLE folder_sort(target BLOB PRIMARY KEY NOT NULL, field INTEGER NOT NULL, direction INTEGER NOT NULL, recent INTEGER NOT NULL); CREATE INDEX folder_sort_recent ON folder_sort(recent); CREATE TABLE setting_marker(key TEXT PRIMARY KEY NOT NULL, value INTEGER NOT NULL); CREATE TABLE favorite_group(id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL); CREATE UNIQUE INDEX favorite_group_position ON favorite_group(position); CREATE TABLE favorite_item(id INTEGER PRIMARY KEY NOT NULL, group_id INTEGER NOT NULL REFERENCES favorite_group(id) ON DELETE RESTRICT, name TEXT NOT NULL, target BLOB NOT NULL, position INTEGER NOT NULL); CREATE INDEX favorite_item_group ON favorite_item(group_id, position);").unwrap();
+        for action in LEGACY_ACTIONS {
+            let (command, shift, option, key) = match action {
+                "FocusOtherBrowser" => (Some(0), Some(0), Some(1), Some("F")),
+                "NavigateParent" if version == 1 => (Some(0), Some(0), Some(0), Some("L")),
+                "NavigateParent" => (Some(1), Some(0), Some(0), Some("Up")),
+                "CloseWindow" => (Some(1), Some(0), Some(0), Some("W")),
+                "QuitApplication" => (Some(1), Some(0), Some(0), Some("Q")),
+                "NewFolder" => (Some(1), Some(1), Some(0), Some("N")),
+                _ => (None, None, None, None),
+            };
+            connection.execute("INSERT INTO action_binding(action, command, shift, option, control, key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![action, command, shift, option, command.map(|_| 0), key]).unwrap();
+        }
         connection.execute_batch(sql).unwrap();
-        connection.pragma_update(None, "user_version", 1).unwrap();
+        connection.pragma_update(None, "user_version", version).unwrap();
         (directory, path)
     }
     fn loaded_binding(path: &Path, action: ActionId) -> Option<Option<Shortcut>> {
         SettingsDatabase::open(path).unwrap().load().unwrap().bindings.into_iter().find(|binding| binding.action == action).map(|binding| binding.shortcut)
     }
+    /// The bindings the application uses after loading the database at `path`.
+    fn effective_bindings(path: &Path) -> SettingsState {
+        let mut state = SettingsState::new();
+        state.apply(SettingsDatabase::open(path).unwrap().load().unwrap());
+        state
+    }
+    fn assert_no_collisions(state: &SettingsState) {
+        let bound = state.bindings().into_iter().filter_map(|binding| binding.shortcut).collect::<Vec<_>>();
+        assert_eq!(bound.iter().filter(|shortcut| bound.iter().filter(|other| other == shortcut).count() > 1).count(), 0, "no shortcut is shared: {bound:?}");
+    }
+    fn command_w() -> Option<Shortcut> {
+        Some(Shortcut::new(true, false, false, false, Key::Character('W')))
+    }
     #[test]
     fn version_one_bindings_migrate_to_named_keys_and_explicit_defaults() {
-        let (_directory, path) = version_one_database("UPDATE action_binding SET command = 0, shift = 0, option = 0, control = 0, key = 'L' WHERE action = 'NavigateParent'; UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'NewFolder';");
+        let (_directory, path) = legacy_database(1, "UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'NewFolder';");
         assert_eq!(loaded_binding(&path, ActionId::NavigateParent), Some(dual_pane_application::default_shortcut(ActionId::NavigateParent)));
         assert_eq!(loaded_binding(&path, ActionId::NewFolder), Some(dual_pane_application::default_shortcut(ActionId::NewFolder)));
         assert_eq!(loaded_binding(&path, ActionId::SortByNameAscending), Some(None));
@@ -627,8 +665,52 @@ mod tests {
     }
     #[test]
     fn version_one_migration_keeps_a_customized_navigate_parent() {
-        let (_directory, path) = version_one_database("UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'P' WHERE action = 'NavigateParent';");
+        let (_directory, path) = legacy_database(1, "UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'P' WHERE action = 'NavigateParent';");
         assert_eq!(loaded_binding(&path, ActionId::NavigateParent), Some(Some(Shortcut::new(true, false, false, false, Key::Character('P')))));
+    }
+    #[test]
+    fn a_fresh_database_binds_command_w_to_close_tab() {
+        let (_directory, path) = temp_database();
+        let state = effective_bindings(&path);
+        assert_eq!(state.binding(ActionId::CloseTab), command_w());
+        assert_eq!(state.binding(ActionId::CloseWindow), None);
+        assert_eq!(state.binding(ActionId::NewTab), dual_pane_application::default_shortcut(ActionId::NewTab));
+        assert_no_collisions(&state);
+    }
+    #[test]
+    fn version_two_moves_command_w_from_close_window_to_close_tab() {
+        let (_directory, path) = legacy_database(2, "");
+        let state = effective_bindings(&path);
+        assert_eq!(state.binding(ActionId::CloseTab), command_w());
+        assert_eq!(state.binding(ActionId::CloseWindow), None);
+        assert_eq!(loaded_binding(&path, ActionId::CloseWindow), Some(None), "Close Window is stored as unbound, not deleted");
+        for action in [ActionId::NewTab, ActionId::NavigateBack, ActionId::NavigateForward, ActionId::RefreshFolder] {
+            assert_eq!(state.binding(action), dual_pane_application::default_shortcut(action), "{action:?}");
+        }
+        assert_no_collisions(&state);
+    }
+    #[test]
+    fn version_one_chains_through_version_two_to_three() {
+        let (_directory, path) = legacy_database(1, "UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'CloseWindow';");
+        let state = effective_bindings(&path);
+        assert_eq!(state.binding(ActionId::CloseTab), command_w(), "a version 1 default Close Window does not keep Command+W");
+        assert_eq!(state.binding(ActionId::CloseWindow), None);
+        assert_eq!(state.binding(ActionId::NavigateParent), dual_pane_application::default_shortcut(ActionId::NavigateParent));
+
+        let (_directory, path) = legacy_database(1, "");
+        let state = effective_bindings(&path);
+        assert_eq!((state.binding(ActionId::CloseTab), state.binding(ActionId::CloseWindow)), (command_w(), None));
+        assert_no_collisions(&state);
+    }
+    #[test]
+    fn customized_bindings_survive_the_close_tab_migration() {
+        let (_directory, path) = legacy_database(2, "UPDATE action_binding SET command = 1, shift = 1, option = 0, control = 0, key = 'W' WHERE action = 'CloseWindow'; UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'T' WHERE action = 'NewFolder';");
+        let state = effective_bindings(&path);
+        assert_eq!(state.binding(ActionId::CloseWindow), Some(Shortcut::new(true, true, false, false, Key::Character('W'))));
+        assert_eq!(state.binding(ActionId::CloseTab), command_w());
+        assert_eq!(state.binding(ActionId::NewFolder), Some(Shortcut::new(true, false, false, false, Key::Character('T'))), "an earlier catalogue action keeps its custom shortcut");
+        assert_eq!(state.binding(ActionId::NewTab), None, "the new action's default is taken, so it is left unbound");
+        assert_no_collisions(&state);
     }
     #[test]
     fn unknown_key_text_drops_only_that_binding() {

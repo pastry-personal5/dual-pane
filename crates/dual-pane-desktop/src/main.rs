@@ -5,6 +5,7 @@ mod location_probe;
 mod native_location;
 mod runtime;
 pub mod settings_storage;
+mod workspace_bridge;
 
 use std::env;
 use std::path::Path;
@@ -25,7 +26,7 @@ fn main() -> ExitCode {
     let settings_path = env::var_os("HOME").map(|home| settings_storage::application_support_database_path(Path::new(&home)));
     let location_probe: LocationProbe = Box::new(location_probe::probe_directory);
     let startup = BrowserStartup { location, home, settings_path, source_factory, location_probe };
-    let status = folder_items_list_model::ffi::run_desktop(Box::new(startup));
+    let status = workspace_bridge::ffi::run_desktop(Box::new(startup));
 
     u8::try_from(status).map_or(ExitCode::FAILURE, ExitCode::from)
 }

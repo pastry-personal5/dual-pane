@@ -9,39 +9,145 @@ pub enum Input {
     Event(Event),
 }
 
-/// UI-neutral workspace requests. Commands without a tab address the active
-/// tab, retaining the compatibility boundary used by the current shell.
+/// UI-neutral workspace requests. A gesture on a Browser's visible content
+/// names the tab it observed, so a delayed gesture is rejected after that tab
+/// stopped being active. `Navigate` and `OpenFavoriteItem` address the
+/// Browser's active tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    ActivateBrowser { browser: BrowserSide },
-    ActivateTab { browser: BrowserSide, tab: TabId },
-    NewTab { browser: BrowserSide },
-    CloseTab { browser: BrowserSide, tab: TabId },
-    ReorderTab { browser: BrowserSide, tab: TabId, position: usize },
-    Navigate { browser: BrowserSide, location: Location },
-    GoBack { browser: BrowserSide },
-    GoForward { browser: BrowserSide },
-    Refresh { browser: BrowserSide },
-    SetSort { location: Location, sort: SortSpec },
-    CreateFavoriteGroup { name: String },
-    RenameFavoriteGroup { id: i64, name: String },
-    ReorderFavoriteGroup { id: i64, position: usize },
-    DeleteFavoriteGroup { id: i64 },
-    CreateFavoriteItem { group_id: i64, name: String, target: Location },
-    RenameFavoriteItem { id: i64, name: String },
-    MoveFavoriteItem { id: i64, group_id: i64, position: usize },
-    DeleteFavoriteItem { id: i64 },
-    OpenFavoriteItem { browser: BrowserSide, id: i64 },
-    SelectEntry { browser: BrowserSide, row: usize, name: EntryName },
-    ToggleEntry { browser: BrowserSide, row: usize, name: EntryName },
-    SelectAll { browser: BrowserSide },
-    ClearSelection { browser: BrowserSide },
-    OpenEntry { browser: BrowserSide, row: usize, name: EntryName },
-    GoToParent { browser: BrowserSide },
-    UpdateScrollHint { browser: BrowserSide, scroll: Option<ScrollAnchor> },
-    SelectRange { browser: BrowserSide, row: usize, name: EntryName },
-    MoveSelection { browser: BrowserSide, row: usize, name: EntryName },
-    SecondarySelect { browser: BrowserSide, row: usize, name: EntryName },
+    ActivateBrowser {
+        browser: BrowserSide,
+    },
+    ActivateTab {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    NewTab {
+        browser: BrowserSide,
+    },
+    CloseTab {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    ReorderTab {
+        browser: BrowserSide,
+        tab: TabId,
+        position: usize,
+    },
+    Navigate {
+        browser: BrowserSide,
+        location: Location,
+    },
+    GoBack {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    GoForward {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    Refresh {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    /// Remembers `sort` for `location`, which must still be the confirmed
+    /// location of `tab`, and rereads every open tab showing it.
+    SetSort {
+        browser: BrowserSide,
+        tab: TabId,
+        location: Location,
+        sort: SortSpec,
+    },
+    CreateFavoriteGroup {
+        name: String,
+    },
+    RenameFavoriteGroup {
+        id: i64,
+        name: String,
+    },
+    ReorderFavoriteGroup {
+        id: i64,
+        position: usize,
+    },
+    DeleteFavoriteGroup {
+        id: i64,
+    },
+    CreateFavoriteItem {
+        group_id: i64,
+        name: String,
+        target: Location,
+    },
+    RenameFavoriteItem {
+        id: i64,
+        name: String,
+    },
+    MoveFavoriteItem {
+        id: i64,
+        group_id: i64,
+        position: usize,
+    },
+    DeleteFavoriteItem {
+        id: i64,
+    },
+    OpenFavoriteItem {
+        browser: BrowserSide,
+        id: i64,
+    },
+    SelectEntry {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
+    ToggleEntry {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
+    SelectAll {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    ClearSelection {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    OpenEntry {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
+    GoToParent {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    UpdateScrollHint {
+        browser: BrowserSide,
+        tab: TabId,
+        scroll: Option<ScrollAnchor>,
+    },
+    SelectRange {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
+    MoveSelection {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
+    SecondarySelect {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
+    /// Replaces stored settings after the person explicitly confirmed it.
+    ResetSettings,
 }
 
 /// Externally observed facts, usually the results of work requests.
@@ -50,8 +156,10 @@ pub enum Command {
 /// Items into `entries`, or is `None` when the request carried none.
 /// `ScreenshotsFolderProbed` answers `WorkRequest::ProbeScreenshotsFolder`;
 /// only `Available` adds Screenshots to the seeded Favorites.
+/// `FavoriteTargetProbed` answers `WorkRequest::ProbeFavoriteTarget`.
 /// `LocationInvalidated` reports that a location's contents may have changed;
-/// every tab showing or loading it rereads it.
+/// every tab showing or loading it rereads it. `SettingsReset` reports where
+/// the replaced database was preserved, when there was one to preserve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     LocationInvalidated { location: Location },
@@ -61,9 +169,11 @@ pub enum Event {
     FavoriteTargetProbed { item_id: i64, target: Location, outcome: FavoriteProbeOutcome },
     ScreenshotsFolderProbed { location: Location, outcome: FavoriteProbeOutcome },
     SettingsSaved { revision: u64 },
-    SettingsSaveFailed { revision: u64 },
+    SettingsSaveFailed { revision: u64, failure: SettingsFailure },
     SettingsLoaded { snapshot: SettingsSnapshot },
     SettingsLoadFailed { failure: SettingsFailure },
+    SettingsReset { backup: Option<Location> },
+    SettingsResetFailed { failure: SettingsFailure },
 }
 impl From<Command> for Input {
     fn from(value: Command) -> Self {

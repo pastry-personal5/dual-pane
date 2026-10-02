@@ -22,10 +22,17 @@ pub enum ActionId {
     SortByDateDescending,
     SortBySizeAscending,
     SortBySizeDescending,
+    NewTab,
+    CloseTab,
+    NavigateBack,
+    NavigateForward,
+    RefreshFolder,
 }
 
 impl ActionId {
-    pub const ALL: [Self; 13] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending];
+    /// Every catalogued action. Later IDs are appended, so a shortcut held by
+    /// an earlier action keeps it when bindings are validated in this order.
+    pub const ALL: [Self; 18] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -42,6 +49,11 @@ impl ActionId {
             Self::SortByDateDescending => "SortByDateDescending",
             Self::SortBySizeAscending => "SortBySizeAscending",
             Self::SortBySizeDescending => "SortBySizeDescending",
+            Self::NewTab => "NewTab",
+            Self::CloseTab => "CloseTab",
+            Self::NavigateBack => "NavigateBack",
+            Self::NavigateForward => "NavigateForward",
+            Self::RefreshFolder => "RefreshFolder",
         }
     }
 
@@ -123,10 +135,16 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
     match action {
         ActionId::FocusOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('F'))),
         ActionId::NavigateParent => Some(Shortcut::new(true, false, false, false, Key::Up)),
-        ActionId::CloseWindow => Some(Shortcut::new(true, false, false, false, Key::Character('W'))),
         ActionId::QuitApplication => Some(Shortcut::new(true, false, false, false, Key::Character('Q'))),
         ActionId::NewFolder => Some(Shortcut::new(true, true, false, false, Key::Character('N'))),
-        ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
+        ActionId::NewTab => Some(Shortcut::new(true, false, false, false, Key::Character('T'))),
+        ActionId::CloseTab => Some(Shortcut::new(true, false, false, false, Key::Character('W'))),
+        ActionId::NavigateBack => Some(Shortcut::new(false, false, true, false, Key::Left)),
+        ActionId::NavigateForward => Some(Shortcut::new(false, false, true, false, Key::Right)),
+        ActionId::RefreshFolder => Some(Shortcut::new(true, false, false, false, Key::Character('R'))),
+        // Command+W closes a tab; Close Window keeps its meaning but has no
+        // default shortcut.
+        ActionId::CloseWindow | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
     }
 }
 
@@ -299,6 +317,10 @@ impl SettingsState {
         }
         self.folder_sorts.get(location).copied().unwrap_or_default()
     }
+    /// The remembered sort for `location` without counting it as a use.
+    pub fn peek_sort(&self, location: &Location) -> SortSpec {
+        self.folder_sorts.get(location).copied().unwrap_or_default()
+    }
     pub fn set_sort(&mut self, location: Location, spec: SortSpec) {
         self.folder_sorts.insert(location.clone(), spec);
         self.touch(&location);
@@ -313,6 +335,10 @@ impl SettingsState {
     /// unbound; an action with no recorded choice uses its default.
     pub fn binding(&self, action: ActionId) -> Option<Shortcut> {
         self.bindings.get(&action).copied().unwrap_or_else(|| default_shortcut(action))
+    }
+    /// The effective shortcut of every catalogued action, in catalogue order.
+    pub fn bindings(&self) -> Vec<ActionBinding> {
+        ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect()
     }
     pub fn update_binding(&mut self, binding: ActionBinding) -> bool {
         let mut all = self.snapshot().bindings;
@@ -391,7 +417,7 @@ mod tests {
     #[test]
     fn invalid_shortcuts_fall_back_and_conflicts_are_rejected() {
         let mut state = SettingsState::new();
-        assert!(!state.update_binding(ActionBinding { action: ActionId::NewFolder, shortcut: default_shortcut(ActionId::CloseWindow) }));
+        assert!(!state.update_binding(ActionBinding { action: ActionId::NewFolder, shortcut: default_shortcut(ActionId::CloseTab) }));
         assert_eq!(state.binding(ActionId::NewFolder), default_shortcut(ActionId::NewFolder));
     }
     #[test]
@@ -422,6 +448,18 @@ mod tests {
         assert!(!Key::Character('n').is_valid());
     }
     #[test]
+    fn delivered_actions_have_their_documented_defaults_without_collisions() {
+        let shortcut = |command, option, key| Some(Shortcut::new(command, false, option, false, key));
+        assert_eq!(default_shortcut(ActionId::NewTab), shortcut(true, false, Key::Character('T')));
+        assert_eq!(default_shortcut(ActionId::CloseTab), shortcut(true, false, Key::Character('W')));
+        assert_eq!(default_shortcut(ActionId::NavigateBack), shortcut(false, true, Key::Left));
+        assert_eq!(default_shortcut(ActionId::NavigateForward), shortcut(false, true, Key::Right));
+        assert_eq!(default_shortcut(ActionId::RefreshFolder), shortcut(true, false, Key::Character('R')));
+        assert_eq!(default_shortcut(ActionId::CloseWindow), None);
+        assert_eq!(validate_bindings(&default_bindings()).len(), ActionId::ALL.len());
+        assert!(ActionId::ALL.iter().all(|action| ActionId::parse(action.as_str()) == Some(*action)));
+    }
+    #[test]
     fn navigate_parent_defaults_to_command_up() {
         assert_eq!(default_shortcut(ActionId::NavigateParent), Some(Shortcut::new(true, false, false, false, Key::Up)));
     }
@@ -433,15 +471,15 @@ mod tests {
         let mut restored = SettingsState::new();
         restored.apply(state.snapshot());
         assert_eq!(restored.binding(ActionId::NewFolder), None);
-        assert_eq!(restored.binding(ActionId::CloseWindow), default_shortcut(ActionId::CloseWindow));
+        assert_eq!(restored.binding(ActionId::CloseTab), default_shortcut(ActionId::CloseTab));
     }
     #[test]
     fn a_missing_binding_uses_its_default_unless_that_default_is_taken() {
-        let taken = ActionBinding { action: ActionId::NewFolder, shortcut: default_shortcut(ActionId::CloseWindow) };
+        let taken = ActionBinding { action: ActionId::NewFolder, shortcut: default_shortcut(ActionId::CloseTab) };
         let mut state = SettingsState::new();
         state.apply(SettingsSnapshot { bindings: vec![taken], ..SettingsSnapshot::default() });
-        assert_eq!(state.binding(ActionId::NewFolder), default_shortcut(ActionId::CloseWindow));
-        assert_eq!(state.binding(ActionId::CloseWindow), None);
+        assert_eq!(state.binding(ActionId::NewFolder), default_shortcut(ActionId::CloseTab));
+        assert_eq!(state.binding(ActionId::CloseTab), None);
         assert_eq!(state.binding(ActionId::QuitApplication), default_shortcut(ActionId::QuitApplication));
     }
     #[test]

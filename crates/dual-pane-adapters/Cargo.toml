@@ -8,3 +8,4 @@ description = "Qt-free input controllers and presenters for Dual Pane"
 [dependencies]
 dual-pane-application.workspace = true
 dual-pane-domain.workspace = true
+jiff.workspace = true

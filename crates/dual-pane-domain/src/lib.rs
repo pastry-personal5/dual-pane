@@ -16,7 +16,7 @@ mod tab_history;
 
 pub use browser::BrowserTabs;
 pub use browser_side::BrowserSide;
-pub use entry::{Entry, EntryKind, EntryMetadata, ListingSortKey, listing_sort_key, sort_entries};
+pub use entry::{Entry, EntryKind, EntryMetadata, ListingSortKey, entry_type_text, listing_sort_key, sort_entries};
 pub use favorites::{FavoriteError, FavoriteGroup, FavoriteGroupId, FavoriteItem, FavoriteItemId, Favorites, valid_favorite_name};
 pub use listing_error::{ListingError, ListingErrorKind};
 pub use location::{EntryName, InvalidEntryName, Location};

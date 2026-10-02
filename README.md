@@ -12,6 +12,15 @@ The [product behavior](docs/product-behavior.md) defines included features, file
 
 Version 2.0.0 shows two independently browsable Browsers with compact, edge-to-edge layouts. `Command+W` closes its window and exits the app; `Command+Q` quits the app.
 
+The current development build adds Phase 3 workspace features that are not in a release yet:
+
+- Each Browser has up to eight tabs with Back, Forward, Up, and `Command+R` refresh.
+- `Command+T` opens a tab and `Command+W` closes the active tab; Close Window has no default shortcut.
+- Sidebar Favorites can be edited.
+- Folder Items show six columns, including native icons, with direct sort buttons and a summary row.
+- Multiple Items can be selected with Command-click, Shift-click, Shift-arrow, and `Command+A`.
+- A Notices window reports settings and Favorites problems and offers a confirmed Reset Settings.
+
 ## Technology and architecture
 
 The [architecture](docs/architecture.md) defines the selected technologies, Clean Architecture boundaries, threading, file-operation safety, and verification strategy.

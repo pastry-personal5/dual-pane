@@ -1,24 +1,85 @@
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{Output, RowChange};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, ScrollAnchor, Selection, TabId};
+use dual_pane_application::{BrowserChrome, Output, RowChange};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
+use jiff::tz::TimeZone;
+
+use crate::format::{UNAVAILABLE, format_exact, format_relative, format_size, item_count, location_text, total_size};
+
+/// The current time in Unix seconds, read when a listing arrives so relative
+/// dates change on reload rather than by timer.
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+/// The Folder Pane summary: the item count and selection count at the left,
+/// and the selected-over-total or folder size at the right.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Summary {
+    pub count: String,
+    pub selected: String,
+    pub size: String,
+}
 
 /// What a Browser shows. Rows are formatted when requested, so updating the view
 /// model costs the same for any directory size.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BrowserViewModel {
+    location: Option<Location>,
     location_text: String,
+    /// The root volume's name, or empty when it could not be read.
+    root_label: String,
     loading: bool,
     error: Option<String>,
     status_text: String,
     entries: Arc<[Entry]>,
     selection: Selection,
-    selected_row: Option<usize>,
+    cursor_row: Option<usize>,
+    selection_revision: u64,
+    summary: Summary,
     scroll_hint: Option<ScrollAnchor>,
     folder_items_revision: u64,
     /// How this revision's rows differ from the previous revision's, or
     /// `None` when every row must be treated as replaced.
     folder_items_delta: Option<Vec<RowChange>>,
+    /// When the shown listing arrived, in Unix seconds.
+    listed_at: i64,
+    time_zone: TimeZone,
+    active_tab: Option<TabId>,
+    tabs: Vec<TabViewModel>,
+    tabs_revision: u64,
+    toolbar: Toolbar,
+}
+
+impl Default for BrowserViewModel {
+    fn default() -> Self {
+        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, status_text: String::new(), entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
+    }
+}
+
+/// Command availability and the effective sort, from application state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Toolbar {
+    pub can_open_tab: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub can_go_up: bool,
+    pub can_refresh: bool,
+    /// The active tab's effective sort, or `None` before it shows a folder.
+    pub sort: Option<SortSpec>,
+}
+
+/// One Browser Tab in its strip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabViewModel {
+    pub id: TabId,
+    /// The folder name, or the volume name for the root.
+    pub label: String,
+    /// The full path for the tooltip and accessibility description.
+    pub path: String,
+    pub active: bool,
+    pub loading: bool,
+    pub failed: bool,
 }
 
 /// How a list showing one revision of a Browser's Folder Items moves to a
@@ -35,6 +96,37 @@ pub enum FolderItemsUpdate {
         inserted: Option<(usize, usize)>,
         removed: Option<(usize, usize)>,
     },
+}
+
+/// The Folder Items columns, from left to right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderItemsColumn {
+    Icon,
+    Name,
+    Type,
+    RelativeDate,
+    ExactDate,
+    Size,
+}
+
+impl FolderItemsColumn {
+    pub const ALL: [Self; 6] = [Self::Icon, Self::Name, Self::Type, Self::RelativeDate, Self::ExactDate, Self::Size];
+
+    /// The column's canonical name, for accessibility.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Icon => "Item Icon Column",
+            Self::Name => "Name",
+            Self::Type => "Type",
+            Self::RelativeDate => "Relative Date Column",
+            Self::ExactDate => "Exact Date Column",
+            Self::Size => "Size",
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
 }
 
 /// One displayed row.
@@ -60,10 +152,20 @@ impl BrowserViewModel {
         &self.location_text
     }
 
-    /// The shown folder's own name for titles and tab labels, or `/` for the
-    /// root and before the first listing.
+    /// The confirmed location the rows belong to.
+    pub fn location(&self) -> Option<&Location> {
+        self.location.as_ref()
+    }
+
+    /// The shown folder's own name for titles, tab labels, and new Favorite
+    /// aliases: the volume name for the root, or `/` when that is unknown and
+    /// before the first listing.
     pub fn folder_name(&self) -> &str {
-        self.location_text.rsplit('/').find(|part| !part.is_empty()).unwrap_or("/")
+        match &self.location {
+            Some(location) if !location.is_root() => self.location_text.rsplit('/').find(|part| !part.is_empty()).unwrap_or("/"),
+            _ if self.location.is_some() && !self.root_label.is_empty() => &self.root_label,
+            _ => "/",
+        }
     }
 
     pub fn is_loading(&self) -> bool {
@@ -80,6 +182,12 @@ impl BrowserViewModel {
         &self.status_text
     }
 
+    /// Folder Pane Toolbar Row #2: the count, any selection count, and the
+    /// non-recursive size total of the selection or else the whole folder.
+    pub fn summary(&self) -> &Summary {
+        &self.summary
+    }
+
     pub fn row_count(&self) -> usize {
         self.entries.len()
     }
@@ -88,12 +196,44 @@ impl BrowserViewModel {
         &self.selection
     }
 
-    pub fn selected_row(&self) -> Option<usize> {
-        self.selected_row
+    /// The cursor's row, which keyboard movement starts from even when it is
+    /// not selected.
+    pub fn cursor_row(&self) -> Option<usize> {
+        self.cursor_row
+    }
+
+    /// Changes whenever the selection or cursor changes.
+    pub fn selection_revision(&self) -> u64 {
+        self.selection_revision
+    }
+
+    /// The selected rows in ascending order.
+    pub fn selected_rows(&self) -> Vec<usize> {
+        match self.selection.entries() {
+            [] => Vec::new(),
+            [only] => self.entries.iter().position(|entry| entry.name() == only).into_iter().collect(),
+            selected => {
+                let selected = selected.iter().collect::<HashSet<_>>();
+                self.entries.iter().enumerate().filter(|(_, entry)| selected.contains(entry.name())).map(|(row, _)| row).collect()
+            }
+        }
+    }
+
+    /// The row of the only selected Item, or `None` unless exactly one Item
+    /// is selected.
+    pub fn single_selected_row(&self) -> Option<usize> {
+        let [only] = self.selection.entries() else { return None };
+        self.entries.iter().position(|entry| entry.name() == only)
     }
 
     pub fn scroll_hint(&self) -> Option<&ScrollAnchor> {
         self.scroll_hint.as_ref()
+    }
+
+    /// The row the scroll hint names, if it is shown.
+    pub fn scroll_hint_row(&self) -> Option<(usize, i32)> {
+        let hint = self.scroll_hint.as_ref()?;
+        self.entries.iter().position(|entry| entry.name() == hint.entry()).map(|row| (row, hint.offset()))
     }
 
     /// Changes only when this browser commits a replacement listing.
@@ -105,8 +245,49 @@ impl BrowserViewModel {
         self.entry(index).map(|entry| RowViewModel { name: entry.name().to_text_lossy().into_owned(), kind: row_kind(entry.kind()) })
     }
 
+    /// The display text of one cell. The Item Icon Column has none; its icon
+    /// is native and loaded by the view.
+    pub fn cell_text(&self, row: usize, column: FolderItemsColumn) -> Option<String> {
+        let entry = self.entry(row)?;
+        let modified = entry.metadata().modified_unix_seconds();
+        Some(match column {
+            FolderItemsColumn::Icon => String::new(),
+            FolderItemsColumn::Name => entry.name().to_text_lossy().into_owned(),
+            FolderItemsColumn::Type => entry_type_text(entry),
+            FolderItemsColumn::RelativeDate => modified.map_or_else(|| UNAVAILABLE.to_owned(), |modified| format_relative(modified, self.listed_at)),
+            FolderItemsColumn::ExactDate => modified.map_or_else(|| UNAVAILABLE.to_owned(), |modified| format_exact(modified, &self.time_zone)),
+            FolderItemsColumn::Size if entry.can_enter() => String::new(),
+            FolderItemsColumn::Size => entry.metadata().size_bytes().map_or_else(|| UNAVAILABLE.to_owned(), format_size),
+        })
+    }
+
+    /// The full path of the Item in `row`, for loading its native icon.
+    pub fn row_path(&self, row: usize) -> Option<String> {
+        let entry = self.entry(row)?;
+        let location = self.location.as_ref()?;
+        Some(location_text(&location.join(entry.name())))
+    }
+
     pub(crate) fn entry(&self, index: usize) -> Option<&Entry> {
         self.entries.get(index)
+    }
+
+    pub fn active_tab(&self) -> Option<TabId> {
+        self.active_tab
+    }
+
+    /// The Browser Tabs in display order.
+    pub fn tabs(&self) -> &[TabViewModel] {
+        &self.tabs
+    }
+
+    /// Changes whenever a tab's label, path, state, order, or activation does.
+    pub fn tabs_revision(&self) -> u64 {
+        self.tabs_revision
+    }
+
+    pub fn toolbar(&self) -> Toolbar {
+        self.toolbar
     }
 
     /// The smallest update that turns a list showing `shown` into one showing
@@ -129,14 +310,51 @@ impl BrowserViewModel {
             _ => FolderItemsUpdate::Reset,
         }
     }
+
+    fn refresh_summary(&mut self) {
+        if self.location.is_none() {
+            self.summary = Summary::default();
+            return;
+        }
+        let count = item_count(self.entries.len());
+        let total = total_size(self.entries.iter());
+        self.summary = match self.selection.entries().len() {
+            0 => Summary { count, selected: String::new(), size: total },
+            selected => {
+                let names = self.selection.entries().iter().collect::<HashSet<_>>();
+                Summary { count, selected: format!("{selected} selected"), size: format!("{} / {total}", total_size(self.entries.iter().filter(|entry| names.contains(entry.name())))) }
+            }
+        };
+    }
+
+    fn tab_label(&self, location: Option<&Location>) -> String {
+        match location {
+            Some(location) if location.is_root() => {
+                if self.root_label.is_empty() {
+                    "/".to_owned()
+                } else {
+                    self.root_label.clone()
+                }
+            }
+            Some(location) => location.components().last().map_or_else(|| "/".to_owned(), |name| name.to_text_lossy().into_owned()),
+            None => String::new(),
+        }
+    }
 }
 
-/// Keeps a [`BrowserViewModel`] up to date from application outputs.
-#[derive(Debug)]
+/// Keeps a [`BrowserViewModel`] up to date from application outputs and the
+/// Browser's projection.
 pub struct BrowserPresenter {
     browser: BrowserSide,
-    active_tab: Option<TabId>,
     view: BrowserViewModel,
+    clock: Clock,
+    chrome: Option<BrowserChrome>,
+}
+
+impl std::fmt::Debug for BrowserPresenter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserPresenter").field("browser", &self.browser).field("view", &self.view).finish_non_exhaustive()
+    }
 }
 
 impl Default for BrowserPresenter {
@@ -146,76 +364,115 @@ impl Default for BrowserPresenter {
 }
 
 impl BrowserPresenter {
+    /// A presenter that formats dates for the system time zone and clock.
     pub fn new(browser: BrowserSide) -> Self {
-        Self { browser, active_tab: None, view: BrowserViewModel::default() }
+        Self::with_clock(browser, Arc::new(|| SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))), TimeZone::system())
+    }
+
+    pub fn with_clock(browser: BrowserSide, clock: Clock, time_zone: TimeZone) -> Self {
+        Self { browser, view: BrowserViewModel { time_zone, ..BrowserViewModel::default() }, clock, chrome: None }
     }
 
     pub fn view(&self) -> &BrowserViewModel {
         &self.view
     }
 
+    /// Names the root volume for root tab labels and titles.
+    pub fn set_root_label(&mut self, label: &str) {
+        if self.view.root_label != label {
+            self.view.root_label = label.to_owned();
+            if let Some(chrome) = self.chrome.take() {
+                self.apply_chrome(&chrome);
+            }
+        }
+    }
+
+    /// Applies the Browser's tab strip, toolbar availability, and sort.
+    pub fn apply_chrome(&mut self, chrome: &BrowserChrome) {
+        if self.chrome.as_ref() == Some(chrome) {
+            return;
+        }
+        self.view.active_tab = Some(chrome.active_tab);
+        let tabs = chrome.tabs.iter().map(|tab| TabViewModel { id: tab.id, label: self.view.tab_label(tab.location.as_ref()), path: tab.location.as_ref().map(location_text).unwrap_or_default(), active: tab.id == chrome.active_tab, loading: tab.loading, failed: tab.failed }).collect::<Vec<_>>();
+        if tabs != self.view.tabs {
+            self.view.tabs = tabs;
+            self.view.tabs_revision = self.view.tabs_revision.wrapping_add(1);
+        }
+        self.view.toolbar = Toolbar { can_open_tab: chrome.can_open_tab, can_go_back: chrome.can_go_back, can_go_forward: chrome.can_go_forward, can_go_up: chrome.can_go_up, can_refresh: chrome.can_refresh, sort: chrome.sort };
+        self.chrome = Some(chrome.clone());
+    }
+
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
             Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } => *browser,
-            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } => return,
+            Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } => return,
         };
         if output_browser != self.browser {
             return;
         }
         match output {
-            Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => self.active_tab = Some(*tab),
+            Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => self.view.active_tab = Some(*tab),
             Output::LoadingStarted { tab, .. } | Output::FolderItemsLoaded { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
-                if self.active_tab.is_some_and(|active| active != *tab) {
+                if self.view.active_tab.is_some_and(|active| active != *tab) {
                     return;
                 }
-                self.active_tab = Some(*tab);
+                self.view.active_tab = Some(*tab);
             }
-            Output::ActiveBrowserChanged { .. } => {}
-            Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } => {}
+            _ => {}
         }
+        let view = &mut self.view;
         match output {
             Output::TabViewChanged { location, entries, selection, row, scroll_hint, loading, error, .. } => {
-                self.view.location_text = location.as_ref().map_or_else(String::new, location_text);
-                self.view.entries = Arc::clone(entries);
-                self.view.selection = selection.clone();
-                self.view.selected_row = *row;
-                self.view.scroll_hint = scroll_hint.clone();
-                self.view.loading = *loading;
-                self.view.error = error.as_ref().map(error_message);
-                self.view.status_text = if *loading { "Loading…".to_owned() } else { self.view.error.clone().unwrap_or_else(|| self.view.location_text.clone()) };
-                self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
-                self.view.folder_items_delta = None;
+                view.location.clone_from(location);
+                view.location_text = location.as_ref().map_or_else(String::new, location_text);
+                view.entries = Arc::clone(entries);
+                view.selection = selection.clone();
+                view.cursor_row = *row;
+                view.selection_revision = view.selection_revision.wrapping_add(1);
+                view.scroll_hint = scroll_hint.clone();
+                view.loading = *loading;
+                view.error = error.as_ref().map(error_message);
+                view.status_text = if *loading { "Loading…".to_owned() } else { view.error.clone().unwrap_or_else(|| view.location_text.clone()) };
+                view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
+                view.folder_items_delta = None;
+                view.listed_at = (self.clock)();
+                view.refresh_summary();
             }
             Output::LoadingStarted { .. } => {
-                self.view.loading = true;
-                self.view.error = None;
-                self.view.status_text = "Loading…".to_owned();
+                view.loading = true;
+                view.error = None;
+                view.status_text = "Loading…".to_owned();
             }
             Output::FolderItemsLoaded { location, entries, changes, scroll_hint, .. } => {
-                self.view.location_text = location_text(location);
-                self.view.entries = Arc::clone(entries);
-                self.view.scroll_hint = scroll_hint.clone();
-                self.view.loading = false;
-                self.view.error = None;
-                self.view.status_text = self.view.location_text.clone();
-                self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
-                self.view.folder_items_delta = changes.clone();
+                view.location = Some(location.clone());
+                view.location_text = location_text(location);
+                view.entries = Arc::clone(entries);
+                view.scroll_hint = scroll_hint.clone();
+                view.loading = false;
+                view.error = None;
+                view.status_text = view.location_text.clone();
+                view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
+                view.folder_items_delta = changes.clone();
+                view.listed_at = (self.clock)();
+                view.refresh_summary();
             }
             Output::SelectionChanged { selection, row, .. } => {
-                self.view.selection = selection.clone();
-                self.view.selected_row = *row;
+                view.selection = selection.clone();
+                view.cursor_row = *row;
+                view.selection_revision = view.selection_revision.wrapping_add(1);
+                view.refresh_summary();
             }
             Output::FolderItemsFailed { error, .. } => {
-                self.view.loading = false;
-                self.view.error = Some(error_message(error));
-                self.view.status_text = self.view.error.clone().unwrap_or_default();
+                view.loading = false;
+                view.error = Some(error_message(error));
+                view.status_text = view.error.clone().unwrap_or_default();
             }
             Output::FolderItemsCancelled { .. } => {
-                self.view.loading = false;
-                self.view.error = None;
-                self.view.status_text = self.view.location_text.clone();
+                view.loading = false;
+                view.error = None;
+                view.status_text = view.location_text.clone();
             }
-            Output::ActiveBrowserChanged { .. } | Output::ActiveTabChanged { .. } | Output::TabsChanged { .. } | Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } => {}
+            _ => {}
         }
     }
 }
@@ -233,17 +490,6 @@ fn row_kind(kind: EntryKind) -> RowKind {
         EntryKind::Symlink { points_to_directory: false } => RowKind::Link,
         EntryKind::Other => RowKind::Other,
     }
-}
-
-fn location_text(location: &Location) -> String {
-    if location.is_root() {
-        return "/".to_owned();
-    }
-    location.components().iter().fold(String::new(), |mut text, name| {
-        text.push('/');
-        text.push_str(&name.to_text_lossy());
-        text
-    })
 }
 
 fn error_message(error: &ListingError) -> String {

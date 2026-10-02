@@ -1,4 +1,4 @@
-use dual_pane_application::{Command, Event, FavoriteProbeOutcome, Output, RowChange, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
+use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteProbeOutcome, FavoriteRejection, Notice, NoticeKind, Output, RowChange, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, ScrollAnchor, SortDirection, SortField, SortSpec, TabId};
 use std::sync::Arc;
 
@@ -26,6 +26,21 @@ fn ready() -> Workspace {
 }
 fn load(workspace: &mut Workspace, browser: BrowserSide, tab: TabId, token: dual_pane_domain::RequestToken, entries: Vec<Entry>) {
     workspace.handle(Event::FolderItemsLoaded { browser, tab, token, entries: Arc::from(entries), changes: None }.into());
+}
+
+/// The reason a Favorites edit was rejected, if it was.
+fn rejection(transition: &dual_pane_application::Transition) -> Option<FavoriteRejection> {
+    match transition.outputs.as_slice() {
+        [Output::FavoriteEditRejected { reason, .. }] if transition.work.is_empty() => Some(*reason),
+        _ => None,
+    }
+}
+
+/// Navigates `browser`'s active tab to `at` and confirms an empty listing.
+fn show(workspace: &mut Workspace, browser: BrowserSide, at: &Location) -> TabId {
+    let (tab, token) = request(&workspace.handle(Command::Navigate { browser, location: at.clone() }.into()).work);
+    load(workspace, browser, tab, token, vec![]);
+    tab
 }
 
 #[test]
@@ -61,11 +76,11 @@ fn navigation_after_back_truncates_forward_history() {
     load(&mut workspace, BrowserSide::Left, tab, one, vec![]);
     let (_, two) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("two") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, two, vec![]);
-    let (_, back) = request(&workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work);
+    let (_, back) = request(&workspace.handle(Command::GoBack { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, back, vec![]);
     let (_, three) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("three") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, three, vec![]);
-    assert!(workspace.handle(Command::GoForward { browser: BrowserSide::Left }.into()).work.is_empty());
+    assert!(workspace.handle(Command::GoForward { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work.is_empty());
 }
 
 #[test]
@@ -86,7 +101,7 @@ fn closing_an_inactive_tab_preserves_the_active_tab_and_its_view() {
 #[test]
 fn selection_commands_before_the_first_listing_are_safe() {
     let mut workspace = Workspace::new();
-    for command in [Command::SelectAll { browser: BrowserSide::Left }, Command::ClearSelection { browser: BrowserSide::Left }, Command::UpdateScrollHint { browser: BrowserSide::Left, scroll: Some(ScrollAnchor::new(name("item"), 4)) }] {
+    for command in [Command::SelectAll { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }, Command::ClearSelection { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }, Command::UpdateScrollHint { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), scroll: Some(ScrollAnchor::new(name("item"), 4)) }] {
         assert_eq!(workspace.handle(command.into()).outputs, vec![]);
     }
 }
@@ -96,11 +111,11 @@ fn selecting_the_sole_selected_item_reports_cursor_recovery() {
     let mut workspace = Workspace::new();
     let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("folder") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b")]);
-    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, row: 0, name: name("a") }.into());
-    workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, row: 1, name: name("b") }.into());
-    workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, row: 1, name: name("b") }.into());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 0, name: name("a") }.into());
+    workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 1, name: name("b") }.into());
+    workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 1, name: name("b") }.into());
 
-    let transition = workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, row: 0, name: name("a") }.into());
+    let transition = workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 0, name: name("a") }.into());
     assert!(matches!(transition.outputs.as_slice(), [dual_pane_application::Output::SelectionChanged { row: Some(0), .. }]));
 }
 
@@ -110,8 +125,10 @@ fn favorites_editing_preserves_order_ids_and_rejects_invalid_names() {
     let group = workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into());
     assert!(matches!(group.work.as_slice(), [WorkRequest::SaveSettings { .. }]));
     let id = workspace.favorites().groups[0].id;
-    assert!(workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into()).outputs.is_empty());
-    assert!(workspace.handle(Command::RenameFavoriteGroup { id, name: " \t".into() }.into()).outputs.is_empty());
+    assert_eq!(rejection(&workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into())), Some(FavoriteRejection::DuplicateName));
+    assert_eq!(rejection(&workspace.handle(Command::RenameFavoriteGroup { id, name: " \t".into() }.into())), Some(FavoriteRejection::InvalidName));
+    assert_eq!(rejection(&workspace.handle(Command::RenameFavoriteGroup { id, name: "Places".into() }.into())), Some(FavoriteRejection::Unchanged));
+    assert_eq!(rejection(&workspace.handle(Command::RenameFavoriteGroup { id: id + 40, name: "Elsewhere".into() }.into())), Some(FavoriteRejection::Stale));
     workspace.handle(Command::CreateFavoriteItem { group_id: id, name: "Root".into(), target: Location::root() }.into());
     let item = workspace.favorites().items[0].id;
     assert_eq!(workspace.favorites().items[0].target, Location::root());
@@ -132,8 +149,8 @@ fn favorites_moves_to_the_current_position_change_nothing() {
     workspace.handle(Command::CreateFavoriteItem { group_id: group, name: "first".into(), target: location("first") }.into());
     workspace.handle(Command::CreateFavoriteItem { group_id: group, name: "second".into(), target: location("second") }.into());
     let item = workspace.favorites().items[1].id;
-    assert_eq!(workspace.handle(Command::ReorderFavoriteGroup { id: group, position: 0 }.into()), Default::default());
-    assert_eq!(workspace.handle(Command::MoveFavoriteItem { id: item, group_id: group, position: 1 }.into()), Default::default());
+    assert_eq!(rejection(&workspace.handle(Command::ReorderFavoriteGroup { id: group, position: 0 }.into())), Some(FavoriteRejection::Unchanged));
+    assert_eq!(rejection(&workspace.handle(Command::MoveFavoriteItem { id: item, group_id: group, position: 1 }.into())), Some(FavoriteRejection::Unchanged));
     assert!(!workspace.handle(Command::MoveFavoriteItem { id: item, group_id: group, position: 0 }.into()).outputs.is_empty());
     assert_eq!(favorite_names(&workspace), ["second", "first"]);
 
@@ -143,27 +160,61 @@ fn favorites_moves_to_the_current_position_change_nothing() {
     workspace.handle(Command::CreateFavoriteItem { group_id: other_group, name: "alone".into(), target: location("alone") }.into());
     let last = workspace.favorites().items.iter().find(|record| record.name == "first").unwrap().id;
     let alone = workspace.favorites().items.iter().find(|record| record.name == "alone").unwrap().id;
-    assert_eq!(workspace.handle(Command::MoveFavoriteItem { id: last, group_id: group, position: 1 }.into()), Default::default());
-    assert_eq!(workspace.handle(Command::MoveFavoriteItem { id: last, group_id: group, position: 9 }.into()), Default::default());
-    assert_eq!(workspace.handle(Command::MoveFavoriteItem { id: alone, group_id: other_group, position: 0 }.into()), Default::default());
+    for (id, group_id, position) in [(last, group, 1), (last, group, 9), (alone, other_group, 0)] {
+        assert_eq!(rejection(&workspace.handle(Command::MoveFavoriteItem { id, group_id, position }.into())), Some(FavoriteRejection::Unchanged));
+    }
+}
+
+/// A workspace whose stored Favorites hold one Group and the given Items,
+/// with the launch probes it requested.
+fn stored_favorites(items: &[(i64, &str, Location)]) -> (Workspace, Vec<WorkRequest>) {
+    let mut workspace = Workspace::new();
+    let favorites = dual_pane_application::FavoritesRecords { initialized: true, groups: vec![dual_pane_application::FavoriteGroupRecord { id: 1, name: "Places".into(), position: 0 }], items: items.iter().enumerate().map(|(position, (id, name, target))| dual_pane_application::FavoriteItemRecord { id: *id, group_id: 1, name: (*name).into(), target: target.clone(), position: position as i64 }).collect() };
+    let loaded = workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot { favorites, ..SettingsSnapshot::default() } }.into());
+    let probes = loaded.work.into_iter().filter(|work| matches!(work, WorkRequest::ProbeFavoriteTarget { .. })).collect();
+    (workspace, probes)
 }
 
 #[test]
-fn unavailable_probe_only_removes_the_matching_favorite_target() {
-    let mut workspace = ready();
-    workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into());
-    let group = workspace.favorites().groups[0].id;
+fn launch_probes_every_stored_item_and_only_unavailable_removes_the_matching_target() {
     let old = location("old");
-    workspace.handle(Command::CreateFavoriteItem { group_id: group, name: "Old".into(), target: old.clone() }.into());
-    let item = workspace.favorites().items[0].id;
-    assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: location("different"), outcome: FavoriteProbeOutcome::Unavailable }.into()).outputs.is_empty());
-    assert_eq!(workspace.favorites().items.len(), 1);
-    for inconclusive in [FavoriteProbeOutcome::Available, FavoriteProbeOutcome::Failed, FavoriteProbeOutcome::Cancelled] {
-        assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: old.clone(), outcome: inconclusive }.into()).outputs.is_empty());
-    }
-    assert_eq!(workspace.favorites().items.len(), 1);
-    workspace.handle(Event::FavoriteTargetProbed { item_id: item, target: old, outcome: FavoriteProbeOutcome::Unavailable }.into());
+    let (mut workspace, probes) = stored_favorites(&[(4, "Old", old.clone()), (5, "Kept", location("kept")), (6, "Unreadable", location("unreadable"))]);
+    assert_eq!(probes, vec![WorkRequest::ProbeFavoriteTarget { item_id: 4, target: old.clone() }, WorkRequest::ProbeFavoriteTarget { item_id: 5, target: location("kept") }, WorkRequest::ProbeFavoriteTarget { item_id: 6, target: location("unreadable") }]);
+    assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: 4, target: location("different"), outcome: FavoriteProbeOutcome::Unavailable }.into()).outputs.is_empty());
+    assert_eq!(workspace.favorites().items.len(), 3);
+    assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: 5, target: location("kept"), outcome: FavoriteProbeOutcome::Available }.into()).outputs.is_empty());
+    let failed = workspace.handle(Event::FavoriteTargetProbed { item_id: 6, target: location("unreadable"), outcome: FavoriteProbeOutcome::Failed }.into());
+    assert!(matches!(failed.outputs.as_slice(), [Output::NoticeAdded { notice: Notice { kind: NoticeKind::FavoriteProbeFailed { name, .. }, offers_reset: false, .. }, open: false }] if name == "Unreadable"));
+    assert_eq!(workspace.favorites().items.len(), 3);
+
+    // A probe answers once; only the first answer for an Item counts.
+    let (mut workspace, _) = stored_favorites(&[(4, "Old", old.clone())]);
+    let removed = workspace.handle(Event::FavoriteTargetProbed { item_id: 4, target: old.clone(), outcome: FavoriteProbeOutcome::Unavailable }.into());
     assert!(workspace.favorites().items.is_empty());
+    assert!(removed.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
+    assert!(removed.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice: Notice { kind: NoticeKind::FavoriteRemoved { name, target }, .. }, open: false } if name == "Old" && *target == old)));
+    assert_eq!(workspace.handle(Event::FavoriteTargetProbed { item_id: 4, target: old, outcome: FavoriteProbeOutcome::Unavailable }.into()), Default::default());
+}
+
+#[test]
+fn edits_and_deletion_while_a_probe_is_in_flight_are_respected() {
+    let target = location("gone");
+    let (mut workspace, _) = stored_favorites(&[(4, "Renamed later", target.clone()), (5, "Deleted later", location("also-gone"))]);
+    workspace.handle(Command::RenameFavoriteItem { id: 4, name: "New alias".into() }.into());
+    workspace.handle(Command::DeleteFavoriteItem { id: 5 }.into());
+    let deleted = workspace.handle(Event::FavoriteTargetProbed { item_id: 5, target: location("also-gone"), outcome: FavoriteProbeOutcome::Unavailable }.into());
+    assert_eq!(deleted, Default::default(), "a deleted Item adds no Notice and nothing to save");
+    workspace.handle(Event::FavoriteTargetProbed { item_id: 4, target, outcome: FavoriteProbeOutcome::Unavailable }.into());
+    assert!(workspace.favorites().items.is_empty(), "a renamed Item keeps its target, so it is still removed");
+}
+
+#[test]
+fn no_probe_runs_for_a_failed_load_or_an_intentionally_empty_collection() {
+    let mut failed = Workspace::new();
+    let transition = failed.handle(Event::SettingsLoadFailed { failure: SettingsFailure::Corrupt }.into());
+    assert!(transition.work.is_empty());
+    let (_, probes) = stored_favorites(&[]);
+    assert!(probes.is_empty());
 }
 
 #[test]
@@ -205,7 +256,8 @@ fn uninitialized_settings_seed_favorites_once_after_the_screenshots_probe() {
     let screenshots = load_fresh_profile(&mut workspace);
     assert_eq!(screenshots, home.join(&name("Documents")).join(&name("Screenshots")));
     let seeded = workspace.handle(Event::ScreenshotsFolderProbed { location: screenshots.clone(), outcome: FavoriteProbeOutcome::Available }.into());
-    assert!(matches!(seeded.work.as_slice(), [WorkRequest::SaveSettings { .. }]));
+    assert!(matches!(seeded.work.first(), Some(WorkRequest::SaveSettings { .. })));
+    assert_eq!(seeded.work.iter().filter(|work| matches!(work, WorkRequest::ProbeFavoriteTarget { .. })).count(), 5, "seeded Items are probed too");
     assert_eq!(favorite_names(&workspace), ["Applications", "Desktop", "Documents", "Screenshots", "Downloads"]);
     assert!(workspace.handle(Event::ScreenshotsFolderProbed { location: screenshots, outcome: FavoriteProbeOutcome::Available }.into()).outputs.is_empty(), "a repeated probe result seeds nothing");
     let count = workspace.favorites().items.len();
@@ -227,7 +279,7 @@ fn only_a_probe_that_found_screenshots_adds_it() {
 fn favorites_edits_wait_for_the_screenshots_probe() {
     let mut workspace = Workspace::with_home(location("home"));
     let screenshots = load_fresh_profile(&mut workspace);
-    assert_eq!(workspace.handle(Command::CreateFavoriteGroup { name: "Early".into() }.into()), Default::default());
+    assert_eq!(workspace.handle(Command::CreateFavoriteGroup { name: "Early".into() }.into()), dual_pane_application::Transition { outputs: vec![Output::FavoriteEditRejected { edit: FavoriteEdit::CreateGroup, reason: FavoriteRejection::NotReady }], work: vec![] });
     workspace.handle(Event::ScreenshotsFolderProbed { location: screenshots, outcome: FavoriteProbeOutcome::Unavailable }.into());
     assert!(!workspace.handle(Command::CreateFavoriteGroup { name: "Later".into() }.into()).outputs.is_empty());
     assert!(workspace.favorites().groups.iter().any(|group| group.name == "Later"));
@@ -238,16 +290,16 @@ fn tab_local_selection_gestures_obey_anchor_and_secondary_rules() {
     let mut workspace = Workspace::new();
     let (first, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("items") }.into()).work);
     load(&mut workspace, BrowserSide::Left, first, token, vec![entry("a"), entry("b"), entry("c")]);
-    assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, row: 2, name: name("c") }.into()).outputs.is_empty());
-    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, row: 0, name: name("a") }.into());
-    workspace.handle(Command::SelectRange { browser: BrowserSide::Left, row: 2, name: name("c") }.into());
+    assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 2, name: name("c") }.into()).outputs.is_empty());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 0, name: name("a") }.into());
+    workspace.handle(Command::SelectRange { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 2, name: name("c") }.into());
     assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("a"), name("b"), name("c")]);
-    workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, row: 2, name: name("c") }.into());
+    workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 2, name: name("c") }.into());
     assert!(!workspace.selection(BrowserSide::Left).contains(&name("c")));
-    assert!(workspace.handle(Command::SecondarySelect { browser: BrowserSide::Left, row: 1, name: name("b") }.into()).outputs.is_empty());
-    workspace.handle(Command::SecondarySelect { browser: BrowserSide::Left, row: 2, name: name("c") }.into());
+    assert!(workspace.handle(Command::SecondarySelect { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 1, name: name("b") }.into()).outputs.is_empty());
+    workspace.handle(Command::SecondarySelect { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 2, name: name("c") }.into());
     assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("c")]);
-    workspace.handle(Command::SelectAll { browser: BrowserSide::Left }.into());
+    workspace.handle(Command::SelectAll { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into());
     assert_eq!(workspace.selection(BrowserSide::Left).entries().len(), 3);
 }
 
@@ -264,7 +316,7 @@ fn failed_navigation_retains_history_and_location_shared_sort_refreshes_every_ta
     let (_, token) = request(&pending.work);
     workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: second, token, kind: dual_pane_domain::ListingErrorKind::ItemMissing }.into());
     assert_eq!(workspace.location(BrowserSide::Left), Some(&shared));
-    let transition = workspace.handle(Command::SetSort { location: shared, sort: dual_pane_domain::SortSpec::new(dual_pane_domain::SortField::Size, dual_pane_domain::SortDirection::Descending) }.into());
+    let transition = workspace.handle(Command::SetSort { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), location: shared, sort: dual_pane_domain::SortSpec::new(dual_pane_domain::SortField::Size, dual_pane_domain::SortDirection::Descending) }.into());
     assert_eq!(transition.work.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).count(), 2);
 }
 
@@ -274,12 +326,17 @@ fn sorting_a_pending_navigation_restarts_its_target_without_committing_the_old_r
     let (tab, first) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("shown") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, first, vec![entry("old")]);
     let target = location("target");
+    let (right, right_token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Right, location: target.clone() }.into()).work);
+    load(&mut workspace, BrowserSide::Right, right, right_token, vec![entry("right")]);
     let (_, stale) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: target.clone() }.into()).work);
     let sort = SortSpec::new(SortField::Size, SortDirection::Descending);
-    let changed = workspace.handle(Command::SetSort { location: target.clone(), sort }.into());
+    let changed = workspace.handle(Command::SetSort { browser: BrowserSide::Right, tab: right, location: target.clone(), sort }.into());
     assert!(changed.work.contains(&WorkRequest::Cancel { browser: BrowserSide::Left, tab, token: stale }));
-    assert!(matches!(changed.work.iter().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })), Some(WorkRequest::ReadDirectory { location, sort: requested, .. }) if *location == target && *requested == sort));
-    let (_, current) = request(&changed.work[..changed.work.len() - 1]);
+    let current = changed.work.iter().find_map(|work| match work {
+        WorkRequest::ReadDirectory { browser: BrowserSide::Left, location, sort: requested, token, .. } if *location == target && *requested == sort => Some(*token),
+        _ => None,
+    });
+    let current = current.expect("the pending target is reread with the new sort");
     load(&mut workspace, BrowserSide::Left, tab, stale, vec![entry("stale")]);
     assert_eq!(workspace.location(BrowserSide::Left), Some(&location("shown")));
     load(&mut workspace, BrowserSide::Left, tab, current, vec![entry("new")]);
@@ -309,8 +366,8 @@ fn right_click_does_not_establish_a_missing_range_anchor() {
     let mut workspace = Workspace::new();
     let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("items") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b")]);
-    workspace.handle(Command::SecondarySelect { browser: BrowserSide::Left, row: 0, name: name("a") }.into());
-    assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, row: 1, name: name("b") }.into()).outputs.is_empty());
+    workspace.handle(Command::SecondarySelect { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 0, name: name("a") }.into());
+    assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 1, name: name("b") }.into()).outputs.is_empty());
     assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("a")]);
 }
 
@@ -335,10 +392,10 @@ fn scroll_hint_is_exposed_when_history_and_tabs_are_restored() {
     let mut workspace = Workspace::new();
     let (first, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("one") }.into()).work);
     load(&mut workspace, BrowserSide::Left, first, token, vec![entry("anchor")]);
-    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, scroll: Some(ScrollAnchor::new(name("anchor"), 7)) }.into());
+    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), scroll: Some(ScrollAnchor::new(name("anchor"), 7)) }.into());
     let (_, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("two") }.into()).work);
     load(&mut workspace, BrowserSide::Left, first, token, vec![]);
-    let (_, token) = request(&workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work);
+    let (_, token) = request(&workspace.handle(Command::GoBack { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
     let restored = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, token, entries: Arc::from(vec![entry("anchor")]), changes: None }.into());
     assert!(restored.outputs.iter().any(|output| matches!(output, dual_pane_application::Output::FolderItemsLoaded { scroll_hint: Some(scroll), .. } if *scroll == ScrollAnchor::new(name("anchor"), 7))));
 
@@ -352,9 +409,10 @@ fn settings_are_never_saved_before_a_successful_load() {
     let mut workspace = Workspace::new();
     let shared = location("shared");
     let sort = SortSpec::new(SortField::Size, SortDirection::Descending);
-    let early = workspace.handle(Command::SetSort { location: shared.clone(), sort }.into());
+    let tab = show(&mut workspace, BrowserSide::Left, &shared);
+    let early = workspace.handle(Command::SetSort { browser: BrowserSide::Left, tab, location: shared.clone(), sort }.into());
     assert!(!early.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
-    assert!(workspace.handle(Command::CreateFavoriteGroup { name: "Early".into() }.into()).outputs.is_empty());
+    assert_eq!(rejection(&workspace.handle(Command::CreateFavoriteGroup { name: "Early".into() }.into())), Some(FavoriteRejection::NotReady));
     assert_eq!(workspace.final_settings_save(), None);
 
     let stored = SettingsSnapshot { favorites: dual_pane_application::FavoritesRecords { initialized: true, groups: vec![dual_pane_application::FavoriteGroupRecord { id: 3, name: "Stored".into(), position: 0 }], items: vec![] }, ..SettingsSnapshot::default() };
@@ -373,11 +431,12 @@ fn settings_are_never_saved_before_a_successful_load() {
 fn a_failed_load_keeps_edits_in_memory_without_saving() {
     let mut workspace = Workspace::new();
     let failed = workspace.handle(Event::SettingsLoadFailed { failure: SettingsFailure::Corrupt }.into());
-    assert_eq!(failed.outputs, vec![dual_pane_application::Output::SettingsLoadFailed { failure: SettingsFailure::Corrupt }]);
+    assert_eq!(failed.outputs, vec![Output::SettingsLoadFailed { failure: SettingsFailure::Corrupt }, Output::NoticeAdded { notice: Notice { id: 1, kind: NoticeKind::SettingsLoadFailed { failure: SettingsFailure::Corrupt }, offers_reset: true }, open: true }]);
     let group = workspace.handle(Command::CreateFavoriteGroup { name: "Places".into() }.into());
     assert!(!group.outputs.is_empty());
     assert!(group.work.is_empty());
-    let sort = workspace.handle(Command::SetSort { location: location("any"), sort: SortSpec::new(SortField::Name, SortDirection::Descending) }.into());
+    let tab = show(&mut workspace, BrowserSide::Left, &location("any"));
+    let sort = workspace.handle(Command::SetSort { browser: BrowserSide::Left, tab, location: location("any"), sort: SortSpec::new(SortField::Name, SortDirection::Descending) }.into());
     assert!(!sort.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
     assert_eq!(workspace.final_settings_save(), None);
 }
@@ -385,8 +444,9 @@ fn a_failed_load_keeps_edits_in_memory_without_saving() {
 #[test]
 fn only_changes_after_a_load_need_a_final_save() {
     let mut workspace = ready();
+    let tab = show(&mut workspace, BrowserSide::Left, &location("any"));
     assert_eq!(workspace.final_settings_save(), None);
-    workspace.handle(Command::SetSort { location: location("any"), sort: SortSpec::new(SortField::Name, SortDirection::Descending) }.into());
+    workspace.handle(Command::SetSort { browser: BrowserSide::Left, tab, location: location("any"), sort: SortSpec::new(SortField::Name, SortDirection::Descending) }.into());
     assert!(matches!(workspace.final_settings_save(), Some(WorkRequest::SaveSettings { .. })));
 }
 
@@ -401,12 +461,12 @@ fn repeated_back_and_forward_while_loading_keep_moving() {
         Some(WorkRequest::ReadDirectory { location, .. }) => location.clone(),
         _ => panic!("read"),
     };
-    assert_eq!(read_location(&workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work), location("b"));
-    assert_eq!(read_location(&workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work), location("a"));
+    assert_eq!(read_location(&workspace.handle(Command::GoBack { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work), location("b"));
+    assert_eq!(read_location(&workspace.handle(Command::GoBack { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work), location("a"));
     assert!(!workspace.can_go_back(BrowserSide::Left));
-    assert!(workspace.handle(Command::GoBack { browser: BrowserSide::Left }.into()).work.is_empty());
+    assert!(workspace.handle(Command::GoBack { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work.is_empty());
     assert!(workspace.can_go_forward(BrowserSide::Left));
-    let (tab, token) = request(&workspace.handle(Command::GoForward { browser: BrowserSide::Left }.into()).work);
+    let (tab, token) = request(&workspace.handle(Command::GoForward { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, token, vec![]);
     assert_eq!(workspace.location(BrowserSide::Left), Some(&location("b")));
     assert!(workspace.can_go_back(BrowserSide::Left) && workspace.can_go_forward(BrowserSide::Left));
@@ -417,13 +477,13 @@ fn a_refresh_keeps_present_selected_items_in_order_and_drops_missing_ones() {
     let mut workspace = Workspace::new();
     let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("folder") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b"), entry("c")]);
-    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, row: 1, name: name("b") }.into());
-    workspace.handle(Command::SelectAll { browser: BrowserSide::Left }.into());
-    let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into()).work);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 1, name: name("b") }.into());
+    workspace.handle(Command::SelectAll { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into());
+    let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
     let refreshed = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("c"), entry("d")]), changes: None }.into());
     assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("a"), name("c")]);
     assert!(refreshed.outputs.contains(&Output::SelectionChanged { browser: BrowserSide::Left, tab, selection: workspace.selection(BrowserSide::Left).clone(), row: None }), "the missing cursor is cleared rather than moved");
-    assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, row: 2, name: name("d") }.into()).outputs.is_empty(), "the missing anchor is cleared");
+    assert!(workspace.handle(Command::SelectRange { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 2, name: name("d") }.into()).outputs.is_empty(), "the missing anchor is cleared");
 }
 
 #[test]
@@ -453,7 +513,7 @@ fn a_reload_asks_the_gateway_to_diff_against_the_shown_rows_and_forwards_its_cha
     assert_eq!(read_previous(&first.work), None, "a new folder has nothing to diff against");
     let (tab, token) = request(&first.work);
     load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b")]);
-    let refresh = workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into());
+    let refresh = workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into());
     assert_eq!(read_previous(&refresh.work).as_deref(), Some(&[entry("a"), entry("b")][..]));
     let (_, token) = request(&refresh.work);
     let change = RowChange { row: 1, removed: 0, inserted: 1 };
@@ -469,7 +529,7 @@ fn a_gateway_change_that_does_not_fit_the_shown_rows_replaces_every_row() {
     let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("folder") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b")]);
     for wrong in [RowChange { row: 2, removed: 1, inserted: 1 }, RowChange { row: 0, removed: 0, inserted: 5 }] {
-        let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into()).work);
+        let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
         let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("c")]), changes: Some(vec![wrong]) }.into());
         assert!(matches!(&loaded.outputs[0], Output::FolderItemsLoaded { changes: None, .. }));
     }
@@ -491,11 +551,11 @@ fn a_cleared_selection_stays_without_a_cursor_row_after_a_reload() {
     let mut workspace = Workspace::new();
     let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("folder") }.into()).work);
     load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("a"), entry("b")]);
-    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, row: 1, name: name("b") }.into());
-    let cleared = workspace.handle(Command::ClearSelection { browser: BrowserSide::Left }.into());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: 1, name: name("b") }.into());
+    let cleared = workspace.handle(Command::ClearSelection { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into());
     assert!(matches!(&cleared.outputs[..], [Output::SelectionChanged { row: None, .. }]));
-    assert_eq!(workspace.handle(Command::ClearSelection { browser: BrowserSide::Left }.into()).outputs, vec![]);
-    let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left }.into()).work);
+    assert_eq!(workspace.handle(Command::ClearSelection { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).outputs, vec![]);
+    let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
     let reloaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("b")]), changes: None }.into());
     assert!(reloaded.outputs.iter().any(|output| matches!(output, Output::SelectionChanged { row: None, .. })));
 }

@@ -90,7 +90,7 @@ Qt calls its item-view adapters "models". A Qt item model is a View-side binder 
 
 #### Command rules
 
-- Every way to invoke an action produces the same `Command`: pointer, keyboard, menu, toolbar, drag-and-drop, or test. A shortcut-capable action has a stable `ActionId` whose effective binding comes from settings ([P3-M2 actions](phase-3/milestone-02-architecture.md#actions-and-shortcut-settings)). P3-M6 [wires the delivered actions](phase-3/milestone-06-architecture.md#widgets-focus-and-visible-state) to that catalogue.
+- Every way to invoke an action produces the same `Command`: pointer, keyboard, menu, toolbar, drag-and-drop, or test. A shortcut-capable action has a stable `ActionId` whose effective binding comes from settings ([P3-M2 actions](phase-3/milestone-02-architecture.md#actions-and-shortcut-settings)). Since P3-M6, every delivered action [binds from the effective settings](phase-3/milestone-06-architecture.md#widgets-focus-and-visible-state) and rebinds after a load or reset; only list-movement keys stay fixed in the View.
 - Commands are data, not objects with behavior. They carry no callback, perform no I/O, and are interpreted only by `Workspace::handle`.
 - The serialized owner handles inputs one at a time and in order. An input that arrives during handling, such as a terminal event returned directly by work dispatch, waits in a queue and is never handled re-entrantly.
 - The handler validates every command against current state and rejects one that no longer applies without changing state, such as a stale tab, a row whose entry changed, or an unavailable action. A disabled control is a convenience, not the validation.

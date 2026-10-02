@@ -66,7 +66,7 @@ impl Reads {
                         self.live.remove(&(*browser, *tab));
                     }
                 }
-                WorkRequest::SaveSettings { .. } | WorkRequest::ProbeScreenshotsFolder { .. } => {}
+                WorkRequest::SaveSettings { .. } | WorkRequest::ProbeScreenshotsFolder { .. } | WorkRequest::ProbeFavoriteTarget { .. } | WorkRequest::LoadSettings | WorkRequest::ResetSettings => {}
             }
         }
     }
@@ -77,10 +77,10 @@ fn visible(workspace: &Workspace, browser: BrowserSide) -> Visible {
     (workspace.location(browser).cloned(), workspace.entries(browser).to_vec(), workspace.selection(browser).entries().to_vec())
 }
 
-fn row_command(workspace: &Workspace, browser: BrowserSide, row: usize, make: fn(BrowserSide, usize, EntryName) -> Command) -> Option<Command> {
+fn row_command(workspace: &Workspace, browser: BrowserSide, row: usize, make: fn(BrowserSide, TabId, usize, EntryName) -> Command) -> Option<Command> {
     let shown = workspace.entries(browser);
     let row = row.checked_rem(shown.len())?;
-    Some(make(browser, row, shown[row].name().clone()))
+    Some(make(browser, workspace.active_tab(browser), row, shown[row].name().clone()))
 }
 
 fn command(workspace: &Workspace, op: &Op) -> Option<Command> {
@@ -94,17 +94,17 @@ fn command(workspace: &Workspace, op: &Op) -> Option<Command> {
         Op::CloseTab(left, index) => Command::CloseTab { browser: side(left), tab: pick(side(left), index) },
         Op::ActivateTab(left, index) => Command::ActivateTab { browser: side(left), tab: pick(side(left), index) },
         Op::ReorderTab(left, index, position) => Command::ReorderTab { browser: side(left), tab: pick(side(left), index), position },
-        Op::Back(left) => Command::GoBack { browser: side(left) },
-        Op::Forward(left) => Command::GoForward { browser: side(left) },
-        Op::Refresh(left) => Command::Refresh { browser: side(left) },
-        Op::Sort(index, descending) => Command::SetSort { location: folder(index), sort: SortSpec::new(SortField::Name, if descending { SortDirection::Descending } else { SortDirection::Ascending }) },
-        Op::Select(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::SelectEntry { browser, row, name }),
-        Op::Toggle(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::ToggleEntry { browser, row, name }),
-        Op::Range(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::SelectRange { browser, row, name }),
-        Op::Secondary(left, row) => return row_command(workspace, side(left), row, |browser, row, name| Command::SecondarySelect { browser, row, name }),
-        Op::SelectAll(left) => Command::SelectAll { browser: side(left) },
-        Op::Clear(left) => Command::ClearSelection { browser: side(left) },
-        Op::Parent(left) => Command::GoToParent { browser: side(left) },
+        Op::Back(left) => Command::GoBack { browser: side(left), tab: workspace.active_tab(side(left)) },
+        Op::Forward(left) => Command::GoForward { browser: side(left), tab: workspace.active_tab(side(left)) },
+        Op::Refresh(left) => Command::Refresh { browser: side(left), tab: workspace.active_tab(side(left)) },
+        Op::Sort(index, descending) => Command::SetSort { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), location: workspace.location(BrowserSide::Left).cloned().unwrap_or_else(|| folder(index)), sort: SortSpec::new(SortField::Name, if descending { SortDirection::Descending } else { SortDirection::Ascending }) },
+        Op::Select(left, row) => return row_command(workspace, side(left), row, |browser, tab, row, name| Command::SelectEntry { browser, tab, row, name }),
+        Op::Toggle(left, row) => return row_command(workspace, side(left), row, |browser, tab, row, name| Command::ToggleEntry { browser, tab, row, name }),
+        Op::Range(left, row) => return row_command(workspace, side(left), row, |browser, tab, row, name| Command::SelectRange { browser, tab, row, name }),
+        Op::Secondary(left, row) => return row_command(workspace, side(left), row, |browser, tab, row, name| Command::SecondarySelect { browser, tab, row, name }),
+        Op::SelectAll(left) => Command::SelectAll { browser: side(left), tab: workspace.active_tab(side(left)) },
+        Op::Clear(left) => Command::ClearSelection { browser: side(left), tab: workspace.active_tab(side(left)) },
+        Op::Parent(left) => Command::GoToParent { browser: side(left), tab: workspace.active_tab(side(left)) },
         Op::Deliver { .. } => return None,
     })
 }

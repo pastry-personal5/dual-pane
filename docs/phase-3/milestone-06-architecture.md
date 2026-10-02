@@ -1,6 +1,6 @@
 # P3-M6 architecture
 
-Status: Planned
+Status: Active
 
 P3-M6 turns the P3-M5 Qt-free Workspace into two independently interactive desktop Browsers. The [overview checklist](milestone-06-overview.md#completion-checklist) is the acceptance contract. Every new tab, Sidebar, toolbar, and Notices surface follows the [MVVM and command rules](../architecture.md#architectural-styles). Product and interaction rules stay in the active [product](../product-behavior.md) and [GUI](../ux-gui.md#planned-phase-3-gui-decisions) documents.
 
