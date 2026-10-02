@@ -21,12 +21,14 @@
 #include <QtGui/QAbstractFileIconProvider>
 #include <QtGui/QDrag>
 #include <QtGui/QFocusEvent>
+#include <QtGui/QFontDatabase>
 #include <QtGui/QIcon>
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QPen>
 #include <QtGui/QPixmap>
 #include <QtGui/QShortcut>
 #include <QtWidgets/QAbstractButton>
@@ -73,6 +75,9 @@ constexpr int initial_window_width = 1100, initial_window_height = 680;
 constexpr int splitter_width = 3;
 constexpr int narrow_browser_width = 280;
 constexpr int column_count = 6;
+constexpr int icon_column_width = 18;
+constexpr int relative_date_column_width = 44;
+constexpr int type_column_width = 44;
 constexpr int path_role = Qt::UserRole;
 constexpr int max_pending_icons = 128;
 constexpr int icon_cache_size = 1024;
@@ -131,14 +136,22 @@ auto style_sheet() -> QString {
       QLineEdit { border:1px solid %4; padding:4px; }
       QLabel#favoriteError, QLabel#favoriteCue { color:%8; background:%1; }
       QFrame#folderPane { background:%1; border:1px solid %4; }
-      QFrame#folderPane[browserActive="true"][windowActive="true"] { border:1px solid %5; }
+      QFrame#folderPane[browserActive="true"][windowActive="true"] { background:%2; border:1px solid %4; }
+      QFrame#folderPane[browserActive="false"][windowActive="true"] { background:%1; border:1px solid %4; }
+      QFrame#folderPane[browserActive="true"][windowActive="true"] QTreeView { background:%2; }
+      QFrame#folderPane[browserActive="false"][windowActive="true"] QTreeView { background:%1; color:#A7ADB5; }
       QTreeView { background:%2; color:%3; border:0; outline:none; }
+      QTreeView::item { padding-left:0; }
       QTreeView::item:selected { background:%6; color:white; }
       QTreeView[browserActive="true"][windowActive="true"]::item:selected { background:%5; color:white; }
       QToolButton { background:%2; color:%3; border:1px solid %4; padding:4px; }
       QToolButton:disabled { color:%7; }
-      QToolButton#sortControl { min-width:16px; max-width:16px; min-height:16px; max-height:16px; padding:0; }
-      QToolButton#sortControl:checked { color:white; background:%5; }
+      QLabel#folderPaneToolbarRow1, QWidget#folderPaneToolbarRow2, QWidget#folderPaneToolbarRow3, QWidget#folderPaneToolbarRow2 QLabel, QWidget#folderPaneToolbarRow2 QLineEdit, QWidget#folderPaneToolbarRow2 QToolButton, QWidget#folderPaneToolbarRow3 QLabel, QWidget#folderPaneToolbarRow3 QLineEdit, QWidget#folderPaneToolbarRow3 QToolButton { background:%1; }
+      QLabel#folderPaneToolbarRow1[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QToolButton { background:%2; }
+      QLabel#folderPaneToolbarRow1[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QToolButton { background:%1; }
+      QFrame#folderPane[browserActive="false"][windowActive="true"] QLabel, QFrame#folderPane[browserActive="false"][windowActive="true"] QLineEdit { background:%1; color:#A7ADB5; }
+      QToolButton#sortControl { min-width:16px; max-width:16px; min-height:16px; max-height:16px; padding:0; background:%1; color:#A7ADB5; }
+      QToolButton#sortControl:checked { color:#FFFFFF; }
       QToolButton#upButton, QToolButton#backButton, QToolButton#forwardButton, QToolButton#sortControl, QToolButton#newTabButton, QToolButton#closeTabButton, QToolButton#favoriteGroupMenuButton, QToolButton#addFavoriteItemButton, QToolButton#newGroupButton { border:none; }
       QWidget#browserTabsStrip { background:%1; }
       QLabel#expandOverlay { background:rgba(0, 0, 0, 160); color:white; }
@@ -275,7 +288,20 @@ class ItemIconDelegate final : public QStyledItemDelegate {
     }
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
-        QStyledItemDelegate::paint(painter, option, index);
+        auto cell_option = option;
+        if (index.column() == 3 || index.column() == 4) {
+            auto date_font = cell_option.font;
+            date_font.setPointSizeF(date_font.pointSizeF() - 2.0);
+            cell_option.font = std::move(date_font);
+        }
+        if (index.column() == 4) {
+            auto fixed_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+            fixed_font.setPointSizeF(cell_option.font.pointSizeF());
+            cell_option.font = std::move(fixed_font);
+        }
+        if (index.column() == 3 || index.column() == 5)
+            cell_option.displayAlignment = Qt::AlignRight | Qt::AlignVCenter;
+        QStyledItemDelegate::paint(painter, cell_option, index);
         if (index.column() != 0)
             return;
         const auto path = index.data(path_role).toString();
@@ -300,7 +326,7 @@ class ItemIconDelegate final : public QStyledItemDelegate {
     auto sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const -> QSize override {
         auto size = QStyledItemDelegate::sizeHint(option, index);
         if (index.column() == 0)
-            size.setWidth(22);
+            size.setWidth(icon_column_width);
         return size.expandedTo(QSize(0, 20));
     }
 
@@ -327,7 +353,7 @@ class ItemIconDelegate final : public QStyledItemDelegate {
 
 /// Column minimum widths and the order in which narrowing hides them: Size,
 /// Exact Date, Relative Date, Type, then the Item Icon Column.
-constexpr std::array<int, column_count> column_minimum = {22, 120, 40, 52, 118, 72};
+constexpr std::array<int, column_count> column_minimum = {icon_column_width, 120, type_column_width, relative_date_column_width, 118, 72};
 constexpr std::array<int, column_count - 1> hide_order = {5, 4, 3, 2, 0};
 
 class FolderItemsList final : public QTreeView {
@@ -335,6 +361,9 @@ class FolderItemsList final : public QTreeView {
     FolderItemsList(FolderItemsListModel *model, IconLoader *loader) : model_(model), icons_(new ItemIconDelegate(loader, this)) {
         setModel(model_);
         setItemDelegate(icons_);
+        auto folder_font = font();
+        folder_font.setPointSize(12);
+        setFont(folder_font);
         setFocusPolicy(Qt::StrongFocus);
         setSelectionMode(QAbstractItemView::ExtendedSelection);
         setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -352,6 +381,10 @@ class FolderItemsList final : public QTreeView {
             columns->setSectionResizeMode(column, QHeaderView::ResizeToContents);
         columns->setSectionResizeMode(0, QHeaderView::Fixed);
         columns->resizeSection(0, column_minimum.at(0));
+        columns->setSectionResizeMode(2, QHeaderView::Fixed);
+        columns->resizeSection(2, type_column_width);
+        columns->setSectionResizeMode(3, QHeaderView::Fixed);
+        columns->resizeSection(3, relative_date_column_width);
         columns->setSectionResizeMode(1, QHeaderView::Stretch);
         verticalScrollBar()->installEventFilter(this);
         horizontalScrollBar()->installEventFilter(this);
@@ -543,7 +576,7 @@ class BrowserTabButton final : public QAbstractButton {
         painter.setPen(QColor(QString::fromLatin1(border_color)));
         painter.drawLine(rect().topRight(), rect().bottomRight());
         if (active_)
-            painter.fillRect(QRect(0, height() - 2, width(), 2), QColor(QString::fromLatin1(active_color)));
+            painter.fillRect(QRect(0, 0, width(), 2), QColor(QString::fromLatin1(active_color)));
         if (hasFocus()) {
             painter.setPen(QColor(QString::fromLatin1(active_color)));
             painter.drawRect(rect().adjusted(1, 1, -2, -2));
@@ -745,6 +778,39 @@ auto command_button(const QString &object_name, const QString &text, const QStri
     return button;
 }
 
+auto sort_caret_icon(const bool descending, const bool focused) -> QIcon {
+    auto icon = QIcon();
+    const auto draw_caret = [descending](const QColor &color, const qreal scale) {
+        QPixmap pixmap(QSize(static_cast<int>(16 * scale), static_cast<int>(16 * scale)));
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        auto pen = QPen(color);
+        pen.setWidth(2);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(pen);
+        if (descending) {
+            painter.drawLine(QPointF(4, 6), QPointF(8, 10));
+            painter.drawLine(QPointF(8, 10), QPointF(12, 6));
+        } else {
+            painter.drawLine(QPointF(4, 10), QPointF(8, 6));
+            painter.drawLine(QPointF(8, 6), QPointF(12, 10));
+        }
+        return pixmap;
+    };
+    const auto add_variants = [&icon, &draw_caret](const QColor &color, const QIcon::Mode mode, const QIcon::State state) {
+        icon.addPixmap(draw_caret(color, 1.0), mode, state);
+        icon.addPixmap(draw_caret(color, 2.0), mode, state);
+    };
+    add_variants(QColor(focused ? QStringLiteral("#A7ADB5") : QStringLiteral("#737A84")), QIcon::Normal, QIcon::Off);
+    add_variants(QColor(focused ? QStringLiteral("#FFFFFF") : QStringLiteral("#A7ADB5")), QIcon::Normal, QIcon::On);
+    add_variants(QColor(QStringLiteral("#737A84")), QIcon::Disabled, QIcon::Off);
+    add_variants(QColor(QStringLiteral("#737A84")), QIcon::Disabled, QIcon::On);
+    return icon;
+}
+
 class FolderPane final : public QFrame {
   public:
     FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)) {
@@ -788,13 +854,31 @@ class FolderPane final : public QFrame {
             static const std::array<std::array<const char *, 2>, 4> labels = {{{"name (A-Z)", "name (Z-A)"}, {"type (A-Z)", "type (Z-A)"}, {"date (oldest first)", "date (newest first)"}, {"size (smallest first)", "size (largest first)"}}};
             return QStringLiteral("Sort items by %1").arg(QString::fromLatin1(labels.at(field).at(descending ? 1 : 0)));
         };
+        std::array<QWidget *, 4> sort_groups{};
         for (int field = 0; field < 4; ++field) {
+            auto *sort_group = new QWidget(commands);
+            auto *sort_group_layout = new QHBoxLayout(sort_group);
+            sort_group_layout->setContentsMargins(field == 0 ? 0 : 4, 0, 0, 0);
+            sort_group_layout->setSpacing(0);
+            sort_group_layout->setAlignment(Qt::AlignLeft);
+            sort_groups.at(field) = sort_group;
+            if (field == 1)
+                sort_group->setFixedWidth(type_column_width);
+            else if (field == 2)
+                sort_group->setFixedWidth(relative_date_column_width + column_minimum.at(4));
+            else if (field == 3)
+                sort_group->setFixedWidth(column_minimum.at(5));
             for (const bool descending : {false, true}) {
-                auto *sort = command_button(QStringLiteral("sortControl"), descending ? QStringLiteral("v") : QStringLiteral("^"), sort_label(field, descending), sort_label(field, descending), commands);
+                auto *sort = command_button(QStringLiteral("sortControl"), descending ? QStringLiteral("v") : QStringLiteral("^"), sort_label(field, descending), sort_label(field, descending), sort_group);
                 sort->setCheckable(true);
                 const int choice = (field * 2) + (descending ? 1 : 0);
                 sorts_.at(choice) = sort;
-                command_layout->addWidget(sort);
+                sort->setText(QString());
+                sort->setProperty("sortDescending", descending);
+                sort->setIcon(sort_caret_icon(descending, true));
+                sort->setIconSize(QSize(16, 16));
+                sort->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                sort_group_layout->addWidget(sort);
                 QObject::connect(sort, &QToolButton::clicked, this, [this, model, choice] {
                     view_->focusList();
                     model->setSort(choice);
@@ -802,7 +886,11 @@ class FolderPane final : public QFrame {
                 });
             }
         }
+        command_layout->addWidget(sort_groups.at(0));
         command_layout->addStretch();
+        command_layout->addWidget(sort_groups.at(1));
+        command_layout->addWidget(sort_groups.at(2));
+        command_layout->addWidget(sort_groups.at(3));
         view_->setObjectName(QStringLiteral("folderItemsList"));
         view_->setAccessibleName(QStringLiteral("Folder Items List"));
         auto *status = new QLabel(this);
@@ -845,9 +933,12 @@ class FolderPane final : public QFrame {
         // columns share the Date pair.
         view_->setColumnsHandler([this](const std::array<bool, column_count> &visible) {
             const std::array<bool, 4> fields_visible = {true, visible.at(2), visible.at(3) || visible.at(4), visible.at(5)};
+            for (int field = 0; field < static_cast<int>(sort_groups_.size()); ++field)
+                sort_groups_.at(field)->setVisible(fields_visible.at(field));
             for (int choice = 0; choice < static_cast<int>(sorts_.size()); ++choice)
                 sorts_.at(choice)->setVisible(fields_visible.at(choice / 2));
         });
+        sort_groups_ = sort_groups;
     }
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return view_; }
@@ -864,6 +955,7 @@ class FolderPane final : public QFrame {
 
     FolderItemsList *view_;
     QLabel *status_ = nullptr;
+    std::array<QWidget *, 4> sort_groups_{};
     std::array<QToolButton *, 8> sorts_{};
 };
 
@@ -1446,11 +1538,18 @@ class BrowserHighlightController final : public QObject {
 
     void apply(bool window_active) {
         for (int browser = 0; browser < 2; ++browser) {
-            for (QWidget *widget : {static_cast<QWidget *>(folders_.at(browser)), static_cast<QWidget *>(views_.at(browser))}) {
+            const auto apply_state = [this, browser, window_active](QWidget *widget) {
                 widget->setProperty("browserActive", browser == active_);
                 widget->setProperty("windowActive", window_active);
+                if (auto *sort = dynamic_cast<QToolButton *>(widget); sort != nullptr && sort->objectName() == QStringLiteral("sortControl"))
+                    sort->setIcon(sort_caret_icon(sort->property("sortDescending").toBool(), browser == active_ && window_active));
                 repolish(widget);
-            }
+            };
+            auto *folder = static_cast<QWidget *>(folders_.at(browser));
+            apply_state(folder);
+            for (QWidget *child : folder->findChildren<QWidget *>())
+                apply_state(child);
+            apply_state(views_.at(browser));
         }
     }
 
