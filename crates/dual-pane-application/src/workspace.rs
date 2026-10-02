@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::{ActionBinding, BrowserChrome, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, Notice, NoticeKind, Output, RowChange, SettingsFailure, SettingsState, SettingsStatus, TabSummary, WorkRequest, WorkspaceChrome, fresh_profile_favorites, fresh_profile_screenshots};
-use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, valid_favorite_name};
+use crate::operations::OperationCoordinator;
+use crate::{ActionBinding, BrowserChrome, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, Notice, NoticeKind, OperationEffect, OperationJob, Output, RowChange, SettingsFailure, SettingsState, SettingsStatus, TabSummary, WorkRequest, WorkspaceChrome, fresh_profile_favorites, fresh_profile_screenshots};
+use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
 pub const NOTICE_LIMIT: usize = 200;
@@ -53,6 +54,7 @@ pub struct Workspace {
     next_tab: u64,
     next_favorite_group_id: i64,
     next_favorite_item_id: i64,
+    operations: OperationCoordinator,
 }
 /// One Browser: the domain's ordered tab identities and active tab, plus the
 /// application's per-tab state, which is stored in no particular order.
@@ -97,7 +99,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1 }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new() }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         match input {
@@ -107,6 +109,10 @@ impl Workspace {
     }
     fn command(&mut self, command: Command) -> Transition {
         match command {
+            Command::StartOperation { browser, tab, kind } => self.start_operation(browser, tab, kind),
+            Command::ConfirmPermanentDelete { id, targets } => self.operation_transition(id, |operations| operations.confirm_delete(id, targets)),
+            Command::DecideOperation { id, token, item, choice, apply_to_all } => self.operation_transition(id, |operations| operations.decide(id, token, &item, choice, apply_to_all)),
+            Command::CancelOperation { id } => self.operation_transition(id, |operations| operations.cancel(id)),
             Command::ActivateBrowser { browser } => self.activate_browser(browser),
             Command::ActivateTab { browser, tab } => self.activate_tab(browser, tab),
             Command::NewTab { browser } => self.new_tab(browser),
@@ -140,6 +146,10 @@ impl Workspace {
     }
     fn event(&mut self, event: Event) -> Transition {
         match event {
+            Event::OperationScanned { id, generation, plan } => self.operation_transition(id, |operations| operations.scanned(id, generation, plan)),
+            Event::OperationStepped { id, generation, result } => self.operation_transition(id, |operations| operations.step_result(id, generation, result)),
+            Event::OperationCleaned { id, generation, result } => self.operation_transition(id, |operations| operations.cleaned(id, generation, result)),
+            Event::OperationExecutorUnavailable { id, generation } => self.operation_transition(id, |operations| operations.unavailable(id, generation)),
             Event::LocationInvalidated { location } => self.refresh_location(&location),
             Event::FolderItemsLoaded { browser, tab, token, entries, changes } => self.loaded(browser, tab, token, entries, changes),
             Event::FolderItemsFailed { browser, tab, token, kind } => self.failed(browser, tab, token, kind),
@@ -190,6 +200,60 @@ impl Workspace {
     pub fn selection(&self, side: BrowserSide) -> &Selection {
         static NONE: Selection = Selection::new();
         self.tab(side, self.active_tab(side)).and_then(|tab| tab.history.current()).map_or(&NONE, |visit| visit.state().selection())
+    }
+    pub fn operation_jobs(&self) -> &[OperationJob] {
+        self.operations.jobs()
+    }
+    /// The same validation drives command enablement and command acceptance.
+    pub fn operation_availability(&self, browser: BrowserSide, tab: TabId, kind: OperationKind) -> Result<OperationIntent, OperationRejection> {
+        if self.active_tab(browser) != tab {
+            return Err(OperationRejection::StaleTab);
+        }
+        let source_tab = self.tab(browser, tab).ok_or(OperationRejection::StaleTab)?;
+        if source_tab.pending.is_some() || source_tab.error.is_some() {
+            return Err(OperationRejection::SourceUnavailable);
+        }
+        let items = source_tab.folder_items.as_ref().ok_or(OperationRejection::SourceUnavailable)?;
+        let selected = source_tab.history.current().map(|visit| visit.state().selection().entries()).unwrap_or(&[]);
+        let targets = if matches!(kind, OperationKind::NewFolder { .. }) {
+            vec![]
+        } else {
+            let targets = items.entries.iter().filter(|entry| selected.iter().any(|name| name == entry.name())).map(|entry| OperationTarget { name: entry.name().clone(), kind: entry.kind() }).collect::<Vec<_>>();
+            if targets.len() != selected.len() {
+                return Err(OperationRejection::StaleSelection);
+            }
+            targets
+        };
+        let destination = if matches!(kind, OperationKind::Copy | OperationKind::Move) {
+            let other = match browser {
+                BrowserSide::Left => BrowserSide::Right,
+                BrowserSide::Right => BrowserSide::Left,
+            };
+            let tab = self.tab(other, self.active_tab(other)).ok_or(OperationRejection::DestinationUnavailable)?;
+            if tab.pending.is_some() || tab.error.is_some() {
+                return Err(OperationRejection::DestinationUnavailable);
+            }
+            Some(tab.folder_items.as_ref().ok_or(OperationRejection::DestinationUnavailable)?.location.clone())
+        } else {
+            None
+        };
+        OperationIntent::new(kind, items.location.clone(), targets, destination)
+    }
+    fn start_operation(&mut self, browser: BrowserSide, tab: TabId, kind: OperationKind) -> Transition {
+        match self.operation_availability(browser, tab, kind.clone()) {
+            Ok(intent) => {
+                let (id, effects) = self.operations.start(intent);
+                self.operation_output(id, effects)
+            }
+            Err(reason) => Transition::output(Output::OperationRejected { browser, tab, kind, reason }),
+        }
+    }
+    fn operation_transition(&mut self, id: OperationId, change: impl FnOnce(&mut OperationCoordinator) -> Option<Vec<OperationEffect>>) -> Transition {
+        change(&mut self.operations).map_or_else(Transition::default, |effects| self.operation_output(id, effects))
+    }
+    fn operation_output(&self, id: OperationId, effects: Vec<OperationEffect>) -> Transition {
+        let Some(job) = self.operations.job(id) else { return Transition::default() };
+        Transition { outputs: vec![Output::OperationChanged { job: job.clone() }], work: effects.into_iter().map(WorkRequest::Operation).collect() }
     }
     pub fn favorites(&self) -> &FavoritesRecords {
         self.settings.favorites()

@@ -1,5 +1,5 @@
-use crate::{FavoriteEdit, FavoriteRejection, FavoritesRecords, Notice, SettingsFailure};
-use dual_pane_domain::{BrowserSide, Entry, ListingError, Location, ScrollAnchor, Selection, TabId};
+use crate::{FavoriteEdit, FavoriteRejection, FavoritesRecords, Notice, OperationJob, SettingsFailure};
+use dual_pane_domain::{BrowserSide, Entry, ListingError, Location, OperationKind, OperationRejection, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
 /// A framework-neutral contiguous listing mutation. `removed` rows beginning
@@ -18,6 +18,15 @@ pub struct RowChange {
 /// folder, a first listing, or a gateway change that does not fit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
+    OperationChanged {
+        job: OperationJob,
+    },
+    OperationRejected {
+        browser: BrowserSide,
+        tab: TabId,
+        kind: OperationKind,
+        reason: OperationRejection,
+    },
     ActiveBrowserChanged {
         browser: BrowserSide,
     },

@@ -42,7 +42,7 @@ Automatic refresh, session persistence, and file operations are committed produc
 
 ## Planned Phase 3 GUI decisions
 
-Implementation status: Partly delivered. The table above still describes the released version 2.0.0. The P3-M6 development build implements these sections: Folder Items fields and display, Sort controls and remembered choice, Narrow Browser behavior, Sidebar Favorites, Browser Tabs Strip and navigation, the selection gestures in Selection and file commands, the inline-editor shortcut rule, and the storage and Favorite-probe parts of Notices. Its native behavior awaits verification; see the [P3-M6 checklist](phase-3/milestone-06-overview.md#completion-checklist). File commands, Operation Panels, restoration messages, and automatic refresh follow in P3-M7 through P3-M10. The owner reviewed the P3-M6 interpretations in the [changelog](phase-3/changelog.md#2026-10-02--p3-m6-interpretation-review).
+Implementation status: Partly delivered. The table above still describes the released version 2.0.0. The P3-M6 development build implements these sections: Folder Items fields and display, Sort controls and remembered choice, Narrow Browser behavior, Sidebar Favorites, Browser Tabs Strip and navigation, the selection gestures in Selection and file commands, the inline-editor shortcut rule, and the storage and Favorite-probe parts of Notices. The owner accepted its native behavior; see the [P3-M6 acceptance evidence](phase-3/milestone-06-overview.md#acceptance-evidence). File commands, Operation Panels, restoration messages, and automatic refresh follow in P3-M7 through P3-M10. The owner reviewed the P3-M6 interpretations in the [changelog](phase-3/changelog.md#2026-10-02--p3-m6-interpretation-review).
 
 ### Folder Items fields and display
 
@@ -98,6 +98,7 @@ Implementation status: Partly delivered. The table above still describes the rel
 - Move to Trash uses `Command+Delete` or the Folder Items Context Menu. Delete Permanently uses `Option+Command+Delete` or that menu. Both require one or more selected Items and a confirmed source folder, and capture the selected targets when invoked; later selection or tab changes cannot retarget them. Delete Permanently opens a separate Permanent Delete Confirmation Window showing only the frozen target count. Cancel is the default; deletion requires explicit activation of Delete Permanently.
 - Activating exactly one regular file opens it with the default application. Activating a link to a regular file opens its target with the default application; Copy and Move act on the link. A link to a folder follows the [navigation rule](product-behavior.md#file-operation-safeguards). File activation requires a confirmed source folder. An opening failure appears in Notices, which opens to show it.
 - While an inline name editor has keyboard focus, text editing takes priority and every workspace shortcut except `Command+Q` is suppressed until editing ends. Quitting discards the draft.
+- In P3-M8, disabled file-command menu items stay disabled. If a person invokes an unavailable file-command shortcut, its source Browser Status Bar briefly shows the reason for about three seconds, then resumes its current loading, error, or path text.
 
 ### Operation Panels and decisions
 

@@ -53,8 +53,9 @@ Plan: [overview](milestone-06-overview.md), [architecture](milestone-06-architec
 
 ### P3-M7: Establish safe file-operation workflow
 
-Status: Planned
+Status: Done
 Goal: Model file-operation intents, captured source and destination, decisions, progress, cancellation, and destructive-operation confirmation outside the desktop framework.
+Plan: [overview](milestone-07-overview.md), [architecture](milestone-07-architecture.md)
 
 ### P3-M8: Execute file operations and open files
 

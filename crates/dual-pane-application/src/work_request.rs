@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::SettingsSnapshot;
+use crate::{OperationEffect, SettingsSnapshot};
 use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, TabId};
 
 /// Outside work the reducer needs, carried out by a runtime off the GUI thread.
@@ -14,6 +14,7 @@ use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, Tab
 /// `LoadSettings` and `ResetSettings` go to the settings service.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRequest {
+    Operation(OperationEffect),
     ReadDirectory { browser: BrowserSide, tab: TabId, token: RequestToken, location: Location, sort: SortSpec, previous: Option<Arc<[Entry]>> },
     Cancel { browser: BrowserSide, tab: TabId, token: RequestToken },
     SaveSettings { revision: u64, snapshot: SettingsSnapshot },

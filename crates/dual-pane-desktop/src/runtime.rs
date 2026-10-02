@@ -238,6 +238,12 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
+            WorkRequest::Operation(effect) => {
+                let (id, generation) = match effect {
+                    dual_pane_application::OperationEffect::Scan { id, generation, .. } | dual_pane_application::OperationEffect::Execute { id, generation, .. } | dual_pane_application::OperationEffect::Cancel { id, generation } => (id, generation),
+                };
+                Some(Event::OperationExecutorUnavailable { id, generation })
+            }
             WorkRequest::ReadDirectory { browser, tab, token, location, sort, previous } => {
                 if self.outstanding.values().filter(|(owner, _, _)| *owner == browser).count() >= self.read_capacity {
                     return Some(Event::FolderItemsFailed { browser, tab, token, kind: ListingErrorKind::Busy });
@@ -396,14 +402,16 @@ fn deliver_event(delivery: &Delivery, event: Event) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::LocationInvalidated { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
+        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::LocationInvalidated { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dual_pane_application::OperationEffect;
     use dual_pane_domain::{EntryName, SortSpec, TabId};
+    use dual_pane_domain::{OperationId, OperationIntent, OperationKind, OperationTarget};
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -423,6 +431,13 @@ mod tests {
     }
     fn browser_read(browser: BrowserSide, index: usize, name: &str) -> WorkRequest {
         WorkRequest::ReadDirectory { browser, tab: TabId::new(index as u64), token: token(index), location: location(name), sort: SortSpec::default(), previous: None }
+    }
+    #[test]
+    fn operation_request_fails_closed_until_an_executor_exists() {
+        let (mut runner, _) = runtime(source_factory(|_, _| Some(Ok(Arc::from([])))));
+        let id = OperationId::new(7);
+        let intent = OperationIntent::new(OperationKind::MoveToTrash, location("source"), vec![OperationTarget { name: EntryName::new("item").unwrap(), kind: dual_pane_domain::EntryKind::File }], None).unwrap();
+        assert_eq!(runner.dispatch(WorkRequest::Operation(OperationEffect::Scan { id, generation: 3, intent })), Some(Event::OperationExecutorUnavailable { id, generation: 3 }));
     }
     fn source_factory(source: impl Fn(&Location, &AtomicBool) -> FolderItemsOutcome + Send + Sync + 'static) -> FolderItemsSourceFactory {
         let source = Arc::new(source);

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::{FavoriteProbeOutcome, RowChange, SettingsFailure, SettingsSnapshot};
-use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingErrorKind, Location, RequestToken, ScrollAnchor, SortSpec, TabId};
+use crate::{CleanupResult, FavoriteProbeOutcome, OperationFailure, PlannedItem, RowChange, SettingsFailure, SettingsSnapshot, StepResult};
+use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
@@ -15,6 +15,25 @@ pub enum Input {
 /// Browser's active tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    StartOperation {
+        browser: BrowserSide,
+        tab: TabId,
+        kind: OperationKind,
+    },
+    ConfirmPermanentDelete {
+        id: OperationId,
+        targets: usize,
+    },
+    DecideOperation {
+        id: OperationId,
+        token: DecisionToken,
+        item: Location,
+        choice: OperationChoice,
+        apply_to_all: bool,
+    },
+    CancelOperation {
+        id: OperationId,
+    },
     ActivateBrowser {
         browser: BrowserSide,
     },
@@ -162,6 +181,10 @@ pub enum Command {
 /// the replaced database was preserved, when there was one to preserve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    OperationScanned { id: OperationId, generation: u64, plan: Result<Arc<[PlannedItem]>, OperationFailure> },
+    OperationStepped { id: OperationId, generation: u64, result: StepResult },
+    OperationCleaned { id: OperationId, generation: u64, result: CleanupResult },
+    OperationExecutorUnavailable { id: OperationId, generation: u64 },
     LocationInvalidated { location: Location },
     FolderItemsLoaded { browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>> },
     FolderItemsFailed { browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind },

@@ -7,6 +7,9 @@ use dual_pane_domain::{EntryName, Location};
 /// The location of an absolute `path`, with each component's exact bytes, or
 /// `None` for a relative path or one containing `.` or `..`.
 pub fn location_from_path(path: &Path) -> Option<Location> {
+    if path.as_os_str().as_bytes().split(|byte| *byte == b'/').any(|component| component == b"." || component == b"..") {
+        return None;
+    }
     let mut components = path.components();
     if components.next() != Some(Component::RootDir) {
         return None;
@@ -79,5 +82,11 @@ mod tests {
     fn rejects_paths_containing_parent_components() {
         assert_eq!(location_from_path(Path::new("/alpha/../beta")), None);
         assert_eq!(location_from_path(Path::new("/..")), None);
+    }
+
+    #[test]
+    fn rejects_paths_containing_interior_current_components() {
+        assert_eq!(location_from_path(Path::new("/alpha/./beta")), None);
+        assert_eq!(location_from_path(Path::new("/./alpha")), None);
     }
 }

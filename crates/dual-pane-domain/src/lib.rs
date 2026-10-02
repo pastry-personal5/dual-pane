@@ -8,6 +8,7 @@ mod entry;
 mod favorites;
 mod listing_error;
 mod location;
+mod operation;
 mod request_token;
 mod selection;
 mod sort_spec;
@@ -20,6 +21,7 @@ pub use entry::{Entry, EntryKind, EntryMetadata, ListingSortKey, entry_type_text
 pub use favorites::{FavoriteError, FavoriteGroup, FavoriteGroupId, FavoriteItem, FavoriteItemId, Favorites, valid_favorite_name};
 pub use listing_error::{ListingError, ListingErrorKind};
 pub use location::{EntryName, InvalidEntryName, Location};
+pub use operation::{DecisionToken, OperationChoice, OperationId, OperationIntent, OperationIssue, OperationKind, OperationRejection, OperationTarget, starts_with};
 pub use request_token::RequestToken;
 pub use selection::Selection;
 pub use sort_spec::{SortDirection, SortField, SortSpec};

@@ -5,6 +5,7 @@
 //! performs I/O, starts threads, sorts or diffs listings, or waits.
 
 mod input;
+mod operations;
 mod output;
 mod projection;
 mod settings;
@@ -12,6 +13,7 @@ mod work_request;
 mod workspace;
 
 pub use input::{Command, Event, Input};
+pub use operations::{CleanupResult, OperationEffect, OperationErrorKind, OperationFailure, OperationJob, OperationOutcome, OperationProgress, OperationStatus, PlannedItem, StepResult};
 pub use output::{Output, RowChange, listing_changes};
 pub use projection::{BrowserChrome, FavoriteEdit, FavoriteRejection, Notice, NoticeKind, TabSummary, WorkspaceChrome};
 pub use settings::{ActionBinding, ActionId, BrowserSnapshot, FOLDER_SORT_LIMIT, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoritesRecords, Key, SettingsFailure, SettingsSnapshot, SettingsState, SettingsStatus, Shortcut, TabSnapshot, WorkspaceSnapshot, default_bindings, default_shortcut, fresh_profile_favorites, fresh_profile_screenshots, validate_bindings};

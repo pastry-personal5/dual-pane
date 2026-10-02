@@ -2,6 +2,17 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M7 complete
+
+- The workspace-owned Qt-free operation workflow and fail-closed desktop request path are implemented. All P3-M7 completion items are checked; direct Cargo format, Clippy, and test commands and `make check` passed.
+
+## 2026-10-02 — P3-M7 operation workflow decisions
+
+- Commands use each addressed active tab's settled, successful listing. Selected targets follow listing order and retain exact name bytes and entry kinds. Copy and Move also require a settled destination and reject a real directory sent into its logical subtree; a link remains a link.
+- Jobs belong to `Workspace`, with workspace-local operation IDs, generation-checked scan and step results, unique decision tokens, and frozen roots. Permanent Delete waits for confirmation of its frozen target count before work starts.
+- Only regular-file conflicts permit Skip, Replace, or Cancel and conflict-only apply to all. Link collisions, kind mismatches, and recoverable errors permit Try Again, Skip, or Cancel. Rename and New Folder collisions are typed inline-editor results with no overwrite choice.
+- Cancellation stays pending through cleanup, preserving completed work and reporting clean, partial, failed, or uncertain outcomes. The desktop returns executor-unavailable for any M7 operation request; M8 supplies the native executor and interface, including shortcut rejection text in the source Browser Status Bar.
+
 ## 2026-10-02 — P3-M6 complete
 
 - The owner accepted the native macOS verification, including the Favorites group-menu refinement that removes the detached downward caret and keeps the three-dot menu and add button.
