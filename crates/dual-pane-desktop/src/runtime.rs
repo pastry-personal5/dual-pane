@@ -7,8 +7,11 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{Event, FavoriteProbeOutcome, RowChange, SettingsFailure, WorkRequest, listing_changes};
-use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, RequestToken, SortSpec, TabId};
+use dual_pane_application::{Event, FavoriteProbeOutcome, ResolvedTarget, RowChange, SettingsFailure, WorkRequest, listing_changes};
+use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, OperationId, RequestToken, SortSpec, TabId};
+
+use crate::location_probe::resolve_item;
+use crate::operation_lane::{OperationLane, Publisher, Services};
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 pub type FolderItemsSource = Box<dyn Fn(&Location, SortSpec, &AtomicBool) -> FolderItemsOutcome + Send>;
@@ -23,6 +26,9 @@ pub trait WorkRunner {
     /// directly when the request can finish before leaving the GUI thread.
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event>;
     fn take_events(&mut self, max: usize) -> (Vec<Event>, bool);
+    /// After the event loop has exited: stops file operations at a safe
+    /// boundary and waits at most `timeout` for their cleanup.
+    fn finish_operations(&mut self, _timeout: Duration) {}
 }
 
 /// One bounded listing queue per browser, served by a fixed number of reader
@@ -41,6 +47,10 @@ pub struct Runtime {
     outstanding: HashMap<RequestToken, (BrowserSide, TabId, Arc<JobState>)>,
     /// Reads per Browser that may be queued, running, or awaiting delivery.
     read_capacity: usize,
+    delivery: Delivery,
+    /// The file-operation lane, once attached; without it operations fail
+    /// closed.
+    operations: Option<OperationLane>,
 }
 
 #[derive(Clone)]
@@ -139,10 +149,17 @@ impl Drop for JobReceiver {
     }
 }
 
-/// A probe and the application event that reports its outcome.
-struct ProbeJob {
-    location: Location,
-    event: Box<dyn FnOnce(FavoriteProbeOutcome) -> Event + Send>,
+/// Short work for the probe lane and the application event that reports it.
+enum ProbeJob {
+    Probe {
+        location: Location,
+        event: Box<dyn FnOnce(FavoriteProbeOutcome) -> Event + Send>,
+    },
+    /// Resolves a link for activation.
+    Resolve {
+        location: Location,
+        event: Box<dyn FnOnce(ResolvedTarget) -> Event + Send>,
+    },
 }
 
 struct JobState {
@@ -161,6 +178,9 @@ struct Delivery {
     events: Sender<Event>,
     wake_pending: Arc<AtomicBool>,
     wake: Arc<Mutex<Wake>>,
+    /// The newest pending byte progress of each operation; older progress
+    /// is replaced rather than queued.
+    progress: Arc<Mutex<HashMap<OperationId, Event>>>,
 }
 
 /// A completed listing and its row change against the job's previous rows.
@@ -195,15 +215,31 @@ impl Runtime {
         let (right_jobs, right_queue) = job_queue();
         let (event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
-        let delivery = Delivery { events: event_sender, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(wake)) };
+        let delivery = Delivery { events: event_sender, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(wake)), progress: Arc::default() };
         for (browser, queue) in [(BrowserSide::Left, left_queue), (BrowserSide::Right, right_queue)] {
             for _ in 0..lanes {
                 spawn(browser, queue.clone(), Arc::clone(&source_factory), delivery.clone())?;
             }
         }
         let (probes, probe_jobs) = mpsc::sync_channel(PENDING_PROBE_CAPACITY);
-        thread::Builder::new().name(PROBE_THREAD_NAME.to_owned()).spawn(move || run_probes(probe_jobs, probe, delivery))?;
-        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes })
+        let probe_delivery = delivery.clone();
+        thread::Builder::new().name(PROBE_THREAD_NAME.to_owned()).spawn(move || run_probes(probe_jobs, probe, probe_delivery))?;
+        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None })
+    }
+
+    /// Starts the file-operation lane, which reports through this runtime.
+    pub fn attach_operations(&mut self, services: Services) -> io::Result<()> {
+        let events = self.delivery.clone();
+        let progress = self.delivery.clone();
+        let publisher = Publisher {
+            event: Arc::new(move |event| deliver_event(&events, event)),
+            progress: Arc::new(move |id, event| {
+                progress.progress.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, event);
+                wake(&progress);
+            }),
+        };
+        self.operations = Some(OperationLane::start(services, publisher)?);
+        Ok(())
     }
 
     fn receive(&mut self) -> Option<Event> {
@@ -239,8 +275,12 @@ impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
             WorkRequest::Operation(effect) => {
+                if let Some(operations) = &self.operations {
+                    return operations.submit(effect);
+                }
                 let (id, generation) = match effect {
-                    dual_pane_application::OperationEffect::Scan { id, generation, .. } | dual_pane_application::OperationEffect::Execute { id, generation, .. } | dual_pane_application::OperationEffect::Cancel { id, generation } => (id, generation),
+                    dual_pane_application::OperationEffect::Scan { id, generation, .. } | dual_pane_application::OperationEffect::Execute { id, generation, .. } | dual_pane_application::OperationEffect::Cancel { id, generation } | dual_pane_application::OperationEffect::Finalize { id, generation, .. } => (id, generation),
+                    dual_pane_application::OperationEffect::Release { .. } => return None,
                 };
                 Some(Event::OperationExecutorUnavailable { id, generation })
             }
@@ -283,16 +323,42 @@ impl WorkRunner for Runtime {
             WorkRequest::ResetSettings => Some(Event::SettingsResetFailed { failure: SettingsFailure::WorkerUnavailable }),
             WorkRequest::ProbeScreenshotsFolder { location } => self.probe(location.clone(), Box::new(move |outcome| Event::ScreenshotsFolderProbed { location, outcome })),
             WorkRequest::ProbeFavoriteTarget { item_id, target } => self.probe(target.clone(), Box::new(move |outcome| Event::FavoriteTargetProbed { item_id, target, outcome })),
+            WorkRequest::ResolveItem { browser, tab, token, item } => {
+                let job = ProbeJob::Resolve { location: item.clone(), event: Box::new(move |target| Event::ItemResolved { browser, tab, token, item, target }) };
+                self.probes.try_send(job).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| job.fail())
+            }
+            WorkRequest::ReopenJournal => match &self.operations {
+                Some(operations) => {
+                    operations.reopen_journal();
+                    None
+                }
+                None => Some(Event::JournalStatus { available: false }),
+            },
         }
     }
 
+    /// Delivers results first, then the newest byte progress of each
+    /// operation, which a full slice may leave for the next drain.
     fn take_events(&mut self, max: usize) -> (Vec<Event>, bool) {
         self.wake_pending.swap(false, Ordering::SeqCst);
-        let events = std::iter::from_fn(|| self.receive()).take(max).collect();
+        let mut events: Vec<Event> = std::iter::from_fn(|| self.receive()).take(max).collect();
         if self.next_event.is_none() {
             self.next_event = self.events.try_recv().ok();
         }
-        (events, self.next_event.is_some())
+        let mut progress = self.delivery.progress.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        while events.len() < max
+            && let Some(id) = progress.keys().next().copied()
+        {
+            events.extend(progress.remove(&id));
+        }
+        let more = self.next_event.is_some() || !progress.is_empty();
+        (events, more)
+    }
+
+    fn finish_operations(&mut self, timeout: Duration) {
+        if let Some(operations) = &self.operations {
+            operations.shut_down(timeout);
+        }
     }
 }
 
@@ -301,16 +367,30 @@ impl Runtime {
     /// has stopped, the outcome is `Failed` at once so no request is left
     /// pending; a failed probe proves nothing about its location.
     fn probe(&self, location: Location, event: Box<dyn FnOnce(FavoriteProbeOutcome) -> Event + Send>) -> Option<Event> {
-        self.probes.try_send(ProbeJob { location, event }).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| (job.event)(FavoriteProbeOutcome::Failed))
+        self.probes.try_send(ProbeJob::Probe { location, event }).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| job.fail())
     }
 }
 
-/// Runs probes in order. A panicking probe reports `Failed` and the lane
+impl ProbeJob {
+    /// The event for a job that could not run; a failure proves nothing
+    /// about its location.
+    fn fail(self) -> Event {
+        match self {
+            Self::Probe { event, .. } => event(FavoriteProbeOutcome::Failed),
+            Self::Resolve { event, .. } => event(ResolvedTarget::Unavailable),
+        }
+    }
+}
+
+/// Runs probes in order. A panicking probe reports a failure and the lane
 /// continues, because a probe keeps no state between calls.
 fn run_probes(jobs: Receiver<ProbeJob>, probe: LocationProbe, delivery: Delivery) {
     for job in jobs {
-        let outcome = catch_unwind(AssertUnwindSafe(|| probe(&job.location))).unwrap_or(FavoriteProbeOutcome::Failed);
-        deliver_event(&delivery, (job.event)(outcome));
+        let event = match job {
+            ProbeJob::Probe { location, event } => event(catch_unwind(AssertUnwindSafe(|| probe(&location))).unwrap_or(FavoriteProbeOutcome::Failed)),
+            ProbeJob::Resolve { location, event } => event(catch_unwind(AssertUnwindSafe(|| resolve_item(&location))).unwrap_or(ResolvedTarget::Unavailable)),
+        };
+        deliver_event(&delivery, event);
     }
 }
 
@@ -393,7 +473,14 @@ fn finish(delivery: &Delivery, job: &Job, event: Event) {
 }
 
 fn deliver_event(delivery: &Delivery, event: Event) {
-    if delivery.events.send(event).is_ok() && !delivery.wake_pending.swap(true, Ordering::SeqCst) {
+    if delivery.events.send(event).is_ok() {
+        wake(delivery);
+    }
+}
+
+/// Posts at most one GUI wake while a drain is pending.
+fn wake(delivery: &Delivery) {
+    if !delivery.wake_pending.swap(true, Ordering::SeqCst) {
         (delivery.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))();
     }
 }
@@ -402,7 +489,7 @@ fn deliver_event(delivery: &Delivery, event: Event) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::LocationInvalidated { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
+        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
@@ -432,6 +519,29 @@ mod tests {
     fn browser_read(browser: BrowserSide, index: usize, name: &str) -> WorkRequest {
         WorkRequest::ReadDirectory { browser, tab: TabId::new(index as u64), token: token(index), location: location(name), sort: SortSpec::default(), previous: None }
     }
+    #[test]
+    fn byte_progress_keeps_only_the_newest_report_per_operation_after_results() {
+        let (mut runner, _) = runtime(source_factory(|_, _| None));
+        let (first, second) = (OperationId::new(1), OperationId::new(2));
+        let progress = |id, done| Event::OperationProgress { id, generation: 4, bytes: dual_pane_application::ByteProgress { done, total: 100 } };
+        for (id, done) in [(first, 10), (first, 60), (second, 5)] {
+            runner.delivery.progress.lock().unwrap().insert(id, progress(id, done));
+        }
+        runner.delivery.events.send(Event::JournalStatus { available: true }).unwrap();
+        let (events, more) = runner.take_events(2);
+        assert_eq!(events[0], Event::JournalStatus { available: true }, "results come first");
+        assert_eq!(events.len(), 2);
+        assert!(more, "the other operation's progress waits for the next drain");
+        let (rest, more) = runner.take_events(8);
+        let mut delivered = events[1..].iter().chain(&rest).cloned().collect::<Vec<_>>();
+        delivered.sort_by_key(|event| match event {
+            Event::OperationProgress { id, .. } => id.get(),
+            _ => 0,
+        });
+        assert_eq!(delivered, vec![progress(first, 60), progress(second, 5)]);
+        assert!(!more);
+    }
+
     #[test]
     fn operation_request_fails_closed_until_an_executor_exists() {
         let (mut runner, _) = runtime(source_factory(|_, _| Some(Ok(Arc::from([])))));
@@ -867,7 +977,8 @@ mod tests {
         drop(queue);
         let (_event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
-        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY };
+        let delivery = Delivery { events: mpsc::channel().0, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
+        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None };
 
         assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());
@@ -917,7 +1028,7 @@ mod tests {
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
         let (event_sender, events) = mpsc::channel();
-        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Arc::new(Mutex::new(Box::new(|| {}))) };
+        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
         let mut spawn_count = 0;
 
         supervise_with(
@@ -1035,7 +1146,7 @@ mod tests {
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
         let (event_sender, events) = mpsc::channel();
-        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Arc::new(Mutex::new(Box::new(|| {}))) };
+        let delivery = Delivery { events: event_sender, wake_pending: Arc::new(AtomicBool::new(false)), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
         let mut spawn_count = 0;
         let mut delays = Vec::new();
 

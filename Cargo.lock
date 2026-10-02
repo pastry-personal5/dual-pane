@@ -325,6 +325,7 @@ dependencies = [
  "dual-pane-adapters",
  "dual-pane-application",
  "dual-pane-domain",
+ "libc",
  "rusqlite",
  "tempfile",
 ]

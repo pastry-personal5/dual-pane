@@ -5,8 +5,8 @@ use std::pin::Pin;
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QList, QModelIndex, QString, QVariant};
-use dual_pane_adapters::{BrowserViewModel, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent};
-use dual_pane_domain::{BrowserSide, SortDirection, SortField, SortSpec, TabId};
+use dual_pane_adapters::{BrowserViewModel, EditorOutcome, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent};
+use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection, SortField, SortSpec, TabId};
 
 use crate::workspace_bridge::{revision, with_session};
 
@@ -47,6 +47,11 @@ pub mod ffi {
         /// The effective sort as `field * 2 + descending`, with fields Name,
         /// Type, Date, Size, or -1 before a folder is shown.
         #[qproperty(i32, sort_choice, cxx_name = "sortChoice", READ, NOTIFY)]
+        /// Changes with each refused file command's Status Bar reason.
+        #[qproperty(i32, status_token, cxx_name = "statusToken", READ, NOTIFY)]
+        #[qproperty(bool, missing_folder, cxx_name = "missingFolder", READ, NOTIFY)]
+        /// Changes whenever an inline name editor may open.
+        #[qproperty(i32, editor_revision, cxx_name = "editorRevision", READ, NOTIFY)]
         type FolderItemsListModel = super::FolderItemsListModelRust;
 
         #[cxx_override]
@@ -160,7 +165,66 @@ pub mod ffi {
         fn scroll_hint_row(self: &FolderItemsListModel) -> i32;
         #[cxx_name = "scrollHintOffset"]
         fn scroll_hint_offset(self: &FolderItemsListModel) -> i32;
+
+        /// Whether a file command could start now. `command` is 0 Copy,
+        /// 1 Move, 2 Rename, 3 New Folder, 4 Move to Trash, and 5 Delete
+        /// Permanently.
+        #[cxx_name = "fileCommandAvailable"]
+        fn file_command_available(self: &FolderItemsListModel, command: i32) -> bool;
+        /// Starts a file command; Rename and New Folder ask to open their
+        /// editor. A refusal shows in the Status Bar.
+        #[cxx_name = "startFileCommand"]
+        fn start_file_command(self: Pin<&mut FolderItemsListModel>, command: i32);
+        /// Clears the Status Bar reason `token` named, if it still shows.
+        #[cxx_name = "expireStatus"]
+        fn expire_status(self: Pin<&mut FolderItemsListModel>, token: i32);
+        /// The editor that may open: its command code, the renamed row or -1
+        /// for New Folder, and its starting text.
+        #[cxx_name = "editorCommand"]
+        fn editor_command(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "editorRow"]
+        fn editor_row(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "editorText"]
+        fn editor_text(self: &FolderItemsListModel) -> QString;
+        /// Commits an editor's name, closing the job `previous` refused. Returns
+        /// the new job, -1 when the editor closes, or -2 with `nameError`.
+        #[cxx_name = "commitName"]
+        fn commit_name(self: Pin<&mut FolderItemsListModel>, command: i32, text: &QString, previous: i64) -> i64;
+        #[cxx_name = "nameError"]
+        fn name_error(self: &FolderItemsListModel) -> QString;
+        /// What an editor waiting on `job` shows: 0 pending, 1 refused with
+        /// `editorOutcomeText`, 2 done, 3 closed.
+        #[cxx_name = "editorOutcome"]
+        fn editor_outcome(self: &FolderItemsListModel, job: i64) -> i32;
+        #[cxx_name = "editorOutcomeText"]
+        fn editor_outcome_text(self: &FolderItemsListModel, job: i64) -> QString;
+        /// Closes the job whose name the person abandoned.
+        #[cxx_name = "cancelOperation"]
+        fn cancel_operation(self: Pin<&mut FolderItemsListModel>, job: i64);
+        #[cxx_name = "rowIsPackage"]
+        fn row_is_package(self: &FolderItemsListModel, row: i32) -> bool;
+        #[cxx_name = "showPackageContents"]
+        fn show_package_contents(self: Pin<&mut FolderItemsListModel>, row: i32);
     }
+}
+
+/// The file command a Qt `command` code names.
+pub fn operation_command(code: i32) -> Option<OperationCommand> {
+    usize::try_from(code).ok().and_then(|code| OperationCommand::ALL.get(code)).copied()
+}
+
+/// The Qt code for `command`.
+fn command_code(command: OperationCommand) -> i32 {
+    OperationCommand::ALL.iter().position(|candidate| *candidate == command).map_or(-1, qt_int)
+}
+
+/// The job a Qt `i64` names, or `None` for a negative value.
+pub fn operation_id(job: i64) -> Option<OperationId> {
+    u64::try_from(job).ok().map(OperationId::new)
+}
+
+fn job_code(id: OperationId) -> i64 {
+    i64::try_from(id.get()).unwrap_or(-1)
 }
 
 const DISPLAY_ROLE: i32 = 0;
@@ -218,12 +282,16 @@ pub struct FolderItemsListModelRust {
     tabs_revision: i32,
     toolbar_state: i32,
     sort_choice: i32,
+    status_token: i32,
+    missing_folder: bool,
+    editor_revision: i32,
+    name_error: QString,
     browser: BrowserSide,
     shown: BrowserViewModel,
 }
 impl Default for FolderItemsListModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), cursor_row: -1, selection_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, browser: BrowserSide::Left, shown: BrowserViewModel::default() }
+        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), cursor_row: -1, selection_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default() }
     }
 }
 
@@ -287,6 +355,10 @@ impl ffi::FolderItemsListModel {
         self.as_mut().set_toolbar_state(flags);
         self.as_mut().set_sort_choice(sort);
         self.as_mut().set_tabs_revision(tabs);
+        let (token, missing, editor) = (revision(self.rust().shown.status_token()), self.rust().shown.missing_folder(), revision(self.rust().shown.editor_revision()));
+        self.as_mut().set_status_token(token);
+        self.as_mut().set_missing_folder(missing);
+        self.as_mut().set_editor_revision(editor);
     }
     /// Replaces the shown view, notifying Qt of only the rows that changed
     /// when the new listing is a same-folder reload of the shown one.
@@ -431,6 +503,97 @@ impl ffi::FolderItemsListModel {
         let browser = self.rust().browser;
         with_session(|session| session.submit_ui(browser, event));
         self.as_mut().session_changed();
+    }
+
+    fn file_command_available(&self, command: i32) -> bool {
+        let browser = self.rust().browser;
+        operation_command(command).and_then(|command| with_session(|session| session.file_command_available(browser, command))).unwrap_or(false)
+    }
+    fn start_file_command(self: Pin<&mut Self>, command: i32) {
+        if let Some(command) = operation_command(command) {
+            self.submit_ui(UiEvent::FileCommand(command));
+        }
+    }
+    fn expire_status(mut self: Pin<&mut Self>, token: i32) {
+        let browser = self.rust().browser;
+        // The token is the view model's counter truncated like every revision.
+        let current = self.rust().shown.status_token();
+        if revision(current) == token {
+            with_session(|session| session.expire_status(browser, current));
+            self.as_mut().session_changed();
+        }
+    }
+    fn editor_command(&self) -> i32 {
+        self.rust().shown.editor().map_or(-1, |editor| command_code(editor.command))
+    }
+    fn editor_row(&self) -> i32 {
+        self.rust().shown.editor().and_then(|editor| editor.row).map_or(-1, qt_int)
+    }
+    fn editor_text(&self) -> QString {
+        self.rust().shown.editor().map_or_else(QString::default, |editor| QString::from(editor.text.as_str()))
+    }
+    fn commit_name(mut self: Pin<&mut Self>, command: i32, text: &QString, previous: i64) -> i64 {
+        let browser = self.rust().browser;
+        let Some(command) = operation_command(command) else { return -1 };
+        let text = text.to_string();
+        let result = with_session(|session| session.commit_name(browser, command, &text, operation_id(previous))).unwrap_or(Ok(None));
+        self.as_mut().session_changed();
+        match result {
+            Ok(Some(job)) => job_code(job),
+            Ok(None) => -1,
+            Err(error) => {
+                self.as_mut().rust_mut().get_mut().name_error = QString::from(error);
+                -2
+            }
+        }
+    }
+    fn name_error(&self) -> QString {
+        self.rust().name_error.clone()
+    }
+    fn editor_outcome(&self, job: i64) -> i32 {
+        match operation_id(job).and_then(|job| with_session(|session| session.editor_outcome(job))) {
+            Some(EditorOutcome::Pending) => 0,
+            Some(EditorOutcome::Rejected(_)) => 1,
+            Some(EditorOutcome::Succeeded) => 2,
+            Some(EditorOutcome::Closed) | None => 3,
+        }
+    }
+    fn editor_outcome_text(&self, job: i64) -> QString {
+        match operation_id(job).and_then(|job| with_session(|session| session.editor_outcome(job))) {
+            Some(EditorOutcome::Rejected(text)) => QString::from(text),
+            _ => QString::default(),
+        }
+    }
+    fn cancel_operation(mut self: Pin<&mut Self>, job: i64) {
+        if let Some(id) = operation_id(job) {
+            with_session(|session| session.submit(dual_pane_application::Command::CancelOperation { id }));
+            self.as_mut().session_changed();
+        }
+    }
+    fn row_is_package(&self, row: i32) -> bool {
+        usize::try_from(row).is_ok_and(|row| self.rust().shown.is_package(row))
+    }
+    fn show_package_contents(self: Pin<&mut Self>, row: i32) {
+        self.row_event(row, |row| UiEvent::ShowPackageContents { row });
+    }
+
+    fn set_status_token(mut self: Pin<&mut Self>, value: i32) {
+        if self.rust().status_token != value {
+            self.as_mut().rust_mut().get_mut().status_token = value;
+            self.status_token_changed();
+        }
+    }
+    fn set_missing_folder(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().missing_folder != value {
+            self.as_mut().rust_mut().get_mut().missing_folder = value;
+            self.missing_folder_changed();
+        }
+    }
+    fn set_editor_revision(mut self: Pin<&mut Self>, value: i32) {
+        if self.rust().editor_revision != value {
+            self.as_mut().rust_mut().get_mut().editor_revision = value;
+            self.editor_revision_changed();
+        }
     }
 
     fn tab(&self, index: i32) -> Option<&dual_pane_adapters::TabViewModel> {

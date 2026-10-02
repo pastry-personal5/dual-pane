@@ -19,6 +19,20 @@ pub struct Entry {
     name: EntryName,
     kind: EntryKind,
     metadata: EntryMetadata,
+    package: bool,
+}
+
+/// What activating one entry does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// Navigate into the folder.
+    Enter,
+    /// Open with the default application: a regular file or a package.
+    Open,
+    /// A link: only its resolved target decides between entering and opening.
+    Resolve,
+    /// Nothing, as for a socket or device.
+    None,
 }
 
 /// Direct, non-recursive metadata supplied by a directory reader. Missing
@@ -49,7 +63,31 @@ impl Entry {
     }
 
     pub fn with_metadata(name: EntryName, kind: EntryKind, metadata: EntryMetadata) -> Self {
-        Self { name, kind, metadata }
+        Self { name, kind, metadata, package: false }
+    }
+
+    /// Marks a directory as a macOS package, such as an application bundle.
+    /// Only a directory can be a package.
+    pub fn with_package(mut self, package: bool) -> Self {
+        self.package = package && self.kind == EntryKind::Directory;
+        self
+    }
+
+    /// Whether this directory is a macOS package. Copy and move still treat it
+    /// as a directory.
+    pub fn is_package(&self) -> bool {
+        self.package
+    }
+
+    /// What activating this entry does: a package opens instead of entering.
+    pub fn activation(&self) -> Activation {
+        match self.kind {
+            EntryKind::Directory if self.package => Activation::Open,
+            EntryKind::Directory => Activation::Enter,
+            EntryKind::File => Activation::Open,
+            EntryKind::Symlink { .. } => Activation::Resolve,
+            EntryKind::Other => Activation::None,
+        }
     }
 
     pub fn name(&self) -> &EntryName {

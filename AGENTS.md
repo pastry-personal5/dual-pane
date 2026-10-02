@@ -6,7 +6,7 @@ This file is the **single source of agent instructions**. Do not create `CLAUDE.
 
 ## Project
 
-`dual-pane` is a dual-Browser file manager for macOS, written in Rust with a Qt 6 Widgets UI. Version 2.0.0 has been released; it shows two dark Browsers that read real directories on separate workers. The Qt-free domain, application, and adapter crates own and test Folder Items, tabs and history, selection, navigation, sort, Favorites, settings, and error behavior. File operations are not included yet.
+`dual-pane` is a dual-Browser file manager for macOS, written in Rust with a Qt 6 Widgets UI. Version 2.0.0 has been released; it shows two dark Browsers that read real directories on separate workers. The Qt-free domain, application, and adapter crates own and test Folder Items, tabs and history, selection, navigation, sort, Favorites, settings, file-operation workflow, and error behavior. The desktop crate executes file operations on a two-worker lane with a safety journal; P3-M8 is completing them.
 
 See [README.md](README.md) for the user-facing overview, [docs/product-behavior.md](docs/product-behavior.md) for product scope, and [docs/architecture.md](docs/architecture.md) for architecture. Design and process docs are indexed at [docs/README.md](docs/README.md).
 
@@ -67,7 +67,7 @@ Follow the dependency, ownership, concurrency, and implementation-boundary rules
 ## Code conventions
 
 - Use default `rustfmt` formatting. No `clippy` warnings.
-- Limit `unsafe` to what CXX-Qt bridges require. Any other `unsafe` block needs a `// SAFETY:` comment that explains why it is sound.
+- Limit `unsafe` to what CXX-Qt bridges require and to the macOS file calls in `crates/dual-pane-desktop/src/native_calls.rs`, the only module that calls `libc`. Any other `unsafe` block needs a `// SAFETY:` comment that explains why it is sound.
 - Return errors as `Result` and don't `unwrap()` or `expect()` on I/O in non-test code. File operations fail routinely (permissions, missing files, full disks) and must be reported to the user.
 - Don't use phase words such as `phase`, `phase-1`, `phase1`, or `phase_1` in source-code names: crates, modules, files, types, functions, variables, constants, tests, or build and script targets. Name code after the concept it owns.
 - Don't use `MVP` in any form (`MVP`, `mvp`, `Mvp`) anywhere in source code or scripts, including identifiers, comments, and strings. Those terms belong only in `docs/`.

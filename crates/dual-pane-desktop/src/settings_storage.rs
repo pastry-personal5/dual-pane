@@ -760,4 +760,23 @@ mod tests {
         SettingsDatabase::open(&path).unwrap().save(&state.snapshot()).unwrap();
         assert_eq!(loaded_binding(&path, ActionId::QuitApplication), Some(None));
     }
+
+    #[test]
+    fn a_reset_never_moves_or_changes_the_operation_journal() {
+        use crate::operation_journal::{JOURNAL_FILE_NAME, Journal, LaunchId, journal_path};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.sqlite3");
+        let database = SettingsDatabase::open(&path).unwrap();
+        let journal = Journal::new(Some(journal_path(&path)), LaunchId::generate());
+        assert!(journal.reopen());
+        journal.record(1, directory.path(), 0).unwrap();
+        let journal_files = |directory: &Path| fs::read_dir(directory).unwrap().filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).filter(|name| name.starts_with(JOURNAL_FILE_NAME)).collect::<std::collections::BTreeSet<_>>();
+        let before = journal_files(directory.path());
+        let contents = fs::read(directory.path().join(JOURNAL_FILE_NAME)).unwrap();
+        let (_, result) = reset_database(&path, Some(database));
+        assert!(result.unwrap().is_some(), "the settings database was preserved aside");
+        assert_eq!(journal_files(directory.path()), before, "no journal file moved");
+        assert_eq!(fs::read(directory.path().join(JOURNAL_FILE_NAME)).unwrap(), contents);
+        assert_eq!(journal.folders(1), vec![directory.path().to_path_buf()], "the record is still there");
+    }
 }

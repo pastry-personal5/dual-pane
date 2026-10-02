@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, BrowserChrome, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, Notice, NoticeKind, OperationEffect, OperationJob, Output, RowChange, SettingsFailure, SettingsState, SettingsStatus, TabSummary, WorkRequest, WorkspaceChrome, fresh_profile_favorites, fresh_profile_screenshots};
-use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, valid_favorite_name};
+use crate::{ActionBinding, BrowserChrome, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, ResolvedTarget, RowChange, SettingsFailure, SettingsState, SettingsStatus, TabSummary, WorkRequest, WorkspaceChrome, fresh_profile_favorites, fresh_profile_screenshots};
+use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
 pub const NOTICE_LIMIT: usize = 200;
@@ -55,6 +55,25 @@ pub struct Workspace {
     next_favorite_group_id: i64,
     next_favorite_item_id: i64,
     operations: OperationCoordinator,
+    /// The Browser and tab each running job started from.
+    operation_origins: HashMap<OperationId, (BrowserSide, TabId)>,
+    /// Whether the runtime can record temporaries, which Copy needs. It
+    /// counts as available until the runtime reports otherwise.
+    journal_available: bool,
+    /// The Item to select once a refreshed listing shows it, after a
+    /// successful Rename or New Folder.
+    pending_selection: Option<PendingSelection>,
+    /// The latest link activation waiting for its target to resolve.
+    pending_open: Option<(BrowserSide, TabId, RequestToken)>,
+    /// Set once quitting was accepted; no new operation starts.
+    quitting: bool,
+}
+#[derive(Debug, Clone)]
+struct PendingSelection {
+    browser: BrowserSide,
+    tab: TabId,
+    folder: Location,
+    name: EntryName,
 }
 /// One Browser: the domain's ordered tab identities and active tab, plus the
 /// application's per-tab state, which is stored in no particular order.
@@ -99,7 +118,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         match input {
@@ -110,9 +129,14 @@ impl Workspace {
     fn command(&mut self, command: Command) -> Transition {
         match command {
             Command::StartOperation { browser, tab, kind } => self.start_operation(browser, tab, kind),
+            Command::RequestNameEditor { browser, tab, command } => self.request_name_editor(browser, tab, command),
+            Command::RetryName { id, name } => self.retry_name(id, name),
             Command::ConfirmPermanentDelete { id, targets } => self.operation_transition(id, |operations| operations.confirm_delete(id, targets)),
             Command::DecideOperation { id, token, item, choice, apply_to_all } => self.operation_transition(id, |operations| operations.decide(id, token, &item, choice, apply_to_all)),
             Command::CancelOperation { id } => self.operation_transition(id, |operations| operations.cancel(id)),
+            Command::DismissOperation { id } => self.dismiss_operation(id),
+            Command::RetryJournal => Transition { outputs: vec![], work: vec![WorkRequest::ReopenJournal] },
+            Command::Quit { confirmed } => self.quit(confirmed),
             Command::ActivateBrowser { browser } => self.activate_browser(browser),
             Command::ActivateTab { browser, tab } => self.activate_tab(browser, tab),
             Command::NewTab { browser } => self.new_tab(browser),
@@ -141,6 +165,7 @@ impl Workspace {
             Command::SelectAll { browser, tab } => self.on_active(browser, tab, |workspace| workspace.change_visit(browser, None, VisitState::select_all)),
             Command::ClearSelection { browser, tab } => self.on_active(browser, tab, |workspace| workspace.clear_selection(browser)),
             Command::OpenEntry { browser, tab, row, name } => self.on_active(browser, tab, |workspace| workspace.open_entry(browser, row, &name)),
+            Command::ShowPackageContents { browser, tab, row, name } => self.on_active(browser, tab, |workspace| workspace.show_package_contents(browser, row, &name)),
             Command::UpdateScrollHint { browser, tab, scroll } => self.on_active(browser, tab, |workspace| workspace.scroll(browser, scroll)),
         }
     }
@@ -148,8 +173,23 @@ impl Workspace {
         match event {
             Event::OperationScanned { id, generation, plan } => self.operation_transition(id, |operations| operations.scanned(id, generation, plan)),
             Event::OperationStepped { id, generation, result } => self.operation_transition(id, |operations| operations.step_result(id, generation, result)),
+            Event::OperationFinalized { id, generation, result } => self.operation_transition(id, |operations| operations.finalized(id, generation, result)),
             Event::OperationCleaned { id, generation, result } => self.operation_transition(id, |operations| operations.cleaned(id, generation, result)),
             Event::OperationExecutorUnavailable { id, generation } => self.operation_transition(id, |operations| operations.unavailable(id, generation)),
+            Event::OperationProgress { id, generation, bytes } => self.operation_transition(id, |operations| operations.bytes_copied(id, generation, bytes)),
+            Event::ItemResolved { browser, tab, token, item, target } => self.item_resolved(browser, tab, token, item, target),
+            Event::OpenFailed { item } => self.add_notice(NoticeKind::OpenFailed { item }),
+            Event::JournalStatus { available } => {
+                self.journal_available = available;
+                if available { Transition::default() } else { self.add_notice(NoticeKind::JournalUnavailable) }
+            }
+            Event::TemporariesSwept { removed, failed } => {
+                if removed == 0 && failed.is_empty() {
+                    Transition::default()
+                } else {
+                    self.add_notice(NoticeKind::TemporariesSwept { removed, failed })
+                }
+            }
             Event::LocationInvalidated { location } => self.refresh_location(&location),
             Event::FolderItemsLoaded { browser, tab, token, entries, changes } => self.loaded(browser, tab, token, entries, changes),
             Event::FolderItemsFailed { browser, tab, token, kind } => self.failed(browser, tab, token, kind),
@@ -206,6 +246,25 @@ impl Workspace {
     }
     /// The same validation drives command enablement and command acceptance.
     pub fn operation_availability(&self, browser: BrowserSide, tab: TabId, kind: OperationKind) -> Result<OperationIntent, OperationRejection> {
+        let (source, targets, destination) = self.capture(browser, tab, kind.command())?;
+        let intent = OperationIntent::new(kind, source, targets, destination)?;
+        self.journal_check(intent.kind().command())?;
+        Ok(intent)
+    }
+    /// Whether a file command could start from `tab` before any name is
+    /// typed, for menu enablement. It applies every check of
+    /// [`Self::operation_availability`] except the name's.
+    pub fn command_availability(&self, browser: BrowserSide, tab: TabId, command: OperationCommand) -> Result<(), OperationRejection> {
+        let (source, targets, destination) = self.capture(browser, tab, command)?;
+        OperationIntent::check(command, &source, &targets, destination.as_ref())?;
+        self.journal_check(command)
+    }
+    fn journal_check(&self, command: OperationCommand) -> Result<(), OperationRejection> {
+        if command == OperationCommand::Copy && !self.journal_available { Err(OperationRejection::JournalUnavailable) } else { Ok(()) }
+    }
+    /// The confirmed source folder, the selected targets in listing order,
+    /// and for Copy and Move the other Browser's confirmed folder.
+    fn capture(&self, browser: BrowserSide, tab: TabId, command: OperationCommand) -> Result<(Location, Vec<OperationTarget>, Option<Location>), OperationRejection> {
         if self.active_tab(browser) != tab {
             return Err(OperationRejection::StaleTab);
         }
@@ -215,7 +274,7 @@ impl Workspace {
         }
         let items = source_tab.folder_items.as_ref().ok_or(OperationRejection::SourceUnavailable)?;
         let selected = source_tab.history.current().map(|visit| visit.state().selection().entries()).unwrap_or(&[]);
-        let targets = if matches!(kind, OperationKind::NewFolder { .. }) {
+        let targets = if command == OperationCommand::NewFolder {
             vec![]
         } else {
             let selected_names: HashSet<_> = selected.iter().collect();
@@ -228,7 +287,7 @@ impl Workspace {
             }
             targets
         };
-        let destination = if matches!(kind, OperationKind::Copy | OperationKind::Move) {
+        let destination = if matches!(command, OperationCommand::Copy | OperationCommand::Move) {
             let other = match browser {
                 BrowserSide::Left => BrowserSide::Right,
                 BrowserSide::Right => BrowserSide::Left,
@@ -241,23 +300,142 @@ impl Workspace {
         } else {
             None
         };
-        OperationIntent::new(kind, items.location.clone(), targets, destination)
+        Ok((items.location.clone(), targets, destination))
     }
     fn start_operation(&mut self, browser: BrowserSide, tab: TabId, kind: OperationKind) -> Transition {
-        match self.operation_availability(browser, tab, kind.clone()) {
+        if self.quitting {
+            return Transition::default();
+        }
+        let command = kind.command();
+        match self.operation_availability(browser, tab, kind) {
             Ok(intent) => {
                 let (id, effects) = self.operations.start(intent);
+                self.operation_origins.insert(id, (browser, tab));
                 self.operation_output(id, effects)
             }
-            Err(reason) => Transition::output(Output::OperationRejected { browser, tab, kind, reason }),
+            Err(reason) => Transition::output(Output::OperationRejected { browser, tab, command, reason }),
         }
     }
+    fn request_name_editor(&self, browser: BrowserSide, tab: TabId, command: OperationCommand) -> Transition {
+        if !matches!(command, OperationCommand::Rename | OperationCommand::NewFolder) {
+            return Transition::default();
+        }
+        match self.capture(browser, tab, command).and_then(|(source, targets, destination)| OperationIntent::check(command, &source, &targets, destination.as_ref()).map(|()| targets)) {
+            Ok(targets) => Transition::output(Output::NameEditorOpened { browser, tab, command, target: targets.into_iter().next().map(|target| target.name) }),
+            Err(reason) => Transition::output(Output::OperationRejected { browser, tab, command, reason }),
+        }
+    }
+    fn retry_name(&mut self, id: OperationId, name: EntryName) -> Transition {
+        let Some(job) = self.operations.job(id).filter(|job| job.name_problem().is_some()) else { return Transition::default() };
+        let intent = job.intent().clone();
+        let kind = match intent.kind() {
+            OperationKind::Rename { .. } => OperationKind::Rename { to: name },
+            OperationKind::NewFolder { .. } => OperationKind::NewFolder { name },
+            _ => return Transition::default(),
+        };
+        let command = kind.command();
+        let origin = self.operation_origins.get(&id).copied();
+        match OperationIntent::new(kind, intent.source().clone(), intent.targets().to_vec(), intent.destination().cloned()) {
+            Err(reason) => origin.map_or_else(Transition::default, |(browser, tab)| Transition::output(Output::OperationRejected { browser, tab, command, reason })),
+            Ok(retry) => {
+                let mut transition = self.operation_transition(id, |operations| operations.cancel(id));
+                let (new_id, effects) = self.operations.start(retry);
+                if let Some(origin) = origin {
+                    self.operation_origins.insert(new_id, origin);
+                }
+                transition.append(self.operation_output(new_id, effects));
+                transition
+            }
+        }
+    }
+    /// Applies one operation change. A job that just reached its terminal
+    /// outcome also refreshes affected tabs and records its Notice.
     fn operation_transition(&mut self, id: OperationId, change: impl FnOnce(&mut OperationCoordinator) -> Option<Vec<OperationEffect>>) -> Transition {
-        change(&mut self.operations).map_or_else(Transition::default, |effects| self.operation_output(id, effects))
+        let before = self.operations.job(id).map(|job| job.status().clone());
+        let Some(effects) = change(&mut self.operations) else { return Transition::default() };
+        let mut transition = self.operation_output(id, effects);
+        if let Some(before) = before
+            && !matches!(before, OperationStatus::Finished(_))
+            && let Some(OperationStatus::Finished(outcome)) = self.operations.job(id).map(|job| job.status().clone())
+        {
+            transition.append(self.operation_finished(id, &before, outcome));
+        }
+        transition
     }
     fn operation_output(&self, id: OperationId, effects: Vec<OperationEffect>) -> Transition {
         let Some(job) = self.operations.job(id) else { return Transition::default() };
-        Transition { outputs: vec![Output::OperationChanged { job: job.clone() }], work: effects.into_iter().map(WorkRequest::Operation).collect() }
+        Transition { outputs: vec![Output::OperationChanged { job: Box::new(job.clone()) }], work: effects.into_iter().map(WorkRequest::Operation).collect() }
+    }
+    fn operation_finished(&mut self, id: OperationId, before: &OperationStatus, outcome: OperationOutcome) -> Transition {
+        let origin = self.operation_origins.remove(&id);
+        // A pending confirmation or a refused name closes without having
+        // changed anything, so it leaves no summary.
+        if matches!(before, OperationStatus::AwaitingConfirmation { .. } | OperationStatus::NameCollision { .. } | OperationStatus::NameRejected { .. }) {
+            return Transition::default();
+        }
+        let Some(job) = self.operations.job(id).cloned() else { return Transition::default() };
+        let mut transition = Transition::default();
+        if outcome == OperationOutcome::Succeeded
+            && let OperationKind::Rename { to: name } | OperationKind::NewFolder { name } = job.intent().kind()
+            && let Some((browser, tab)) = origin
+            && self.tab(browser, tab).and_then(|state| state.pending.as_ref().map(|pending| &pending.location).or(state.folder_items.as_ref().map(|items| &items.location))) == Some(job.intent().source())
+        {
+            self.pending_selection = Some(PendingSelection { browser, tab, folder: job.intent().source().clone(), name: name.clone() });
+        }
+        // Only completed entries change listings; this launch's temporaries,
+        // even ones cleanup could not remove, are never listed.
+        if job.progress().completed > 0 {
+            transition.append(self.refresh_affected(job.intent()));
+        }
+        transition.append(self.add_notice(NoticeKind::OperationFinished { intent: job.intent().clone(), outcome, progress: job.progress(), failure: job.failure().cloned() }));
+        transition
+    }
+    /// Rereads every open tab, in either Browser, whose location is the
+    /// operation's source or destination folder or lies at or below one of
+    /// its source or destination roots.
+    fn refresh_affected(&mut self, intent: &OperationIntent) -> Transition {
+        let source = intent.source();
+        let mut folders = vec![source.clone()];
+        folders.extend(intent.destination().cloned());
+        let mut roots = match intent.kind() {
+            OperationKind::NewFolder { name } => vec![source.join(name)],
+            OperationKind::Rename { to } => vec![source.join(to)],
+            _ => vec![],
+        };
+        for target in intent.targets() {
+            roots.push(source.join(&target.name));
+            roots.extend(intent.destination().map(|destination| destination.join(&target.name)));
+        }
+        let affected = |location: &Location| folders.contains(location) || roots.iter().any(|root| starts_with(location, root));
+        let targets = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|side| self.browser(side).tabs.iter().filter(|tab| tab.pending.as_ref().map(|pending| &pending.location).or(tab.folder_items.as_ref().map(|items| &items.location)).is_some_and(affected)).map(move |tab| (side, tab.id))).collect::<Vec<_>>();
+        targets.into_iter().fold(Transition::default(), |mut total, (side, tab)| {
+            total.append(self.refresh_tab(side, tab));
+            total
+        })
+    }
+    /// Removes a finished job and lets the runtime release what it kept.
+    fn dismiss_operation(&mut self, id: OperationId) -> Transition {
+        if !self.operations.dismiss(id) {
+            return Transition::default();
+        }
+        self.operation_origins.remove(&id);
+        Transition { outputs: vec![Output::OperationDismissed { id }], work: vec![WorkRequest::Operation(OperationEffect::Release { id })] }
+    }
+    /// Asks for confirmation while operations are active; otherwise, or once
+    /// confirmed, cancels every unfinished job and accepts the quit.
+    fn quit(&mut self, confirmed: bool) -> Transition {
+        let running = self.operations.jobs().iter().filter(|job| job.is_active()).count();
+        if running > 0 && !confirmed {
+            return Transition::output(Output::QuitConfirmationRequired { running });
+        }
+        self.quitting = true;
+        let unfinished = self.operations.jobs().iter().filter(|job| !matches!(job.status(), OperationStatus::Finished(_))).map(OperationJob::id).collect::<Vec<_>>();
+        let mut transition = unfinished.into_iter().fold(Transition::default(), |mut total, id| {
+            total.append(self.operation_transition(id, |operations| operations.cancel(id)));
+            total
+        });
+        transition.outputs.push(Output::QuitAccepted);
+        transition
     }
     pub fn favorites(&self) -> &FavoritesRecords {
         self.settings.favorites()
@@ -357,6 +535,9 @@ impl Workspace {
         };
         let was_active = self.active_tab(browser) == tab;
         let final_tab = self.browser(browser).order.tabs().len() == 1;
+        if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab) {
+            self.pending_selection = None;
+        }
         let replacement = if final_tab {
             let id = TabId::new(self.next_tab);
             self.next_tab += 1;
@@ -396,8 +577,11 @@ impl Workspace {
         self.start_read(browser, tab, location, history_target)
     }
     fn start_read(&mut self, browser: BrowserSide, tab: TabId, location: Location, history_target: Option<usize>) -> Transition {
-        let token = self.last_token.map_or_else(RequestToken::first, RequestToken::next);
-        self.last_token = Some(token);
+        // Navigating elsewhere forgets an Item still waiting to be selected.
+        if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab && pending.folder != location) {
+            self.pending_selection = None;
+        }
+        let token = self.next_token();
         let sort = self.settings.sort_for(&location);
         let previous = self.tab(browser, tab).and_then(|state| state.folder_items.as_ref()).filter(|items| items.location == location).map(|items| Arc::clone(&items.entries));
         let old = self.tab_mut(browser, tab).and_then(|state| {
@@ -407,6 +591,11 @@ impl Workspace {
         let mut work = old.into_iter().map(|old| WorkRequest::Cancel { browser, tab, token: old.token }).collect::<Vec<_>>();
         work.push(WorkRequest::ReadDirectory { browser, tab, token, location: location.clone(), sort, previous });
         Transition { outputs: vec![Output::LoadingStarted { browser, tab, location }], work }
+    }
+    fn next_token(&mut self) -> RequestToken {
+        let token = self.last_token.map_or_else(RequestToken::first, RequestToken::next);
+        self.last_token = Some(token);
+        token
     }
     /// The history entry one step back or forward from the active tab. A Back
     /// or Forward that is still loading counts as taken, so repeated presses
@@ -566,7 +755,15 @@ impl Workspace {
         self.next_notice_id += 1;
         let skip = (self.notices.len() + 1).saturating_sub(NOTICE_LIMIT);
         self.notices = self.notices.iter().skip(skip).cloned().chain([notice.clone()]).collect();
-        let open = offers_reset || matches!(notice.kind, NoticeKind::SettingsReset { .. });
+        // Failures the person can act on, or should review, open Notices; a
+        // success is only recorded.
+        let open = offers_reset
+            || match &notice.kind {
+                NoticeKind::SettingsReset { .. } | NoticeKind::JournalUnavailable | NoticeKind::OpenFailed { .. } => true,
+                NoticeKind::OperationFinished { outcome, .. } => matches!(outcome, OperationOutcome::Partial | OperationOutcome::Failed | OperationOutcome::CleanupUncertain),
+                NoticeKind::TemporariesSwept { failed, .. } => !failed.is_empty(),
+                _ => false,
+            };
         Transition::output(Output::NoticeAdded { notice, open })
     }
     /// Applies one Favorites edit, reporting why it changed nothing.
@@ -710,6 +907,7 @@ impl Workspace {
     }
     fn clear_selection(&mut self, browser: BrowserSide) -> Transition {
         let tab = self.active_tab(browser);
+        self.forget_pending_selection(browser, tab);
         let Some(visit) = self.tab_mut(browser, tab).and_then(|state| state.history.current_mut()) else { return Transition::default() };
         if visit.state_mut().clear_selection() { Transition::output(Output::SelectionChanged { browser, tab, selection: visit.state().selection().clone(), row: None }) } else { Transition::default() }
     }
@@ -719,6 +917,7 @@ impl Workspace {
     /// looks the unchanged cursor up instead.
     fn change_visit(&mut self, browser: BrowserSide, cursor_row: Option<usize>, gesture: impl FnOnce(&mut VisitState, &[Entry]) -> bool) -> Transition {
         let tab = self.active_tab(browser);
+        self.forget_pending_selection(browser, tab);
         let Some(TabState { history, folder_items: Some(items), .. }) = self.tab_mut(browser, tab) else { return Transition::default() };
         let Some(visit) = history.current_mut() else { return Transition::default() };
         if !gesture(visit.state_mut(), &items.entries) {
@@ -726,8 +925,53 @@ impl Workspace {
         }
         Transition::output(Output::SelectionChanged { browser, tab, selection: visit.state().selection().clone(), row: cursor_row.or_else(|| visit.state().cursor_row(&items.entries)) })
     }
+    /// A selection gesture replaces any selection still waiting for a
+    /// refreshed listing.
+    fn forget_pending_selection(&mut self, browser: BrowserSide, tab: TabId) {
+        if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab) {
+            self.pending_selection = None;
+        }
+    }
+    /// The shown entry at `row` if it is still `name`, with its location.
+    fn shown_entry(&self, browser: BrowserSide, row: usize, name: &EntryName) -> Option<(Location, &Entry)> {
+        let items = self.tab(browser, self.active_tab(browser))?.folder_items.as_ref()?;
+        items.entries.get(row).filter(|entry| entry.name() == name).map(|entry| (items.location.join(name), entry))
+    }
     fn open_entry(&mut self, browser: BrowserSide, row: usize, name: &EntryName) -> Transition {
-        self.tab(browser, self.active_tab(browser)).and_then(|t| t.folder_items.as_ref()).and_then(|f| f.entries.get(row).filter(|e| e.name() == name && e.can_enter()).map(|_| f.location.join(name))).map_or_else(Transition::default, |location| self.navigate(browser, location, None))
+        let Some((location, entry)) = self.shown_entry(browser, row, name) else { return Transition::default() };
+        match entry.activation() {
+            Activation::Enter => self.navigate(browser, location, None),
+            Activation::Open => Transition::output(Output::OpenItem { item: location }),
+            Activation::Resolve => {
+                let tab = self.active_tab(browser);
+                let token = self.next_token();
+                self.pending_open = Some((browser, tab, token));
+                Transition { outputs: vec![], work: vec![WorkRequest::ResolveItem { browser, tab, token, item: location }] }
+            }
+            Activation::None => Transition::default(),
+        }
+    }
+    fn show_package_contents(&mut self, browser: BrowserSide, row: usize, name: &EntryName) -> Transition {
+        match self.shown_entry(browser, row, name) {
+            Some((location, entry)) if entry.is_package() => self.navigate(browser, location, None),
+            _ => Transition::default(),
+        }
+    }
+    /// Finishes a link activation while its tab is still active and still
+    /// shows the folder holding the link.
+    fn item_resolved(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, item: Location, target: ResolvedTarget) -> Transition {
+        if self.pending_open != Some((browser, tab, token)) {
+            return Transition::default();
+        }
+        self.pending_open = None;
+        if self.active_tab(browser) != tab || self.location(browser) != item.parent().as_ref() {
+            return Transition::default();
+        }
+        match target {
+            ResolvedTarget::Folder => self.navigate(browser, item, None),
+            ResolvedTarget::File | ResolvedTarget::Package => Transition::output(Output::OpenItem { item }),
+            ResolvedTarget::Unavailable => self.add_notice(NoticeKind::OpenFailed { item }),
+        }
     }
     fn go_to_parent(&mut self, browser: BrowserSide) -> Transition {
         self.location(browser).and_then(Location::parent).map_or_else(Transition::default, |location| self.navigate(browser, location, None))
@@ -743,10 +987,18 @@ impl Workspace {
     }
     fn loaded(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>>) -> Transition {
         let Some(pending) = self.take_pending(browser, tab, token) else { return Transition::default() };
+        // A Rename or New Folder result is selected once, when its folder's
+        // refreshed listing arrives; a listing without it forgets it.
+        let select = self.pending_selection.take_if(|selection| selection.browser == browser && selection.tab == tab && selection.folder == pending.location);
         let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
         state.history.arrive(&pending.location, pending.history_target);
         let Some(visit) = state.history.current_mut() else { return Transition::default() };
         visit.state_mut().reconcile(&entries);
+        if let Some(select) = select
+            && let Some(row) = entries.iter().position(|entry| *entry.name() == select.name)
+        {
+            visit.state_mut().select(&entries, row, &select.name);
+        }
         // A same-folder reload keeps the worker's row change so the view keeps
         // its rows and scroll position. A change computed against anything but
         // the shown Folder Items, or one that does not fit them, replaces every

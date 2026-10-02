@@ -2,11 +2,13 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, FavoritesEvent, InputController, UiEvent, WorkspacePresenter, WorkspaceViewModel};
+use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, EditorOutcome, FavoritesEvent, InputController, OperationsPresenter, OperationsViewModel, UNREPRESENTABLE_NAME_TEXT, UiEvent, WorkspacePresenter, WorkspaceViewModel, name_rejection_text};
 use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteRejection, Input, Output, SettingsFailure, WorkRequest, Workspace};
-use dual_pane_domain::{BrowserSide, Location};
+use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection};
 
-use crate::native_location::location_from_path;
+use crate::native_location::{location_from_path, path_from_location};
+use crate::native_shell::open_with_default_application;
+use crate::operation_journal::LaunchId;
 use crate::runtime::{FolderItemsSourceFactory, LocationProbe, Runtime, WorkRunner};
 use crate::settings_storage::{SettingsJob, SettingsResult, SettingsWorker};
 
@@ -21,6 +23,10 @@ pub const DRAIN_TIME_BUDGET: Duration = Duration::from_millis(4);
 /// loop has exited.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How long quitting may wait for cancelled file operations to clean up.
+/// Anything left is swept at the next launch.
+pub const OPERATION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// What the desktop needs to start: where both Browsers open and how they read
 /// listings and probe locations.
 pub struct BrowserStartup {
@@ -30,7 +36,13 @@ pub struct BrowserStartup {
     pub settings_path: Option<PathBuf>,
     pub source_factory: FolderItemsSourceFactory,
     pub location_probe: LocationProbe,
+    /// This launch's identity, carried by every operation temporary.
+    pub launch: LaunchId,
 }
+
+/// Opens an item with its default application on the GUI thread and reports
+/// whether macOS accepted the request.
+pub type Opener = Box<dyn FnMut(&Location) -> bool + Send>;
 
 /// GUI-thread coordinator for the Standard Layout. It owns one workspace and
 /// one runtime while keeping the two presentation models independent.
@@ -40,12 +52,14 @@ pub struct WorkspaceSession<R = Runtime> {
     left: BrowserPresenter,
     right: BrowserPresenter,
     sidebar: WorkspacePresenter,
+    operations: OperationsPresenter,
     runner: R,
     settings_worker: Option<SettingsWorker>,
     drain_slice: usize,
     drain_time_budget: Duration,
     buffered_events: VecDeque<dual_pane_application::Event>,
     runner_more_pending: bool,
+    opener: Opener,
 }
 
 impl<R: WorkRunner> WorkspaceSession<R> {
@@ -64,7 +78,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             worker.submit(SettingsJob::Load);
         }
         let missing_worker = settings_worker.is_none();
-        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false };
+        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))) };
         session.apply_chrome();
         if missing_worker {
             session.submit(Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable });
@@ -72,9 +86,11 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         session
     }
 
-    /// Flushes unsaved settings and waits at most `timeout` for them to reach
+    /// Lets cancelled file operations clean up for a bounded time, flushes
+    /// unsaved settings and waits at most `timeout` for them to reach
     /// storage. Dropping the runtime then cancels outstanding reads.
-    pub fn shutdown(self, timeout: Duration) {
+    pub fn shutdown(mut self, timeout: Duration) {
+        self.runner.finish_operations(OPERATION_SHUTDOWN_TIMEOUT);
         let final_save = match self.workspace.final_settings_save() {
             Some(WorkRequest::SaveSettings { revision, snapshot }) => Some((revision, snapshot)),
             _ => None,
@@ -90,30 +106,130 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     }
 
     pub fn submit(&mut self, input: impl Into<Input>) {
-        self.submit_and_report(input.into());
+        self.handle_all(input.into());
     }
 
     /// Handles `input` and every terminal event its work returns at once, and
     /// reports a Favorites rejection among the results.
     fn submit_and_report(&mut self, input: Input) -> Option<(FavoriteEdit, FavoriteRejection)> {
-        let mut rejection = None;
+        self.handle_all(input).iter().rev().find_map(|output| match output {
+            Output::FavoriteEditRejected { edit, reason } => Some((*edit, *reason)),
+            _ => None,
+        })
+    }
+
+    /// Handles `input`, every terminal event its work returns at once, and
+    /// the dismissals presentation asks for, then returns every output.
+    fn handle_all(&mut self, input: Input) -> Vec<Output> {
+        let mut outputs = Vec::new();
         let mut inputs = VecDeque::from([input]);
         while let Some(input) = inputs.pop_front() {
             let transition = self.workspace.handle(input);
             for output in &transition.outputs {
-                if let Output::FavoriteEditRejected { edit, reason } = output {
-                    rejection = Some((*edit, *reason));
+                // Opening is a GUI-thread request; a refusal returns as an event.
+                if let Output::OpenItem { item } = output
+                    && !(self.opener)(item)
+                {
+                    inputs.push_back(Event::OpenFailed { item: item.clone() }.into());
                 }
                 self.left.apply(output);
                 self.right.apply(output);
                 self.sidebar.apply(output);
+                self.operations.apply(output);
             }
+            outputs.extend(transition.outputs);
             for request in transition.work {
                 inputs.extend(self.dispatch(request).map(Input::from));
             }
+            inputs.extend(self.operations.take_dismissals().into_iter().map(|id| Input::from(Command::DismissOperation { id })));
         }
         self.apply_chrome();
-        rejection
+        outputs
+    }
+
+    /// Reveals and hides Operation Panels whose delay passed.
+    pub fn tick_operations(&mut self) {
+        self.operations.tick();
+        let dismissals = self.operations.take_dismissals();
+        for id in dismissals {
+            self.submit(Command::DismissOperation { id });
+        }
+    }
+
+    pub fn operations_view(&self) -> &OperationsViewModel {
+        self.operations.view()
+    }
+
+    /// How long until the Operation Panels next need a tick.
+    pub fn next_operations_deadline(&self) -> Option<Duration> {
+        self.operations.next_deadline()
+    }
+
+    /// Whether `command` could start from `browser`'s active tab now, for
+    /// enabling a menu item when the menu opens.
+    pub fn file_command_available(&self, browser: BrowserSide, command: OperationCommand) -> bool {
+        self.workspace.command_availability(browser, self.workspace.active_tab(browser), command).is_ok()
+    }
+
+    /// Clears `browser`'s Status Bar reason when its display time ends.
+    pub fn expire_status(&mut self, browser: BrowserSide, token: u64) {
+        match browser {
+            BrowserSide::Left => self.left.expire_status(token),
+            BrowserSide::Right => self.right.expire_status(token),
+        }
+    }
+
+    /// Starts Rename or New Folder with the editor's `text`. A retry first
+    /// closes the job that refused the previous name. Returns the new job,
+    /// `Ok(None)` when the editor should simply close, as for an unchanged
+    /// name, or the inline error for a name refused before any job.
+    pub fn commit_name(&mut self, browser: BrowserSide, command: OperationCommand, text: &str, previous: Option<OperationId>) -> Result<Option<OperationId>, &'static str> {
+        let name = if text.trim().is_empty() { return Err(name_rejection_text(OperationRejection::InvalidName).unwrap_or_default()) } else { EntryName::new(text).map_err(|_| UNREPRESENTABLE_NAME_TEXT)? };
+        self.submit(Command::ActivateBrowser { browser });
+        // A retry keeps the refused job's frozen target; only a first commit
+        // reads what the tab shows now.
+        let command = match previous {
+            Some(id) => Command::RetryName { id, name },
+            None => match self.controller.name_command(browser, command, name, self.view(browser)) {
+                Some(command) => command,
+                None => return Ok(None),
+            },
+        };
+        let outputs = self.handle_all(command.into());
+        for output in &outputs {
+            match output {
+                Output::OperationChanged { job } if Some(job.id()) != previous => return Ok(Some(job.id())),
+                Output::OperationRejected { reason, .. } => return name_rejection_text(*reason).map_or(Ok(None), Err),
+                _ => {}
+            }
+        }
+        Ok(None)
+    }
+
+    /// What the inline editor of a committed name shows now.
+    pub fn editor_outcome(&self, id: OperationId) -> EditorOutcome {
+        self.operations.editor_outcome(id)
+    }
+
+    /// Applies a choice on the Operation Decision Card that showed `token`.
+    /// A card replaced since then ignores the click.
+    pub fn decide(&mut self, id: OperationId, token: DecisionToken, choice: OperationChoice, apply_to_all: bool) {
+        let Some(card) = self.operations.view().panel(id).and_then(|panel| panel.decision.clone()).filter(|card| card.token == token) else { return };
+        self.submit(Command::DecideOperation { id, token, item: card.item, choice, apply_to_all });
+    }
+
+    /// The person closed a panel; a finished job is dismissed.
+    pub fn close_panel(&mut self, id: OperationId) {
+        if self.operations.close(id) {
+            self.tick_operations();
+        }
+    }
+
+    /// Asks to quit and reports whether quitting may proceed now. With
+    /// running operations the quit prompt opens instead.
+    pub fn request_quit(&mut self, confirmed: bool) -> bool {
+        self.submit(Command::Quit { confirmed });
+        self.operations.view().quit_accepted()
     }
 
     /// Sends settings work to the settings worker and everything else to the
@@ -217,6 +333,7 @@ mod tests {
 
     use dual_pane_adapters::{FavoritesEvent, SelectionMovement};
     use dual_pane_application::{Command, Event, WorkRequest};
+    use dual_pane_domain::OperationCommand;
     use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken, Selection, SortSpec, TabId};
 
     use super::*;
@@ -425,6 +542,71 @@ mod tests {
         session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: first });
         session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: second });
         assert_view(&session, BrowserSide::Left, ("/first", &["two"], None, "You don’t have permission to open “/first”.", false, 6));
+    }
+
+    #[test]
+    fn activating_a_file_opens_it_and_a_refusal_opens_notices() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        let opened = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = Arc::clone(&opened);
+        session.opener = Box::new(move |item| {
+            record.lock().unwrap().push(item.clone());
+            item.components().last().is_some_and(|name| name.as_bytes() != b"refused.txt")
+        });
+        session.start(path("items"));
+        let file = |name: &str| Entry::new(EntryName::new(name).unwrap(), EntryKind::File);
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![file("opens.txt"), file("refused.txt")]), changes: None });
+        session.submit_ui(BrowserSide::Left, UiEvent::ActivateRow { row: 0 });
+        assert_eq!(session.workspace_view().open_requests(), 0);
+        session.submit_ui(BrowserSide::Left, UiEvent::ActivateRow { row: 1 });
+        assert_eq!(*opened.lock().unwrap(), vec![path("items").join(&EntryName::new("opens.txt").unwrap()), path("items").join(&EntryName::new("refused.txt").unwrap())]);
+        assert_eq!(session.workspace_view().open_requests(), 1, "a refused open shows Notices");
+        assert!(session.workspace_view().notices().iter().any(|notice| notice.text == "Couldn’t open “/items/refused.txt”."));
+    }
+
+    #[test]
+    fn committing_a_name_starts_a_job_or_keeps_the_editor_open_with_an_error() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("items"));
+        let file = |name: &str| Entry::new(EntryName::new(name).unwrap(), EntryKind::File);
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![file("a")]), changes: None });
+        session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 });
+        assert_eq!(session.commit_name(BrowserSide::Left, OperationCommand::Rename, "   ", None), Err("Enter a name."));
+        assert_eq!(session.commit_name(BrowserSide::Left, OperationCommand::Rename, "a/b", None), Err(UNREPRESENTABLE_NAME_TEXT));
+        assert_eq!(session.commit_name(BrowserSide::Left, OperationCommand::Rename, "a", None), Ok(None), "an unchanged name closes the editor");
+        let Ok(Some(job)) = session.commit_name(BrowserSide::Left, OperationCommand::Rename, "b", None) else { panic!("a job") };
+        assert_eq!(session.editor_outcome(job), EditorOutcome::Pending);
+        let generation = session.workspace.operation_jobs()[0].generation();
+        session.submit(Event::OperationScanned { id: job, generation, plan: Ok(Arc::from(vec![dual_pane_application::PlannedItem { source: path("items").join(&EntryName::new("a").unwrap()), destination: Some(path("items").join(&EntryName::new("b").unwrap())), kind: EntryKind::File }])) });
+        let generation = session.workspace.operation_jobs()[0].generation();
+        session.submit(Event::OperationStepped { id: job, generation, result: dual_pane_application::StepResult::NameCollision { item: path("items").join(&EntryName::new("a").unwrap()), progress: dual_pane_application::OperationProgress::default() } });
+        assert_eq!(session.editor_outcome(job), EditorOutcome::Rejected("An item with this name already exists."));
+        let Ok(Some(retry)) = session.commit_name(BrowserSide::Left, OperationCommand::Rename, "c", Some(job)) else { panic!("a retry") };
+        assert_ne!(retry, job);
+        assert!(session.workspace.operation_jobs().iter().all(|other| other.id() != job), "the refused job closed and was dismissed");
+    }
+
+    #[test]
+    fn a_job_that_finishes_before_its_panel_shows_is_dismissed_and_quitting_cancels_running_jobs() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("items"));
+        let file = |name: &str| Entry::new(EntryName::new(name).unwrap(), EntryKind::File);
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![file("a")]), changes: None });
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), entries: Arc::from(vec![]), changes: None });
+        session.submit(Command::Navigate { browser: BrowserSide::Right, location: path("other") });
+        deliver(&mut session, BrowserSide::Right, &[]);
+        session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 });
+        assert!(session.file_command_available(BrowserSide::Left, OperationCommand::Copy));
+        assert!(!session.file_command_available(BrowserSide::Right, OperationCommand::Copy));
+        session.submit_ui(BrowserSide::Left, UiEvent::FileCommand(OperationCommand::Copy));
+        let id = session.workspace.operation_jobs()[0].id();
+        assert!(!session.request_quit(false), "a running copy needs confirmation");
+        assert_eq!(session.operations_view().quit_prompt(), Some(1));
+        assert!(session.request_quit(true));
+        let generation = session.workspace.operation_jobs()[0].generation();
+        session.submit(Event::OperationCleaned { id, generation, result: dual_pane_application::CleanupResult::Clean });
+        assert!(session.workspace.operation_jobs().is_empty(), "the cancelled job, never shown, is dismissed with its Notice");
+        assert!(session.runner.dispatched.contains(&WorkRequest::Operation(dual_pane_application::OperationEffect::Release { id })));
     }
 
     #[test]

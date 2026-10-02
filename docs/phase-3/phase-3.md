@@ -59,7 +59,7 @@ Plan: [overview](milestone-07-overview.md), [architecture](milestone-07-architec
 
 ### P3-M8: Execute file operations and open files
 
-Status: Planned
+Status: Active
 Goal: Deliver macOS-backed safe file operations, Operation Panels and Decision Cards, Notices summaries, and regular-file opening with the default application.
 Plan: [overview](milestone-08-overview.md), [architecture](milestone-08-architecture.md)
 

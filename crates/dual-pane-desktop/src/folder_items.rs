@@ -1,6 +1,7 @@
 use std::fs::{self, DirEntry, FileType};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
@@ -11,9 +12,25 @@ use crate::native_location::path_from_location;
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 
+/// What a listing leaves out and how it recognizes packages.
+pub struct ListingRules<'a> {
+    /// Names never listed, such as this launch's operation temporaries.
+    pub hidden: &'a dyn Fn(&[u8]) -> bool,
+    /// Whether a folder is a macOS package.
+    pub package: &'a dyn Fn(&Path) -> bool,
+}
+
 /// Reads one complete directory snapshot, or returns cancellation or one
 /// classified terminal failure. The runtime invokes this only on its worker.
+#[cfg(test)]
 pub fn read(location: &Location, sort: SortSpec, cancelled: &AtomicBool) -> FolderItemsOutcome {
+    read_listing(location, sort, cancelled, &ListingRules { hidden: &|_| false, package: &|_| false })
+}
+
+/// Reads one complete directory snapshot under `rules`, or returns
+/// cancellation or one classified terminal failure. The runtime invokes this
+/// only on its worker.
+pub fn read_listing(location: &Location, sort: SortSpec, cancelled: &AtomicBool, rules: &ListingRules<'_>) -> FolderItemsOutcome {
     if is_cancelled(cancelled) {
         return None;
     }
@@ -22,7 +39,7 @@ pub fn read(location: &Location, sort: SortSpec, cancelled: &AtomicBool) -> Fold
         Ok(directory) => directory,
         Err(error) => return Some(Err(map_error(&error))),
     };
-    let entries = match collect_entries(directory, cancelled, classify_dir_entry)? {
+    let entries = match collect_entries(directory, cancelled, |entry, cancelled| classify_dir_entry(entry, cancelled, rules))? {
         Ok(entries) => entries,
         Err(kind) => return Some(Err(kind)),
     };
@@ -48,9 +65,12 @@ fn collect_entries<T>(items: impl IntoIterator<Item = io::Result<T>>, cancelled:
     Some(Ok(entries))
 }
 
-fn classify_dir_entry(entry: DirEntry, cancelled: &AtomicBool) -> Option<Result<Option<Entry>, ListingErrorKind>> {
+fn classify_dir_entry(entry: DirEntry, cancelled: &AtomicBool, rules: &ListingRules<'_>) -> Option<Result<Option<Entry>, ListingErrorKind>> {
     if is_cancelled(cancelled) {
         return None;
+    }
+    if (rules.hidden)(entry.file_name().as_bytes()) {
+        return Some(Ok(None));
     }
     let name = match entry_name(entry.file_name().as_bytes()) {
         Ok(Some(name)) => name,
@@ -78,7 +98,10 @@ fn classify_dir_entry(entry: DirEntry, cancelled: &AtomicBool) -> Option<Result<
         classify_kind(own_kind, Ok(NativeKind::Other))
     };
     let metadata = entry.metadata().ok().map(|metadata| EntryMetadata::new(metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|duration| i64::try_from(duration.as_secs()).ok()), Some(metadata.len()))).unwrap_or_default();
-    Some(Ok(Some(Entry::with_metadata(name, kind, metadata))))
+    // Packages carry an extension such as `.app`, so only those folders are
+    // asked about, which keeps large listings fast.
+    let package = kind == EntryKind::Directory && name.as_bytes().iter().skip(1).any(|byte| *byte == b'.') && (rules.package)(&entry.path());
+    Some(Ok(Some(Entry::with_metadata(name, kind, metadata).with_package(package))))
 }
 
 fn sort_entries_for_read(mut entries: Vec<Entry>, sort: SortSpec, cancelled: &AtomicBool) -> Option<Arc<[Entry]>> {
@@ -260,6 +283,19 @@ mod tests {
         assert_eq!(map_error(&io::Error::from_raw_os_error(13)), ListingErrorKind::PermissionDenied);
         assert_eq!(map_error(&io::Error::from_raw_os_error(1)), ListingErrorKind::PrivacyRestricted);
         assert_eq!(map_error(&io::Error::other("unclassified")), ListingErrorKind::Unknown);
+    }
+
+    #[test]
+    fn hidden_names_are_left_out_and_packages_are_marked() {
+        let temporary = tempdir().unwrap();
+        fs::create_dir(temporary.path().join("Tool.app")).unwrap();
+        fs::create_dir(temporary.path().join("plain")).unwrap();
+        File::create(temporary.path().join(".dual-pane-temporary")).unwrap();
+        let location = location_from_path(temporary.path()).unwrap();
+        let rules = ListingRules { hidden: &|name| name.starts_with(b".dual-pane-"), package: &|path| path.extension().is_some_and(|extension| extension == "app") };
+        let entries = read_listing(&location, SortSpec::default(), &AtomicBool::new(false), &rules).unwrap().unwrap();
+        let listed = entries.iter().map(|entry| (entry.name().to_text_lossy().into_owned(), entry.is_package())).collect::<Vec<_>>();
+        assert_eq!(listed, [("plain".to_owned(), false), ("Tool.app".to_owned(), true)]);
     }
 
     #[test]

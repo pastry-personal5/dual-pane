@@ -12,6 +12,8 @@ use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, Tab
 /// Screenshots folder exists before Favorites are seeded, and
 /// `ProbeFavoriteTarget` checks a Favorite Item's target at launch.
 /// `LoadSettings` and `ResetSettings` go to the settings service.
+/// `ResolveItem` reports what a link points to, for activation, and
+/// `ReopenJournal` retries opening the operation safety journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRequest {
     Operation(OperationEffect),
@@ -22,4 +24,6 @@ pub enum WorkRequest {
     ProbeFavoriteTarget { item_id: i64, target: Location },
     LoadSettings,
     ResetSettings,
+    ResolveItem { browser: BrowserSide, tab: TabId, token: RequestToken, item: Location },
+    ReopenJournal,
 }

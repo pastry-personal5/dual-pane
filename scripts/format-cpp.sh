@@ -22,7 +22,7 @@ if [ ! -x "$clang_format" ]; then
     exit 1
 fi
 
-set -- "$repository_root/crates/dual-pane-desktop/cpp/include/dual_pane_desktop/desktop_window.hpp" "$repository_root/crates/dual-pane-desktop/cpp/include/dual_pane_desktop/settings_glyph.hpp" "$repository_root/crates/dual-pane-desktop/cpp/src/desktop_window.cpp"
+set -- "$repository_root/crates/dual-pane-desktop/cpp/include/dual_pane_desktop/desktop_window.hpp" "$repository_root/crates/dual-pane-desktop/cpp/include/dual_pane_desktop/settings_glyph.hpp" "$repository_root/crates/dual-pane-desktop/cpp/include/dual_pane_desktop/native_shell.hpp" "$repository_root/crates/dual-pane-desktop/cpp/src/desktop_window.cpp" "$repository_root/crates/dual-pane-desktop/cpp/src/native_shell.cpp"
 
 if [ "$check_mode" = true ]; then
     exec "$clang_format" --dry-run --Werror "$@"

@@ -319,3 +319,77 @@ fn effective_bindings_are_exposed_and_change_after_a_load() {
     assert_ne!(session.sidebar.view().bindings_revision(), revision, "a load rebinds");
     assert_eq!(binding(&session, ActionId::NewTab), Some(custom));
 }
+
+#[test]
+fn a_refused_file_command_shows_its_reason_until_its_own_timer_expires() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Left, path(&["work"]), vec![file("a", None, None)]);
+    session.show(BrowserSide::Right, path(&["other"]), vec![]);
+    session.ui(BrowserSide::Left, UiEvent::FileCommand(dual_pane_domain::OperationCommand::MoveToTrash));
+    let view = session.left.view();
+    assert_eq!(view.status_text(), "Select one or more items first.");
+    let first = view.status_token();
+    session.ui(BrowserSide::Left, UiEvent::FileCommand(dual_pane_domain::OperationCommand::Rename));
+    let second = session.left.view().status_token();
+    assert_ne!(first, second);
+    session.left.expire_status(first);
+    assert_eq!(session.left.view().status_text(), "Select one or more items first.", "an older timer cannot clear a newer reason");
+    session.left.expire_status(second);
+    assert_eq!(session.left.view().status_text(), "/work", "the path returns");
+    assert_eq!(session.right.view().status_text(), "/other", "only the source Browser shows the reason");
+}
+
+#[test]
+fn rename_and_new_folder_open_their_editors_only_when_available() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Left, path(&["work"]), vec![file("a", None, None), file("b", None, None)]);
+    session.ui(BrowserSide::Left, UiEvent::SelectRow { row: 1 });
+    session.ui(BrowserSide::Left, UiEvent::FileCommand(dual_pane_domain::OperationCommand::Rename));
+    let editor = session.left.view().editor().cloned().expect("the Rename Item Editor opens");
+    assert_eq!((editor.row, editor.text.as_str()), (Some(1), "b"));
+    session.ui(BrowserSide::Left, UiEvent::FileCommand(dual_pane_domain::OperationCommand::NewFolder));
+    let editor = session.left.view().editor().cloned().unwrap();
+    assert_eq!((editor.command, editor.row, editor.text.as_str()), (dual_pane_domain::OperationCommand::NewFolder, None, ""));
+    let revision = session.left.view().editor_revision();
+    session.ui(BrowserSide::Left, UiEvent::SelectAll);
+    session.ui(BrowserSide::Left, UiEvent::FileCommand(dual_pane_domain::OperationCommand::Rename));
+    assert_eq!(session.left.view().editor_revision(), revision, "a refused Rename opens nothing");
+    assert_eq!(session.left.view().status_text(), "Select exactly one item to rename.");
+    let command = session.controller.name_command(BrowserSide::Left, dual_pane_domain::OperationCommand::NewFolder, name("made"), session.left.view());
+    assert!(matches!(command, Some(Command::StartOperation { kind: dual_pane_domain::OperationKind::NewFolder { .. }, .. })));
+}
+
+#[test]
+fn a_missing_folder_keeps_its_rows_under_the_overlay_until_a_refresh_succeeds() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Left, path(&["work"]), vec![file("a", None, None)]);
+    session.ui(BrowserSide::Left, UiEvent::Refresh);
+    let (tab, token) = match session.work.last() {
+        Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
+        _ => panic!("a refresh"),
+    };
+    session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: dual_pane_domain::ListingErrorKind::ItemMissing });
+    let view = session.left.view();
+    assert!(view.missing_folder());
+    assert_eq!((view.row_count(), view.location_text()), (1, "/work"), "the last rows and path stay");
+    session.submit(Command::Navigate { browser: BrowserSide::Left, location: path(&["elsewhere"]) });
+    let (tab, token) = match session.work.last() {
+        Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
+        _ => panic!("a read"),
+    };
+    session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: dual_pane_domain::ListingErrorKind::ItemMissing });
+    assert!(session.left.view().missing_folder(), "a failed navigation elsewhere leaves the overlay as it was");
+    session.ui(BrowserSide::Left, UiEvent::Refresh);
+    session.deliver(BrowserSide::Left, vec![file("a", None, None)]);
+    assert!(!session.left.view().missing_folder());
+}
+
+#[test]
+fn a_package_row_can_show_its_contents() {
+    let mut session = Session::new();
+    let package = Entry::new(name("Tool.app"), EntryKind::Directory).with_package(true);
+    session.show(BrowserSide::Left, path(&["apps"]), vec![package, folder("plain")]);
+    assert!(session.left.view().is_package(0) && !session.left.view().is_package(1));
+    session.ui(BrowserSide::Left, UiEvent::ShowPackageContents { row: 0 });
+    assert!(matches!(session.work.last(), Some(WorkRequest::ReadDirectory { location, .. }) if *location == path(&["apps", "Tool.app"])));
+}

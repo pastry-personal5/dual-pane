@@ -2,6 +2,37 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M8 presentation
+
+- **Name editors:** `Command::RequestNameEditor` opens the Rename or New Folder editor only when the command is available, and otherwise reports `OperationRejected`. A refusal therefore reaches the Status Bar the same way a refused shortcut does.
+- **Retries:** `Command::RetryName` retries a refused name from the refused job's frozen folder and target, so a selection changed in the meantime cannot retarget it. An invalid retry keeps the refused job. Closing an editor closes its refused job.
+- **Decision Cards:** a card click carries the token of the card that was shown, so a click on a replaced card is ignored.
+- **Availability:** menu enablement queries availability when the Folder Items Context Menu opens, not on every input, which keeps large selections off the GUI thread's per-input path.
+- **Status Bar:** each refusal reason carries a token, and only the timer started for that reason clears it.
+- **Dismissal:** presentation dismisses every finished job: after its panel hides or closes, or at once when it finished unseen. Dismissal also releases what the runtime kept for the job.
+- **Panels:** a floating panel shows a close button only once its job has finished.
+  - **Quit routing:** a close request that reaches a running panel during a quit goes to the workspace window's quit decision instead.
+  - **Docking:** dragging a panel's title onto the Operation Panel Strip docks it, and dropping a docked panel elsewhere floats it there.
+- **Confirmations:** the Permanent Delete Confirmation Window is non-modal, so it survives tab and selection changes. The quit prompt is a window-modal sheet, and ux-terms gains its name, Quit Confirmation Window.
+
+## 2026-10-02 — P3-M8 native executor
+
+- Added `libc = "=0.2.189"`, the version already in `Cargo.lock`, as a direct desktop dependency. Its license is MIT OR Apache-2.0, which is compatible with Apache-2.0. All of its `unsafe` calls live in `native_calls.rs`, and [AGENTS.md](../../AGENTS.md) names that module.
+- **Interrupted steps:** a step that a cancel interrupts after completing entries reports them. While cancelling, the application accepts that one result for progress only and silently, so the outcome is Partial and affected tabs refresh. A late result still cannot reopen or retarget the job.
+- **Progress:** an `Execute` effect carries the job's accepted progress, so the executor extends exactly what the application holds.
+- **New error kind:** a Copy or Move folder root whose destination folder lies inside it through a link or a case variant raises a recoverable destination-within-source error. The check compares device and inode ancestry.
+- **Leases:** scans read only and hold no write lease. Steps, finalization, and cleanup lease the operation's destination roots, and for a move, Trash, or deletion its source roots too.
+- **Packages:** a listing asks Qt about package status only for folders with an extension, which keeps large listings fast. A link is resolved to its target before that check, because `QFileInfo::isBundle` does not follow it.
+- **Exclusive rename:** a volume without it reports a recoverable error and never falls back to a plain rename. Volumes without `RENAME_EXCL`, such as some exFAT and network volumes, need the human check.
+
+## 2026-10-02 — P3-M8 application contract
+
+- Implemented the Qt-free contract extensions with their own test suite; the P3-M7 suite is unchanged.
+- **Name problems:** `NameCollision` keeps its P3-M7 shape, and sibling `NameRejected` variants carry too-long and rejected-character problems. This departs from the planned single typed rejection so that the P3-M7 tests compile unchanged.
+- **Refresh:** only a terminal outcome with completed entries rereads affected tabs. Uncertain cleanup alone changes no listing, because this launch's temporaries are never listed.
+- **Links:** every link activation resolves on a worker first, because a link to a folder may point to a package.
+- **Notices:** failed, partial, and uncertain-cleanup summaries open Notices; successes and clean cancellations are only recorded.
+
 ## 2026-10-02 — P3-M8 planning
 
 - Planned P3-M8 as one milestone with an ordered checklist. Owner decisions:

@@ -1,6 +1,6 @@
 # P3-M8: Execute file operations and open files
 
-Status: Planned
+Status: Active
 
 This milestone connects the P3-M7 operation workflow to macOS. It delivers the native scanner and executor, the P3-M7 contract extensions that native work needs, file-command entry points, inline name editors, Operation Panels and Decision Cards, Notices summaries, affected-listing refresh, and default-application opening. [Architecture](milestone-08-architecture.md) describes the approach; this checklist defines completion.
 
@@ -49,35 +49,35 @@ Ordered by dependency; each later group builds on the earlier ones.
 
 ### Application contract extensions
 
-- [ ] `OperationErrorKind` gains read-only, privacy-restricted, changed-since-scan, unsupported item, Trash unavailable, source-removal-failed, journal-unavailable, and folder-not-empty kinds, each tested for its permitted choices. A worker panic or lost worker reuses the `OperationExecutorUnavailable` terminal path, renamed if useful, so it never becomes a Skip decision on a root.
-- [ ] A post-order finalization phase for permanent deletion and moves has its own effect, step results, progress, decisions, cancellation, stale-result, and worker-loss rules (`unavailable()` covers the finalizing state). A directory already gone counts as finalized. Tests cover skipped and failed descendants, removal failure with each choice, and cancellation.
-- [ ] Name problems extend `NameCollision` to a typed name rejection (collision, too long, rejected characters), which keeps the editor open. The existing pre-job rejections (`InvalidName`, unrepresentable names) are shown the same way. Retrying cancels the rejected job, which closes it without cleanup, and starts a new one.
-- [ ] A name-less availability query serves menu enablement for each file command; `OperationRejected { reason }` still reports a refused shortcut.
-- [ ] Terminal outcomes with changes, including cancelled-with-completed-work, partial, and failed-after-progress, request a refresh of every open tab in either Browser whose location is the source or destination folder, or lies at or below a source or destination root.
-- [ ] A pending post-edit selection `(tab, folder, name)` is applied once when a listing containing the name arrives, then cleared; navigation, a selection change, or a listing without the name also clears it.
-- [ ] A dismiss command removes a finished job, including one that finished before its panel was revealed, and a test proves running or waiting jobs cannot be dismissed.
-- [ ] A coalesced byte-progress event is accepted only for the current step's generation and never changes decisions or outcomes.
-- [ ] Listed entries carry a package flag set by the directory reader on its worker. An open-item request resolves links to regular files, folders, or packages on a worker. The application then asks presentation to open the target on the GUI thread, and a refused open becomes an Open Failed Notice that opens Notices.
-- [ ] `NoticeKind` variants and presenter wording cover operation summaries, failures and partial results, journal unavailable, sweep reports, and open failures.
-- [ ] New catalogued actions `CopyToOtherBrowser`, `MoveToOtherBrowser`, `RenameItem`, `MoveToTrash`, `DeletePermanently`, and `ShowPackageContents` have their decided defaults. Settings saved before them still load and receive the defaults.
-- [ ] A quit request with running jobs yields a confirmation state and a cancel-all path, tested without Qt.
-- [ ] A journal-status event, sent at launch and after each reopen attempt, drives a new `OperationRejection` reason that disables Copy while the journal is unavailable; the Journal Unavailable Notice offers Try Again.
+- [x] `OperationErrorKind` gains read-only, privacy-restricted, changed-since-scan, unsupported item, Trash unavailable, source-removal-failed, journal-unavailable, and folder-not-empty kinds, each tested for its permitted choices. A worker panic or lost worker reuses the `OperationExecutorUnavailable` terminal path, renamed if useful, so it never becomes a Skip decision on a root.
+- [x] A post-order finalization phase for permanent deletion and moves has its own effect, step results, progress, decisions, cancellation, stale-result, and worker-loss rules (`unavailable()` covers the finalizing state). A directory already gone counts as finalized. Tests cover skipped and failed descendants, removal failure with each choice, and cancellation.
+- [x] Name problems extend `NameCollision` to a typed name rejection (collision, too long, rejected characters), which keeps the editor open. The existing pre-job rejections (`InvalidName`, unrepresentable names) are shown the same way. Retrying cancels the rejected job, which closes it without cleanup, and starts a new one.
+- [x] A name-less availability query serves menu enablement for each file command; `OperationRejected { reason }` still reports a refused shortcut.
+- [x] Terminal outcomes with changes, including cancelled-with-completed-work, partial, and failed-after-progress, request a refresh of every open tab in either Browser whose location is the source or destination folder, or lies at or below a source or destination root.
+- [x] A pending post-edit selection `(tab, folder, name)` is applied once when a listing containing the name arrives, then cleared; navigation, a selection change, or a listing without the name also clears it.
+- [x] A dismiss command removes a finished job, including one that finished before its panel was revealed, and a test proves running or waiting jobs cannot be dismissed.
+- [x] A coalesced byte-progress event is accepted only for the current step's generation and never changes decisions or outcomes.
+- [x] Listed entries carry a package flag set by the directory reader on its worker. An open-item request resolves links to regular files, folders, or packages on a worker. The application then asks presentation to open the target on the GUI thread, and a refused open becomes an Open Failed Notice that opens Notices.
+- [x] `NoticeKind` variants and presenter wording cover operation summaries, failures and partial results, journal unavailable, sweep reports, and open failures.
+- [x] New catalogued actions `CopyToOtherBrowser`, `MoveToOtherBrowser`, `RenameItem`, `MoveToTrash`, `DeletePermanently`, and `ShowPackageContents` have their decided defaults. Settings saved before them still load and receive the defaults.
+- [x] A quit request with running jobs yields a confirmation state and a cancel-all path, tested without Qt.
+- [x] A journal-status event, sent at launch and after each reopen attempt, drives a new `OperationRejection` reason that disables Copy while the journal is unavailable; the Journal Unavailable Notice offers Try Again.
 
 ### Native executor
 
-- [ ] `libc` is added as a pinned direct dependency with its license check in the changelog and `AGENTS.md` updated.
-- [ ] The scanner returns contiguous depth-first plans that record links as links, never traverse them, and map unreadable folders to recoverable scan decisions. Trash scans roots only; Copy, Move, and permanent deletion scan fully. Current-launch temporaries never appear.
-- [ ] Copy and move preserve metadata as decided, merge directories, and never clobber. A destination `lstat` is only a fast path; `RENAME_EXCL` or `mkdir` is the authority.
-- [ ] Every file copy and Replace uses the temporary-then-move path. A forced failure mid-copy leaves the existing destination intact and removes only the operation's own temporary.
-- [ ] A same-volume move of a file, or of a directory whose destination is absent and whose subtree has no scan-skip placeholder, is one `RENAME_EXCL` reported as completed entries. Otherwise entries move one by one and their source folders go through finalization.
-- [ ] Cross-volume move copies first and removes each source only after its copy completes, with the decided source-removal error.
-- [ ] Rename and New Folder report collisions and name problems without overwriting. A case-only or normalization-only rename succeeds when `EEXIST` names the same device and inode and the parent directory holds no separate entry with the exact destination bytes. It is decided by file identity, never by comparing names. A hard link with the same inode under a different name is still a collision. Test both.
-- [ ] Trash moves each root with `QFile::moveToTrash`; the runtime then reports a `LocationInvalidated` for the Trash folder it used. Permanent deletion unlinks files and links during the main pass and leaves directories to finalization.
-- [ ] Revalidation rejects a target whose identity changed since the scan, and a destination whose device and inode ancestry reaches a source root, catching symlinked and case-variant paths.
-- [ ] Cancellation finishes the current safe boundary, keeps completed work, removes only this operation's temporaries, and reports uncertain cleanup as such. A cancel runs only after that operation's in-flight step has stopped.
-- [ ] Native errors map to the application error kinds with operation and item context; raw OS detail stays in logs.
-- [ ] The file-operation lane runs scan, execute, finalize, and cleanup requests on two workers. It leases write scopes, yields on a time budget, coalesces progress, and never waits for a decision. It contains a panic without replaying the step, then removes that operation's temporaries through its journal records; whatever remains is swept at the next launch.
-- [ ] The journal writes its per-directory record before the first temporary in that directory, clears it after terminal cleanup, and survives a simulated crash. The sweep follows the decided rules. A test proves Reset Settings never touches the journal file.
+- [x] `libc` is added as a pinned direct dependency with its license check in the changelog and `AGENTS.md` updated.
+- [x] The scanner returns contiguous depth-first plans that record links as links, never traverse them, and map unreadable folders to recoverable scan decisions. Trash scans roots only; Copy, Move, and permanent deletion scan fully. Current-launch temporaries never appear.
+- [x] Copy and move preserve metadata as decided, merge directories, and never clobber. A destination `lstat` is only a fast path; `RENAME_EXCL` or `mkdir` is the authority.
+- [x] Every file copy and Replace uses the temporary-then-move path. A forced failure mid-copy leaves the existing destination intact and removes only the operation's own temporary.
+- [x] A same-volume move of a file, or of a directory whose destination is absent and whose subtree has no scan-skip placeholder, is one `RENAME_EXCL` reported as completed entries. Otherwise entries move one by one and their source folders go through finalization.
+- [x] Cross-volume move copies first and removes each source only after its copy completes, with the decided source-removal error.
+- [x] Rename and New Folder report collisions and name problems without overwriting. A case-only or normalization-only rename succeeds when `EEXIST` names the same device and inode and the parent directory holds no separate entry with the exact destination bytes. It is decided by file identity, never by comparing names. A hard link with the same inode under a different name is still a collision. Test both.
+- [x] Trash moves each root with `QFile::moveToTrash`; the runtime then reports a `LocationInvalidated` for the Trash folder it used. Permanent deletion unlinks files and links during the main pass and leaves directories to finalization.
+- [x] Revalidation rejects a target whose identity changed since the scan, and a destination whose device and inode ancestry reaches a source root, catching symlinked and case-variant paths.
+- [x] Cancellation finishes the current safe boundary, keeps completed work, removes only this operation's temporaries, and reports uncertain cleanup as such. A cancel runs only after that operation's in-flight step has stopped.
+- [x] Native errors map to the application error kinds with operation and item context; raw OS detail stays in logs.
+- [x] The file-operation lane runs scan, execute, finalize, and cleanup requests on two workers. It leases write scopes, yields on a time budget, coalesces progress, and never waits for a decision. It contains a panic without replaying the step, then removes that operation's temporaries through its journal records; whatever remains is swept at the next launch.
+- [x] The journal writes its per-directory record before the first temporary in that directory, clears it after terminal cleanup, and survives a simulated crash. The sweep follows the decided rules. A test proves Reset Settings never touches the journal file.
 - [ ] A temp-directory test settles whether `QFile::moveToTrash` is safe on a worker thread. If it is not, Trash goes through a serialized GUI-thread queue, one root per turn, cancellable between roots.
 
 ### Commands and inline editors
@@ -86,7 +86,7 @@ Ordered by dependency; each later group builds on the earlier ones.
 - [ ] File-command shortcuts act only while the Folder Items List has focus; New Folder is window-wide. A refused shortcut shows its reason in the source Browser Status Bar for about three seconds, then restores the loading, error, or path text.
 - [ ] The Rename Item Editor and New Folder Name Editor commit asynchronously, follow the decided focus-loss, reopen, and name-problem rules, suppress workspace shortcuts except `Command+Q` while focused, and close on success. The New Folder Name Editor is an empty temporary row at the top.
 - [ ] The Permanent Delete Confirmation Window shows only the frozen target count, defaults to Cancel, and survives tab or selection changes without retargeting.
-- [ ] Activating exactly one regular file, package, or link to either opens it with the default application; a failure appears in Notices, which opens.
+- [x] Activating exactly one regular file, package, or link to either opens it with the default application; a failure appears in Notices, which opens.
 - [ ] Every quit route with running jobs shows the confirmation. Quit cancels with cleanup and a bounded join after the event loop; Cancel keeps the jobs running.
 
 ### Operation Panels, decisions, and Notices
@@ -95,14 +95,28 @@ Ordered by dependency; each later group builds on the earlier ones.
 - [ ] Each waiting job shows its own Operation Decision Card with exactly the permitted choices. Conflict-only apply-to-all starts unchecked, concurrent jobs keep independent cards, and a card neither takes focus nor has a default button.
 - [ ] Panels can be dragged into the Operation Panel Strip and arrange left to right; docking has no keyboard command.
 - [ ] Panel hiding and retention follow the ux-gui rules. `Command+W` closes a completed panel with focus, whether docked or floating, and does nothing on a running or waiting one; elsewhere it keeps its tab behavior.
-- [ ] Quick successes are recorded in Notices without opening it; quick failures, partial results, and sweep failures open Notices.
+- [x] Quick successes are recorded in Notices without opening it; quick failures, partial results, and sweep failures open Notices.
 - [ ] The Missing Folder Overlay shows centered “Command+R to Refresh” text over dimmed last-good rows for the decided error kinds and disappears after a successful refresh.
 - [ ] Panels, cards, editors, the overlay, and the confirmation windows use the [ux-terms](../ux-terms.md) accessible names. Cards are announced; floating panels join window cycling (``Command+` ``), and docked panels are in the main window's Tab order.
 
+### Awaiting the human check
+
+The items below are implemented. Their command, presenter, and bridge logic has automated tests; what remains needs the native interface, which an agent session does not launch. Each stays unchecked until a person verifies it:
+
+- the Folder Items Context Menu and its disabled items
+- file-command shortcuts acting only from a focused Folder Items List, and the Status Bar reason clearing after three seconds
+- both inline name editors: pending, reopen after focus loss, error text, the pinned New Folder row, and shortcut suppression
+- the Permanent Delete Confirmation Window and the Quit Confirmation Window from Command+Q, Dock Quit, and the close button
+- floating panels, cards without focus or a default button, VoiceOver announcements, drag-to-dock, Command+W on docked and floating panels, and window cycling
+- the Missing Folder Overlay
+- real Trash, default-application and package opening, and a volume without `RENAME_EXCL` such as exFAT
+
+The Trash thread-safety test is ignored by default because it moves a file into the real Trash. Run it with `cargo test -p dual-pane-desktop -- --ignored moving_to_the_trash`.
+
 ### Evidence and gate
 
-- [ ] Native tests run only in `tempfile` directories and cover each executor item above: conflict, merge, link, case-only rename, destination within source through a symlink, cross-volume behavior (injected where a second volume cannot be built), finalization, cancellation, forced failure, panic, and journal crash recovery.
+- [x] Native tests run only in `tempfile` directories and cover each executor item above: conflict, merge, link, case-only rename, destination within source through a symlink, cross-volume behavior (injected where a second volume cannot be built), finalization, cancellation, forced failure, panic, and journal crash recovery.
 - [ ] Runtime, bridge, and presenter tests cover dispatch, stale results, decision round trips, panel and card state, reveal timing, Notices entries, Status Bar expiry, shortcut focus scope, the quit confirmation, and refresh targets.
 - [ ] A human check of what automation cannot cover (drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual panel behavior) is recorded after the automated gate, or the item stays unchecked with its blocker.
-- [ ] Directly affected docs and `AGENTS.md` reflect the executor, dependency, journal, and contract extensions; `docs/README.md` indexes these files.
+- [x] Directly affected docs and `AGENTS.md` reflect the executor, dependency, journal, and contract extensions; `docs/README.md` indexes these files.
 - [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass.

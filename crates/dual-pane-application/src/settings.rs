@@ -27,12 +27,18 @@ pub enum ActionId {
     NavigateBack,
     NavigateForward,
     RefreshFolder,
+    CopyToOtherBrowser,
+    MoveToOtherBrowser,
+    RenameItem,
+    MoveToTrash,
+    DeletePermanently,
+    ShowPackageContents,
 }
 
 impl ActionId {
     /// Every catalogued action. Later IDs are appended, so a shortcut held by
     /// an earlier action keeps it when bindings are validated in this order.
-    pub const ALL: [Self; 18] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder];
+    pub const ALL: [Self; 24] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -54,6 +60,12 @@ impl ActionId {
             Self::NavigateBack => "NavigateBack",
             Self::NavigateForward => "NavigateForward",
             Self::RefreshFolder => "RefreshFolder",
+            Self::CopyToOtherBrowser => "CopyToOtherBrowser",
+            Self::MoveToOtherBrowser => "MoveToOtherBrowser",
+            Self::RenameItem => "RenameItem",
+            Self::MoveToTrash => "MoveToTrash",
+            Self::DeletePermanently => "DeletePermanently",
+            Self::ShowPackageContents => "ShowPackageContents",
         }
     }
 
@@ -142,9 +154,14 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
         ActionId::NavigateBack => Some(Shortcut::new(false, false, true, false, Key::Left)),
         ActionId::NavigateForward => Some(Shortcut::new(false, false, true, false, Key::Right)),
         ActionId::RefreshFolder => Some(Shortcut::new(true, false, false, false, Key::Character('R'))),
+        ActionId::CopyToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('C'))),
+        ActionId::MoveToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('M'))),
+        ActionId::RenameItem => Some(Shortcut::new(false, false, false, false, Key::Function(2))),
+        ActionId::MoveToTrash => Some(Shortcut::new(true, false, false, false, Key::Delete)),
+        ActionId::DeletePermanently => Some(Shortcut::new(true, false, true, false, Key::Delete)),
         // Command+W closes a tab; Close Window keeps its meaning but has no
-        // default shortcut.
-        ActionId::CloseWindow | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
+        // default shortcut. Show Package Contents is a Context Menu command.
+        ActionId::CloseWindow | ActionId::ShowPackageContents | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
     }
 }
 
@@ -458,6 +475,29 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::CloseWindow), None);
         assert_eq!(validate_bindings(&default_bindings()).len(), ActionId::ALL.len());
         assert!(ActionId::ALL.iter().all(|action| ActionId::parse(action.as_str()) == Some(*action)));
+    }
+    #[test]
+    fn file_commands_have_their_decided_defaults() {
+        let shortcut = |command, option, key| Some(Shortcut::new(command, false, option, false, key));
+        assert_eq!(default_shortcut(ActionId::CopyToOtherBrowser), shortcut(false, true, Key::Character('C')));
+        assert_eq!(default_shortcut(ActionId::MoveToOtherBrowser), shortcut(false, true, Key::Character('M')));
+        assert_eq!(default_shortcut(ActionId::RenameItem), shortcut(false, false, Key::Function(2)));
+        assert_eq!(default_shortcut(ActionId::MoveToTrash), shortcut(true, false, Key::Delete));
+        assert_eq!(default_shortcut(ActionId::DeletePermanently), shortcut(true, true, Key::Delete));
+        assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
+        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 6..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents], "new IDs are appended");
+    }
+    #[test]
+    fn settings_saved_before_the_file_commands_load_their_defaults() {
+        let older = ActionId::ALL[..18].iter().map(|action| ActionBinding { action: *action, shortcut: default_shortcut(*action) }).collect::<Vec<_>>();
+        let mut state = SettingsState::new();
+        state.apply(SettingsSnapshot { bindings: older, ..SettingsSnapshot::default() });
+        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents] {
+            assert_eq!(state.binding(action), default_shortcut(action), "{action:?}");
+        }
+        let taken = ActionBinding { action: ActionId::NewTab, shortcut: default_shortcut(ActionId::RenameItem) };
+        state.apply(SettingsSnapshot { bindings: vec![taken], ..SettingsSnapshot::default() });
+        assert_eq!(state.binding(ActionId::RenameItem), None, "a default already chosen for another action is not reused");
     }
     #[test]
     fn navigate_parent_defaults_to_command_up() {

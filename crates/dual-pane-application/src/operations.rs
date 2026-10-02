@@ -10,14 +10,56 @@ pub struct PlannedItem {
     pub kind: EntryKind,
 }
 
+/// Why one item could not be handled. Every kind except
+/// `ExecutorUnavailable` is recoverable with Try Again, Skip, or Cancel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationErrorKind {
     PermissionDenied,
     NotFound,
     NoSpace,
     Busy,
+    /// The operation lost its worker: none could start, it stopped
+    /// unexpectedly, or it panicked. The job ends instead of offering a
+    /// decision, because the step may already have changed files.
     ExecutorUnavailable,
     Other,
+    ReadOnly,
+    PrivacyRestricted,
+    /// The item's identity no longer matches what the scan recorded.
+    ChangedSinceScan,
+    /// A socket, device, or other item that cannot be copied.
+    UnsupportedItem,
+    /// The item's volume has no usable Trash. It is never deleted instead.
+    TrashUnavailable,
+    /// A cross-volume move copied the item but could not remove its source.
+    SourceRemovalFailed,
+    /// The safety journal needed for temporary files could not be opened.
+    JournalUnavailable,
+    /// A source folder that should be empty after its contents were handled
+    /// still holds items.
+    FolderNotEmpty,
+    /// The destination folder lies inside a source folder through a link or
+    /// another spelling of its path.
+    DestinationWithinSource,
+}
+
+/// Why the file system refused a proposed Rename or New Folder name. The
+/// inline editor stays open with the typed name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameProblem {
+    /// Another item already has this name.
+    Collision,
+    TooLong,
+    /// The volume rejects characters in the name.
+    RejectedCharacters,
+}
+
+/// Bytes copied for the current file. Display only; it never decides an
+/// outcome.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ByteProgress {
+    pub done: u64,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,29 +107,139 @@ pub enum CleanupResult {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperationStatus {
-    AwaitingConfirmation { targets: usize },
+    AwaitingConfirmation {
+        targets: usize,
+    },
     Scanning,
-    WaitingScan { item: Location, failure: OperationFailure, entry_kind: EntryKind, token: DecisionToken },
-    Running { at: usize },
-    Waiting { at: usize, item: Location, issue: OperationIssue, failure: Option<OperationFailure>, token: DecisionToken },
+    WaitingScan {
+        item: Location,
+        failure: OperationFailure,
+        entry_kind: EntryKind,
+        token: DecisionToken,
+    },
+    Running {
+        at: usize,
+    },
+    Waiting {
+        at: usize,
+        item: Location,
+        issue: OperationIssue,
+        failure: Option<OperationFailure>,
+        token: DecisionToken,
+    },
     Cancelling,
-    NameCollision { item: Location },
+    NameCollision {
+        item: Location,
+    },
+    /// The volume refused the proposed name for a reason other than a
+    /// collision.
+    NameRejected {
+        item: Location,
+        problem: NameProblem,
+    },
+    /// Removing the emptied source folders of a move or permanent deletion,
+    /// at index `at` of the finalization list.
+    Finalizing {
+        at: usize,
+    },
+    /// A source folder could not be removed during finalization.
+    WaitingFinalize {
+        at: usize,
+        failure: OperationFailure,
+        token: DecisionToken,
+    },
     Finished(OperationOutcome),
+}
+
+/// The decision a waiting job asks for, whatever stage it waits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingDecision<'a> {
+    pub token: DecisionToken,
+    pub item: &'a Location,
+    pub issue: OperationIssue,
+    pub failure: Option<&'a OperationFailure>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperationEffect {
-    Scan { id: OperationId, generation: u64, intent: OperationIntent, skipped: Arc<[ScanSkip]> },
-    Execute { id: OperationId, generation: u64, plan: Arc<[PlannedItem]>, skipped: Arc<[ScanSkip]>, at: usize, choice: Option<OperationChoice> },
-    Cancel { id: OperationId, generation: u64 },
+    Scan {
+        id: OperationId,
+        generation: u64,
+        intent: OperationIntent,
+        skipped: Arc<[ScanSkip]>,
+    },
+    /// Runs the plan from `at`. `progress` is the job's accepted progress,
+    /// which the step's result extends.
+    Execute {
+        id: OperationId,
+        generation: u64,
+        plan: Arc<[PlannedItem]>,
+        skipped: Arc<[ScanSkip]>,
+        at: usize,
+        choice: Option<OperationChoice>,
+        progress: OperationProgress,
+    },
+    Cancel {
+        id: OperationId,
+        generation: u64,
+    },
+    /// Removes each of `directories` from index `at` on, in order. They are
+    /// listed deepest first, and one already gone counts as removed.
+    Finalize {
+        id: OperationId,
+        generation: u64,
+        directories: Arc<[Location]>,
+        at: usize,
+    },
+    /// The job was dismissed; the runtime may forget everything it kept for it.
+    Release {
+        id: OperationId,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepResult {
-    Advanced { next: usize, progress: OperationProgress },
-    DecisionRequired { item: Location, issue: OperationIssue, destination_kind: EntryKind, progress: OperationProgress },
-    RecoverableError { failure: OperationFailure, progress: OperationProgress },
-    NameCollision { item: Location, progress: OperationProgress },
-    Finished { progress: OperationProgress },
-    Failed { failure: OperationFailure, progress: OperationProgress },
+    Advanced {
+        next: usize,
+        progress: OperationProgress,
+    },
+    DecisionRequired {
+        item: Location,
+        issue: OperationIssue,
+        destination_kind: EntryKind,
+        progress: OperationProgress,
+    },
+    RecoverableError {
+        failure: OperationFailure,
+        progress: OperationProgress,
+    },
+    NameCollision {
+        item: Location,
+        progress: OperationProgress,
+    },
+    /// The volume refused the proposed name. `NameProblem::Collision` is the
+    /// same as `NameCollision`.
+    NameRejected {
+        item: Location,
+        problem: NameProblem,
+        progress: OperationProgress,
+    },
+    Finished {
+        progress: OperationProgress,
+    },
+    Failed {
+        failure: OperationFailure,
+        progress: OperationProgress,
+    },
+}
+
+/// The result of one finalization step over the folder list it was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinalizeResult {
+    /// Every folder before `next` is removed or was already gone.
+    Advanced { next: usize },
+    /// The folder at the step's index could not be removed.
+    RecoverableError { failure: OperationFailure },
+    /// Every remaining folder is removed or was already gone.
+    Finished,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +256,16 @@ pub struct OperationJob {
     all_conflicts: Option<OperationChoice>,
     auto_attempted: Option<usize>,
     issued_choice: Option<OperationChoice>,
+    /// Plan indices skipped by a decision, including apply-to-all choices.
+    decision_skips: Vec<usize>,
+    /// Source folders to remove after the main pass, deepest first.
+    finalization: Option<Arc<[Location]>>,
+    /// Folders kept because their removal was skipped.
+    finalize_skipped: usize,
+    bytes: Option<ByteProgress>,
+    /// The generation and start of the step a cancel interrupted, whose
+    /// completed entries may still be reported.
+    interrupted: Option<(u64, usize)>,
 }
 impl OperationJob {
     pub fn id(&self) -> OperationId {
@@ -129,6 +291,42 @@ impl OperationJob {
     }
     pub fn scan_skips(&self) -> &[ScanSkip] {
         &self.scan_skips
+    }
+    /// Bytes copied for the current file while a step runs.
+    pub fn bytes(&self) -> Option<ByteProgress> {
+        self.bytes
+    }
+    /// Folders handled and listed for removal after the main pass.
+    pub fn finalization_progress(&self) -> Option<(usize, usize)> {
+        let directories = self.finalization.as_ref()?;
+        Some(match self.status {
+            OperationStatus::Finalizing { at } | OperationStatus::WaitingFinalize { at, .. } => (at, directories.len()),
+            _ => (directories.len(), directories.len()),
+        })
+    }
+    /// The decision this job waits for, if any.
+    pub fn decision(&self) -> Option<PendingDecision<'_>> {
+        match &self.status {
+            OperationStatus::WaitingScan { item, failure, token, .. } => Some(PendingDecision { token: *token, item, issue: OperationIssue::RecoverableError, failure: Some(failure) }),
+            OperationStatus::Waiting { item, issue, failure, token, .. } => Some(PendingDecision { token: *token, item, issue: *issue, failure: failure.as_ref() }),
+            OperationStatus::WaitingFinalize { failure, token, .. } => Some(PendingDecision { token: *token, item: &failure.item, issue: OperationIssue::RecoverableError, failure: Some(failure) }),
+            _ => None,
+        }
+    }
+    /// Why the volume refused a Rename or New Folder name, while the job
+    /// waits for the inline editor.
+    pub fn name_problem(&self) -> Option<NameProblem> {
+        match self.status {
+            OperationStatus::NameCollision { .. } => Some(NameProblem::Collision),
+            OperationStatus::NameRejected { problem, .. } => Some(problem),
+            _ => None,
+        }
+    }
+    /// Whether the job holds a worker, waits for a decision about started
+    /// work, or is cleaning up. A pending confirmation or a refused name has
+    /// changed nothing and is not active.
+    pub fn is_active(&self) -> bool {
+        !matches!(self.status, OperationStatus::AwaitingConfirmation { .. } | OperationStatus::NameCollision { .. } | OperationStatus::NameRejected { .. } | OperationStatus::Finished(_))
     }
 }
 
@@ -157,7 +355,7 @@ impl OperationCoordinator {
         let confirmation = matches!(intent.kind(), OperationKind::DeletePermanently);
         let status = if confirmation { OperationStatus::AwaitingConfirmation { targets: intent.targets().len() } } else { OperationStatus::Scanning };
         let effects = if confirmation { vec![] } else { vec![OperationEffect::Scan { id, generation: 1, intent: intent.clone(), skipped: Arc::from([]) }] };
-        self.jobs.push(OperationJob { id, intent, status, generation: if confirmation { 0 } else { 1 }, plan: None, progress: OperationProgress::default(), failure: None, scan_skips: vec![], scan_skip_positions: Arc::from([]), all_conflicts: None, auto_attempted: None, issued_choice: None });
+        self.jobs.push(OperationJob { id, intent, status, generation: if confirmation { 0 } else { 1 }, plan: None, progress: OperationProgress::default(), failure: None, scan_skips: vec![], scan_skip_positions: Arc::from([]), all_conflicts: None, auto_attempted: None, issued_choice: None, decision_skips: vec![], finalization: None, finalize_skipped: 0, bytes: None, interrupted: None });
         (id, effects)
     }
     pub fn confirm_delete(&mut self, id: OperationId, targets: usize) -> Option<Vec<OperationEffect>> {
@@ -204,44 +402,43 @@ impl OperationCoordinator {
         job.generation += 1;
         job.status = OperationStatus::Running { at };
         job.issued_choice = choice;
-        vec![OperationEffect::Execute { id: job.id, generation: job.generation, plan: Arc::clone(plan), skipped: Arc::from(job.scan_skips.clone()), at, choice }]
+        job.bytes = None;
+        vec![OperationEffect::Execute { id: job.id, generation: job.generation, plan: Arc::clone(plan), skipped: Arc::from(job.scan_skips.clone()), at, choice, progress: job.progress }]
     }
     pub fn step_result(&mut self, id: OperationId, generation: u64, result: StepResult) -> Option<Vec<OperationEffect>> {
         let next_decision = self.next_decision.checked_add(1)?;
         self.next_decision = next_decision;
         let job = self.job_mut(id)?;
+        // A step that a cancel interrupted after completing entries reports
+        // them, so the outcome counts them. It never continues the job.
+        if job.status == OperationStatus::Cancelling {
+            if let Some((interrupted, at)) = job.interrupted
+                && interrupted == generation
+                && matches!(result, StepResult::Advanced { .. } | StepResult::Finished { .. })
+                && let Some(progress) = Self::accepted_progress(job, at, &result)
+            {
+                job.progress = progress;
+                job.interrupted = None;
+            }
+            return None;
+        }
         let OperationStatus::Running { at } = job.status else { return None };
         if job.generation != generation {
             return None;
         }
-        let plan = job.plan.as_ref()?;
-        let len = plan.len();
-        let progress = match &result {
-            StepResult::Advanced { progress, .. } | StepResult::DecisionRequired { progress, .. } | StepResult::RecoverableError { progress, .. } | StepResult::NameCollision { progress, .. } | StepResult::Finished { progress } | StepResult::Failed { progress, .. } => *progress,
-        };
+        let plan = Arc::clone(job.plan.as_ref()?);
+        let progress = Self::accepted_progress(job, at, &result)?;
         let count = progress.total()?;
-        if job.progress.total() != Some(at) || progress.completed < job.progress.completed || progress.skipped < job.progress.skipped || progress.failed < job.progress.failed || count > len {
-            return None;
-        }
-        if job.scan_skip_positions.binary_search(&at).is_ok() && !matches!(&result, StepResult::Advanced { .. } | StepResult::Finished { .. }) {
-            return None;
-        }
-        if matches!(&result, StepResult::Advanced { .. } | StepResult::Finished { .. }) {
-            let subtree_end = if job.issued_choice == Some(OperationChoice::Skip) { plan[at + 1..].iter().position(|item| !starts_with(&item.source, &plan[at].source)).map_or(len, |offset| at + 1 + offset) } else { at };
-            if count < subtree_end || progress.failed != job.progress.failed {
-                return None;
-            }
-            let scan_skips_after = job.scan_skip_positions.partition_point(|index| *index < count) - job.scan_skip_positions.partition_point(|index| *index < subtree_end);
-            let expected_skips = subtree_end - at + scan_skips_after;
-            if progress.skipped - job.progress.skipped != expected_skips {
-                return None;
-            }
-        }
+        let len = plan.len();
         let expected = &plan[at].source;
+        let skipped_here = job.issued_choice == Some(OperationChoice::Skip);
         match result {
             StepResult::Advanced { next, .. } if next > at && next < len && count == next => {
                 job.progress = progress;
                 job.auto_attempted = None;
+                if skipped_here {
+                    job.decision_skips.push(at);
+                }
                 Some(Self::execute(job, next, None))
             }
             StepResult::DecisionRequired { item, issue, destination_kind, .. }
@@ -272,14 +469,32 @@ impl OperationCoordinator {
                 job.status = OperationStatus::Waiting { at, item: failure.item.clone(), issue: OperationIssue::RecoverableError, failure: Some(failure), token: DecisionToken::new(next_decision) };
                 Some(vec![])
             }
-            StepResult::NameCollision { item, .. } if &item == expected && count == at && matches!(job.intent.kind(), OperationKind::Rename { .. } | OperationKind::NewFolder { .. }) => {
+            StepResult::NameCollision { item, .. } | StepResult::NameRejected { item, problem: NameProblem::Collision, .. } if &item == expected && count == at && matches!(job.intent.kind(), OperationKind::Rename { .. } | OperationKind::NewFolder { .. }) => {
                 job.progress = progress;
                 job.status = OperationStatus::NameCollision { item };
                 Some(vec![])
             }
+            StepResult::NameRejected { item, problem, .. } if &item == expected && count == at && matches!(job.intent.kind(), OperationKind::Rename { .. } | OperationKind::NewFolder { .. }) => {
+                job.progress = progress;
+                job.status = OperationStatus::NameRejected { item, problem };
+                Some(vec![])
+            }
             StepResult::Finished { .. } if count == len => {
                 job.progress = progress;
-                job.status = OperationStatus::Finished(if progress.failed > 0 || progress.skipped > 0 { OperationOutcome::Partial } else { OperationOutcome::Succeeded });
+                job.bytes = None;
+                if skipped_here {
+                    job.decision_skips.push(at);
+                }
+                // A move or permanent deletion leaves its source folders for
+                // a separate deepest-first removal pass.
+                if matches!(job.intent.kind(), OperationKind::Move | OperationKind::DeletePermanently) {
+                    let directories = finalization_list(&plan, &job.scan_skip_positions, &job.decision_skips);
+                    if !directories.is_empty() {
+                        job.finalization = Some(directories.into());
+                        return Some(Self::finalize(job, 0));
+                    }
+                }
+                job.status = OperationStatus::Finished(Self::completed_outcome(job));
                 Some(vec![])
             }
             StepResult::Failed { failure, .. } if failure.item == *expected && progress.failed == job.progress.failed + 1 && progress.completed == job.progress.completed && progress.skipped == job.progress.skipped && count == at + 1 => {
@@ -291,7 +506,98 @@ impl OperationCoordinator {
             _ => None,
         }
     }
+    /// The progress `result` reports for a step issued at `at`, if it extends
+    /// the job's accepted progress validly: monotonic, within the plan, and
+    /// with every skip accounted for.
+    fn accepted_progress(job: &OperationJob, at: usize, result: &StepResult) -> Option<OperationProgress> {
+        let plan = job.plan.as_ref()?;
+        let len = plan.len();
+        let progress = match result {
+            StepResult::Advanced { progress, .. } | StepResult::DecisionRequired { progress, .. } | StepResult::RecoverableError { progress, .. } | StepResult::NameCollision { progress, .. } | StepResult::NameRejected { progress, .. } | StepResult::Finished { progress } | StepResult::Failed { progress, .. } => *progress,
+        };
+        let count = progress.total()?;
+        if job.progress.total() != Some(at) || progress.completed < job.progress.completed || progress.skipped < job.progress.skipped || progress.failed < job.progress.failed || count > len {
+            return None;
+        }
+        if job.scan_skip_positions.binary_search(&at).is_ok() && !matches!(result, StepResult::Advanced { .. } | StepResult::Finished { .. }) {
+            return None;
+        }
+        if matches!(result, StepResult::Advanced { .. } | StepResult::Finished { .. }) {
+            let subtree_end = if job.issued_choice == Some(OperationChoice::Skip) { plan[at + 1..].iter().position(|item| !starts_with(&item.source, &plan[at].source)).map_or(len, |offset| at + 1 + offset) } else { at };
+            if count < subtree_end || progress.failed != job.progress.failed {
+                return None;
+            }
+            let scan_skips_after = job.scan_skip_positions.partition_point(|index| *index < count) - job.scan_skip_positions.partition_point(|index| *index < subtree_end);
+            let expected_skips = subtree_end - at + scan_skips_after;
+            if progress.skipped - job.progress.skipped != expected_skips {
+                return None;
+            }
+        }
+        match result {
+            StepResult::Advanced { next, .. } if *next != count || *next <= at || *next >= len => None,
+            StepResult::Finished { .. } if count != len => None,
+            _ => Some(progress),
+        }
+    }
+    /// The outcome of a job whose every step has run.
+    fn completed_outcome(job: &OperationJob) -> OperationOutcome {
+        if job.progress.failed > 0 || job.progress.skipped > 0 || job.finalize_skipped > 0 { OperationOutcome::Partial } else { OperationOutcome::Succeeded }
+    }
+    fn finalize(job: &mut OperationJob, at: usize) -> Vec<OperationEffect> {
+        let Some(directories) = &job.finalization else { return vec![] };
+        job.generation += 1;
+        job.status = OperationStatus::Finalizing { at };
+        job.bytes = None;
+        vec![OperationEffect::Finalize { id: job.id, generation: job.generation, directories: Arc::clone(directories), at }]
+    }
+    pub fn finalized(&mut self, id: OperationId, generation: u64, result: FinalizeResult) -> Option<Vec<OperationEffect>> {
+        let next_decision = self.next_decision.checked_add(1)?;
+        self.next_decision = next_decision;
+        let job = self.job_mut(id)?;
+        let OperationStatus::Finalizing { at } = job.status else { return None };
+        if job.generation != generation {
+            return None;
+        }
+        let directories = Arc::clone(job.finalization.as_ref()?);
+        match result {
+            FinalizeResult::Advanced { next } if next > at && next < directories.len() => Some(Self::finalize(job, next)),
+            FinalizeResult::RecoverableError { failure } if failure.item == directories[at] && failure.kind != OperationErrorKind::ExecutorUnavailable => {
+                job.status = OperationStatus::WaitingFinalize { at, failure, token: DecisionToken::new(next_decision) };
+                Some(vec![])
+            }
+            FinalizeResult::Finished => {
+                job.status = OperationStatus::Finished(Self::completed_outcome(job));
+                Some(vec![])
+            }
+            _ => None,
+        }
+    }
     pub fn decide(&mut self, id: OperationId, token: DecisionToken, item: &Location, choice: OperationChoice, apply_to_all: bool) -> Option<Vec<OperationEffect>> {
+        if let OperationStatus::WaitingFinalize { at, failure, token: expected } = self.job(id)?.status().clone() {
+            if failure.item != *item || expected != token || !OperationIssue::RecoverableError.permits(choice, apply_to_all) {
+                return None;
+            }
+            let job = self.job_mut(id)?;
+            return match choice {
+                OperationChoice::Cancel => self.cancel(id),
+                OperationChoice::Skip => {
+                    // The kept folder still holds content, so every folder
+                    // above it stays too.
+                    job.finalize_skipped += 1;
+                    let directories = job.finalization.as_ref()?;
+                    let kept: Arc<[Location]> = directories.iter().enumerate().filter(|(index, directory)| *index <= at || !starts_with(item, directory)).map(|(_, directory)| directory.clone()).collect();
+                    let remaining = kept.len();
+                    job.finalization = Some(kept);
+                    if at + 1 < remaining {
+                        Some(Self::finalize(job, at + 1))
+                    } else {
+                        job.status = OperationStatus::Finished(Self::completed_outcome(job));
+                        Some(vec![])
+                    }
+                }
+                _ => Some(Self::finalize(job, at)),
+            };
+        }
         if let OperationStatus::WaitingScan { item: pending, entry_kind, token: expected, .. } = self.job(id)?.status().clone() {
             if pending != *item || expected != token || !OperationIssue::RecoverableError.permits(choice, apply_to_all) {
                 return None;
@@ -330,12 +636,14 @@ impl OperationCoordinator {
             return None;
         }
         // These states hold no worker and have changed nothing, so cancelling closes them without cleanup.
-        if matches!(job.status, OperationStatus::AwaitingConfirmation { .. } | OperationStatus::NameCollision { .. }) {
+        if matches!(job.status, OperationStatus::AwaitingConfirmation { .. } | OperationStatus::NameCollision { .. } | OperationStatus::NameRejected { .. }) {
             job.status = OperationStatus::Finished(OperationOutcome::Cancelled);
             return Some(vec![]);
         }
+        job.interrupted = if let OperationStatus::Running { at } = job.status { Some((job.generation, at)) } else { None };
         job.generation += 1;
         job.status = OperationStatus::Cancelling;
+        job.bytes = None;
         Some(vec![OperationEffect::Cancel { id, generation: job.generation }])
     }
     pub fn cleaned(&mut self, id: OperationId, generation: u64, result: CleanupResult) -> Option<Vec<OperationEffect>> {
@@ -356,7 +664,8 @@ impl OperationCoordinator {
             return None;
         }
         match job.status {
-            OperationStatus::Scanning | OperationStatus::Running { .. } => {
+            OperationStatus::Scanning | OperationStatus::Running { .. } | OperationStatus::Finalizing { .. } => {
+                job.bytes = None;
                 if let Some((item, _)) = intent_roots(&job.intent).into_iter().next() {
                     job.failure = Some(OperationFailure { item, kind: OperationErrorKind::ExecutorUnavailable });
                 }
@@ -367,6 +676,30 @@ impl OperationCoordinator {
             _ => None,
         }
     }
+    /// Records the current file's copied bytes for a running step. It never
+    /// changes the job's status, decisions, or outcome.
+    pub fn bytes_copied(&mut self, id: OperationId, generation: u64, bytes: ByteProgress) -> Option<Vec<OperationEffect>> {
+        let job = self.job_mut(id)?;
+        if job.generation != generation || !matches!(job.status, OperationStatus::Running { .. }) || job.bytes == Some(bytes) {
+            return None;
+        }
+        job.bytes = Some(bytes);
+        Some(vec![])
+    }
+    /// Removes a finished job. Running, waiting, and cleaning-up jobs stay.
+    pub fn dismiss(&mut self, id: OperationId) -> bool {
+        let before = self.jobs.len();
+        self.jobs.retain(|job| job.id != id || !matches!(job.status, OperationStatus::Finished(_)));
+        self.jobs.len() != before
+    }
+}
+
+/// The plan's directories to remove after a move or permanent deletion,
+/// deepest first. A skipped item keeps its whole subtree and every folder
+/// above it, because they still hold content.
+fn finalization_list(plan: &[PlannedItem], scan_skips: &[usize], decision_skips: &[usize]) -> Vec<Location> {
+    let kept: Vec<&Location> = scan_skips.iter().chain(decision_skips).filter_map(|index| plan.get(*index)).map(|item| &item.source).collect();
+    plan.iter().rev().filter(|item| item.kind == EntryKind::Directory && !kept.iter().any(|skipped| starts_with(&item.source, skipped) || starts_with(skipped, &item.source))).map(|item| item.source.clone()).collect()
 }
 
 fn valid_plan(intent: &OperationIntent, skips: &[ScanSkip], plan: &[PlannedItem]) -> bool {

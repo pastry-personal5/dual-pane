@@ -8,6 +8,9 @@ impl OperationId {
     pub fn new(value: u64) -> Self {
         Self(value)
     }
+    pub fn get(self) -> u64 {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,6 +18,9 @@ pub struct DecisionToken(u64);
 impl DecisionToken {
     pub fn new(value: u64) -> Self {
         Self(value)
+    }
+    pub fn get(self) -> u64 {
+        self.0
     }
 }
 
@@ -26,6 +32,35 @@ pub enum OperationKind {
     NewFolder { name: EntryName },
     MoveToTrash,
     DeletePermanently,
+}
+
+/// An operation kind without the name a Rename or New Folder proposes. It
+/// names a file command for availability, before any name is typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OperationCommand {
+    Copy,
+    Move,
+    Rename,
+    NewFolder,
+    MoveToTrash,
+    DeletePermanently,
+}
+
+impl OperationCommand {
+    pub const ALL: [Self; 6] = [Self::Copy, Self::Move, Self::Rename, Self::NewFolder, Self::MoveToTrash, Self::DeletePermanently];
+}
+
+impl OperationKind {
+    pub fn command(&self) -> OperationCommand {
+        match self {
+            Self::Copy => OperationCommand::Copy,
+            Self::Move => OperationCommand::Move,
+            Self::Rename { .. } => OperationCommand::Rename,
+            Self::NewFolder { .. } => OperationCommand::NewFolder,
+            Self::MoveToTrash => OperationCommand::MoveToTrash,
+            Self::DeletePermanently => OperationCommand::DeletePermanently,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,24 +92,13 @@ pub enum OperationRejection {
     DestinationWithinSource,
     SourceUnavailable,
     DestinationUnavailable,
+    /// Copy needs the operation safety journal, which could not be opened.
+    JournalUnavailable,
 }
 
 impl OperationIntent {
     pub fn new(kind: OperationKind, source: Location, targets: Vec<OperationTarget>, destination: Option<Location>) -> Result<Self, OperationRejection> {
-        if matches!(kind, OperationKind::NewFolder { .. }) {
-            if !targets.is_empty() {
-                return Err(OperationRejection::InvalidTargetCount);
-            }
-        } else if targets.is_empty() {
-            return Err(OperationRejection::NoTargets);
-        }
-        if matches!(kind, OperationKind::Rename { .. }) && targets.len() != 1 {
-            return Err(OperationRejection::InvalidTargetCount);
-        }
-        let mut seen = HashSet::new();
-        if targets.iter().any(|target| !seen.insert(&target.name)) {
-            return Err(OperationRejection::DuplicateTarget);
-        }
+        Self::check(kind.command(), &source, &targets, destination.as_ref())?;
         if let OperationKind::Rename { to } | OperationKind::NewFolder { name: to } = &kind {
             if to.to_text_lossy().trim().is_empty() {
                 return Err(OperationRejection::InvalidName);
@@ -83,17 +107,36 @@ impl OperationIntent {
                 return Err(OperationRejection::UnchangedName);
             }
         }
-        match kind {
-            OperationKind::Copy | OperationKind::Move => match &destination {
-                None => return Err(OperationRejection::DestinationRequired),
-                Some(dest) if dest == &source => return Err(OperationRejection::SameSourceAndDestination),
-                Some(dest) if targets.iter().any(|target| target.kind == EntryKind::Directory && starts_with(dest, &source.join(&target.name))) => return Err(OperationRejection::DestinationWithinSource),
-                Some(_) => {}
-            },
-            _ if destination.is_some() => return Err(OperationRejection::DestinationNotAllowed),
-            _ => {}
-        }
         Ok(Self { kind, source, targets, destination })
+    }
+    /// The checks that do not depend on a proposed name, so a file command's
+    /// availability is known before a name is typed. [`Self::new`] applies
+    /// them first.
+    pub fn check(command: OperationCommand, source: &Location, targets: &[OperationTarget], destination: Option<&Location>) -> Result<(), OperationRejection> {
+        if command == OperationCommand::NewFolder {
+            if !targets.is_empty() {
+                return Err(OperationRejection::InvalidTargetCount);
+            }
+        } else if targets.is_empty() {
+            return Err(OperationRejection::NoTargets);
+        }
+        if command == OperationCommand::Rename && targets.len() != 1 {
+            return Err(OperationRejection::InvalidTargetCount);
+        }
+        let mut seen = HashSet::new();
+        if targets.iter().any(|target| !seen.insert(&target.name)) {
+            return Err(OperationRejection::DuplicateTarget);
+        }
+        match command {
+            OperationCommand::Copy | OperationCommand::Move => match destination {
+                None => Err(OperationRejection::DestinationRequired),
+                Some(dest) if dest == source => Err(OperationRejection::SameSourceAndDestination),
+                Some(dest) if targets.iter().any(|target| target.kind == EntryKind::Directory && starts_with(dest, &source.join(&target.name))) => Err(OperationRejection::DestinationWithinSource),
+                Some(_) => Ok(()),
+            },
+            _ if destination.is_some() => Err(OperationRejection::DestinationNotAllowed),
+            _ => Ok(()),
+        }
     }
     pub fn kind(&self) -> &OperationKind {
         &self.kind

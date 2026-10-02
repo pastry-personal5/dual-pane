@@ -2,6 +2,7 @@ use dual_pane_application::{ActionBinding, FavoriteEdit, FavoriteRejection, Noti
 use dual_pane_domain::BrowserSide;
 
 use crate::format::location_text;
+use crate::operation_presenter::operation_summary;
 
 /// Workspace-wide presentation state: the Sidebar Favorites, Notices, the
 /// effective shortcuts, and which Browser is active.
@@ -46,6 +47,8 @@ pub struct NoticeViewModel {
     pub id: u64,
     pub text: String,
     pub offers_reset: bool,
+    /// Whether the message offers Try Again for the safety journal.
+    pub offers_journal_retry: bool,
 }
 
 impl WorkspaceViewModel {
@@ -141,7 +144,7 @@ impl WorkspacePresenter {
             self.view.bindings_revision = self.view.bindings_revision.wrapping_add(1);
         }
         if previous.is_none_or(|previous| !std::sync::Arc::ptr_eq(&previous.notices, &chrome.notices)) {
-            self.view.notices = chrome.notices.iter().map(|notice| NoticeViewModel { id: notice.id, text: notice_text(notice), offers_reset: notice.offers_reset }).collect();
+            self.view.notices = chrome.notices.iter().map(|notice| NoticeViewModel { id: notice.id, text: notice_text(notice), offers_reset: notice.offers_reset, offers_journal_retry: notice.kind == NoticeKind::JournalUnavailable }).collect();
             self.view.notices_revision = self.view.notices_revision.wrapping_add(1);
         }
         self.chrome = Some(chrome.clone());
@@ -176,5 +179,44 @@ fn notice_text(notice: &Notice) -> String {
         NoticeKind::SettingsResetFailed { .. } => "Settings couldn’t be reset. The stored settings were not changed.".to_owned(),
         NoticeKind::FavoriteRemoved { name, target } => format!("Removed Favorite “{name}” because “{}” is unavailable.", location_text(target)),
         NoticeKind::FavoriteProbeFailed { name, target } => format!("Couldn’t check Favorite “{name}” at “{}”.", location_text(target)),
+        NoticeKind::OperationFinished { intent, outcome, progress, failure } => operation_summary(intent, *outcome, *progress, failure.as_ref()),
+        NoticeKind::JournalUnavailable => "Dual Pane couldn’t open its file-operation safety journal, so Copy is unavailable.".to_owned(),
+        NoticeKind::TemporariesSwept { removed, failed } if failed.is_empty() => format!("Removed {} left by an earlier session.", temporary_items(*removed)),
+        NoticeKind::TemporariesSwept { removed, failed } => {
+            let folders = failed.iter().map(|folder| format!("“{}”", location_text(folder))).collect::<Vec<_>>().join(", ");
+            let removed = if *removed > 0 { format!("Removed {}. ", temporary_items(*removed)) } else { String::new() };
+            format!("{removed}Couldn’t remove temporary items left by an earlier session in {folders}.")
+        }
+        NoticeKind::OpenFailed { item } => format!("Couldn’t open “{}”.", location_text(item)),
+    }
+}
+
+fn temporary_items(count: usize) -> String {
+    if count == 1 { "1 temporary item".to_owned() } else { format!("{count} temporary items") }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use dual_pane_application::{Notice, NoticeKind, WorkspaceChrome};
+    use dual_pane_domain::{BrowserSide, EntryName, Location};
+
+    use super::*;
+
+    fn texts(kinds: Vec<NoticeKind>) -> Vec<NoticeViewModel> {
+        let notices = kinds.into_iter().enumerate().map(|(id, kind)| Notice { id: id as u64, kind, offers_reset: false }).collect::<Arc<[_]>>();
+        let mut presenter = WorkspacePresenter::new();
+        presenter.apply_chrome(&WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![], notices });
+        presenter.view().notices().to_vec()
+    }
+
+    #[test]
+    fn journal_sweep_and_open_notices_are_worded_and_only_the_journal_offers_try_again() {
+        let folder = Location::root().join(&EntryName::new("vol").unwrap());
+        let notices = texts(vec![NoticeKind::JournalUnavailable, NoticeKind::TemporariesSwept { removed: 1, failed: vec![] }, NoticeKind::TemporariesSwept { removed: 2, failed: vec![folder.clone()] }, NoticeKind::OpenFailed { item: folder }]);
+        let texts = notices.iter().map(|notice| notice.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(texts, ["Dual Pane couldn’t open its file-operation safety journal, so Copy is unavailable.", "Removed 1 temporary item left by an earlier session.", "Removed 2 temporary items. Couldn’t remove temporary items left by an earlier session in “/vol”.", "Couldn’t open “/vol”."]);
+        assert_eq!(notices.iter().map(|notice| notice.offers_journal_retry).collect::<Vec<_>>(), [true, false, false, false]);
     }
 }

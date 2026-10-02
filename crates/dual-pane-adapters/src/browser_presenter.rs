@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dual_pane_application::{BrowserChrome, Output, RowChange};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
 use crate::format::{UNAVAILABLE, format_exact, format_relative, format_size, item_count, location_text, relative_age_position, total_size};
+use crate::operation_presenter::rejection_text;
 
 /// The current time in Unix seconds, read when a listing arrives so relative
 /// dates change on reload rather than by timer.
@@ -31,7 +32,15 @@ pub struct BrowserViewModel {
     root_label: String,
     loading: bool,
     error: Option<String>,
+    /// The loading, error, or path text the Status Bar normally shows.
+    base_status: String,
     status_text: String,
+    /// A refused file command's reason, shown until its token expires.
+    status_message: Option<String>,
+    status_token: u64,
+    missing_folder: bool,
+    editor: Option<EditorRequest>,
+    editor_revision: u64,
     entries: Arc<[Entry]>,
     selection: Selection,
     cursor_row: Option<usize>,
@@ -53,7 +62,7 @@ pub struct BrowserViewModel {
 
 impl Default for BrowserViewModel {
     fn default() -> Self {
-        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, status_text: String::new(), entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
+        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
     }
 }
 
@@ -67,6 +76,17 @@ pub struct Toolbar {
     pub can_refresh: bool,
     /// The active tab's effective sort, or `None` before it shows a folder.
     pub sort: Option<SortSpec>,
+}
+
+/// An inline name editor the application allowed to open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorRequest {
+    /// Rename or New Folder.
+    pub command: OperationCommand,
+    /// The renamed Item's row; `None` for New Folder's empty row at the top.
+    pub row: Option<usize>,
+    /// The text the editor starts with.
+    pub text: String,
 }
 
 /// One Browser Tab in its strip.
@@ -180,6 +200,33 @@ impl BrowserViewModel {
     /// Fully formatted status text for the desktop shell.
     pub fn status_text(&self) -> &str {
         &self.status_text
+    }
+
+    /// Identifies the Status Bar's current refusal reason, so only its own
+    /// timer can clear it.
+    pub fn status_token(&self) -> u64 {
+        self.status_token
+    }
+
+    /// Whether the shown folder was renamed, moved, or removed, so its last
+    /// rows are dimmed under the Missing Folder Overlay.
+    pub fn missing_folder(&self) -> bool {
+        self.missing_folder
+    }
+
+    /// The latest inline editor the application allowed to open.
+    pub fn editor(&self) -> Option<&EditorRequest> {
+        self.editor.as_ref()
+    }
+
+    /// Changes whenever an inline editor is allowed to open.
+    pub fn editor_revision(&self) -> u64 {
+        self.editor_revision
+    }
+
+    /// Whether the Item in `row` is a macOS package.
+    pub fn is_package(&self, row: usize) -> bool {
+        self.entries.get(row).is_some_and(Entry::is_package)
     }
 
     /// Folder Pane Toolbar Row #2: the count, any selection count, and the
@@ -323,6 +370,10 @@ impl BrowserViewModel {
         }
     }
 
+    fn refresh_status(&mut self) {
+        self.status_text = self.status_message.clone().unwrap_or_else(|| self.base_status.clone());
+    }
+
     fn refresh_summary(&mut self) {
         if self.location.is_none() {
             self.summary = Summary::default();
@@ -400,6 +451,14 @@ impl BrowserPresenter {
         }
     }
 
+    /// Clears a refusal reason once its display time passed, unless a newer
+    /// one replaced it.
+    pub fn expire_status(&mut self, token: u64) {
+        if token == self.view.status_token && self.view.status_message.take().is_some() {
+            self.view.refresh_status();
+        }
+    }
+
     /// Applies the Browser's tab strip, toolbar availability, and sort.
     pub fn apply_chrome(&mut self, chrome: &BrowserChrome) {
         if self.chrome.as_ref() == Some(chrome) {
@@ -418,8 +477,8 @@ impl BrowserPresenter {
 
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
-            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } => *browser,
-            Output::OperationChanged { .. } | Output::OperationRejected { .. } | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } => return,
+            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
+            Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } => return,
         };
         if output_browser != self.browser {
             return;
@@ -445,6 +504,18 @@ impl BrowserPresenter {
         }
         let view = &mut self.view;
         match output {
+            Output::OperationRejected { reason, .. } => {
+                view.status_message = Some(rejection_text(*reason).to_owned());
+                view.status_token = view.status_token.wrapping_add(1);
+            }
+            Output::NameEditorOpened { command, target, .. } => {
+                let row = target.as_ref().and_then(|target| view.entries.iter().position(|entry| entry.name() == target));
+                if target.is_some() && row.is_none() {
+                    return;
+                }
+                view.editor = Some(EditorRequest { command: *command, row, text: target.as_ref().map(|target| target.to_text_lossy().into_owned()).unwrap_or_default() });
+                view.editor_revision = view.editor_revision.wrapping_add(1);
+            }
             Output::TabViewChanged { tab, location, entries, selection, row, scroll_hint, loading, error, .. } => {
                 view.location.clone_from(location);
                 view.location_text = location.as_ref().map_or_else(String::new, location_text);
@@ -455,7 +526,8 @@ impl BrowserPresenter {
                 view.scroll_hint = scroll_hint.clone();
                 view.loading = *loading;
                 view.error = error.as_ref().map(error_message);
-                view.status_text = if *loading { "Loading…".to_owned() } else { view.error.clone().unwrap_or_else(|| view.location_text.clone()) };
+                view.base_status = if *loading { "Loading…".to_owned() } else { view.error.clone().unwrap_or_else(|| view.location_text.clone()) };
+                view.missing_folder = location.is_some() && error.as_ref().is_some_and(|error| Some(error.location()) == location.as_ref() && is_missing(error.kind()));
                 view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
                 view.folder_items_delta = None;
                 view.listed_at = *self.listed_at_by_tab.entry(*tab).or_insert_with(|| (self.clock)());
@@ -464,7 +536,7 @@ impl BrowserPresenter {
             Output::LoadingStarted { .. } => {
                 view.loading = true;
                 view.error = None;
-                view.status_text = "Loading…".to_owned();
+                view.base_status = "Loading…".to_owned();
             }
             Output::FolderItemsLoaded { location, entries, changes, scroll_hint, .. } => {
                 view.location = Some(location.clone());
@@ -473,7 +545,8 @@ impl BrowserPresenter {
                 view.scroll_hint = scroll_hint.clone();
                 view.loading = false;
                 view.error = None;
-                view.status_text = view.location_text.clone();
+                view.base_status = view.location_text.clone();
+                view.missing_folder = false;
                 view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
                 view.folder_items_delta = changes.clone();
                 view.listed_at = loaded_at.unwrap_or_else(|| (self.clock)());
@@ -488,16 +561,26 @@ impl BrowserPresenter {
             Output::FolderItemsFailed { error, .. } => {
                 view.loading = false;
                 view.error = Some(error_message(error));
-                view.status_text = view.error.clone().unwrap_or_default();
+                view.base_status = view.error.clone().unwrap_or_default();
+                if view.location.as_ref() == Some(error.location()) {
+                    view.missing_folder = is_missing(error.kind());
+                }
             }
             Output::FolderItemsCancelled { .. } => {
                 view.loading = false;
                 view.error = None;
-                view.status_text = view.location_text.clone();
+                view.base_status = view.location_text.clone();
             }
             _ => {}
         }
+        view.refresh_status();
     }
+}
+
+/// A folder that is gone or no longer a folder shows the Missing Folder
+/// Overlay over its last rows.
+fn is_missing(kind: ListingErrorKind) -> bool {
+    matches!(kind, ListingErrorKind::ItemMissing | ListingErrorKind::NotADirectory)
 }
 
 /// Safe wording for failures before a browser session can be created.

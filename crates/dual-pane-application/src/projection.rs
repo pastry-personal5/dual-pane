@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::{ActionBinding, FavoritesRecords, SettingsFailure};
-use dual_pane_domain::{BrowserSide, Location, SortSpec, TabId};
+use crate::{ActionBinding, FavoritesRecords, OperationFailure, OperationOutcome, OperationProgress, SettingsFailure};
+use dual_pane_domain::{BrowserSide, Location, OperationIntent, SortSpec, TabId};
 
 /// One Browser Tab as its strip shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,10 +82,42 @@ pub struct Notice {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoticeKind {
-    SettingsLoadFailed { failure: SettingsFailure },
-    SettingsSaveFailed { failure: SettingsFailure },
-    SettingsReset { backup: Option<Location> },
-    SettingsResetFailed { failure: SettingsFailure },
-    FavoriteRemoved { name: String, target: Location },
-    FavoriteProbeFailed { name: String, target: Location },
+    SettingsLoadFailed {
+        failure: SettingsFailure,
+    },
+    SettingsSaveFailed {
+        failure: SettingsFailure,
+    },
+    SettingsReset {
+        backup: Option<Location>,
+    },
+    SettingsResetFailed {
+        failure: SettingsFailure,
+    },
+    FavoriteRemoved {
+        name: String,
+        target: Location,
+    },
+    FavoriteProbeFailed {
+        name: String,
+        target: Location,
+    },
+    /// A file operation's summary at its terminal outcome.
+    OperationFinished {
+        intent: OperationIntent,
+        outcome: OperationOutcome,
+        progress: OperationProgress,
+        failure: Option<OperationFailure>,
+    },
+    /// Copy is disabled until the safety journal reopens; offers Try Again.
+    JournalUnavailable,
+    /// Temporaries left by earlier launches: how many were removed, and the
+    /// folders where some could not be.
+    TemporariesSwept {
+        removed: usize,
+        failed: Vec<Location>,
+    },
+    OpenFailed {
+        item: Location,
+    },
 }

@@ -59,6 +59,7 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Cancel Operation Button | `cancel_operation_button` |
 | Operation Decision Card | `operation_decision_card` |
 | Permanent Delete Confirmation Window | `permanent_delete_confirmation_window` |
+| Quit Confirmation Window | `quit_confirmation_window` |
 | Notices | `notices` |
 | Notices Button | `notices_button` |
 | Notice | `notice` |
@@ -107,4 +108,4 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 
 ## Deferred components
 
-Since P3-M6, the development build renders the Browser Tabs Strip, Browser Tabs, Sidebar Favorites, the six Folder Items columns, the eight sort buttons, the Notices Button, and Notices. Their accessible names use the terms above; each sort button's accessible name and tooltip read like "Sort items by type (A-Z)". The Folder Items Context Menu, Rename Item Editor, New Folder Name Editor, Operation Panel components, Permanent Delete Confirmation Window, and Notices Startup Checkbox are not rendered yet; their planned behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions).
+Since P3-M6, the development build renders the Browser Tabs Strip, Browser Tabs, Sidebar Favorites, the six Folder Items columns, the eight sort buttons, the Notices Button, and Notices. Their accessible names use the terms above; each sort button's accessible name and tooltip read like "Sort items by type (A-Z)". Since P3-M8, it also renders the Folder Items Context Menu, Rename Item Editor, New Folder Name Editor, Missing Folder Overlay, Operation Panel components, Permanent Delete Confirmation Window, and Quit Confirmation Window under these names. The Notices Startup Checkbox is not rendered yet; its planned behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions).

@@ -1,5 +1,5 @@
 use crate::{FavoriteEdit, FavoriteRejection, FavoritesRecords, Notice, OperationJob, SettingsFailure};
-use dual_pane_domain::{BrowserSide, Entry, ListingError, Location, OperationKind, OperationRejection, ScrollAnchor, Selection, TabId};
+use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, OperationCommand, OperationId, OperationRejection, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
 /// A framework-neutral contiguous listing mutation. `removed` rows beginning
@@ -19,14 +19,37 @@ pub struct RowChange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
     OperationChanged {
-        job: OperationJob,
+        job: Box<OperationJob>,
     },
     OperationRejected {
         browser: BrowserSide,
         tab: TabId,
-        kind: OperationKind,
+        command: OperationCommand,
         reason: OperationRejection,
     },
+    /// The inline editor for Rename or New Folder may open. `target` is the
+    /// Item a Rename edits.
+    NameEditorOpened {
+        browser: BrowserSide,
+        tab: TabId,
+        command: OperationCommand,
+        target: Option<EntryName>,
+    },
+    /// A finished job left application state.
+    OperationDismissed {
+        id: OperationId,
+    },
+    /// Open `item` with its default application on the GUI thread. A refusal
+    /// returns as `Event::OpenFailed`.
+    OpenItem {
+        item: Location,
+    },
+    /// Quitting needs confirmation because `running` operations are active.
+    QuitConfirmationRequired {
+        running: usize,
+    },
+    /// Every operation was told to cancel; the application may exit.
+    QuitAccepted,
     ActiveBrowserChanged {
         browser: BrowserSide,
     },

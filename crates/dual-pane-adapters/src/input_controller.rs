@@ -1,5 +1,5 @@
 use dual_pane_application::Command;
-use dual_pane_domain::{BrowserSide, ScrollAnchor, SortSpec, TabId};
+use dual_pane_domain::{BrowserSide, EntryName, OperationCommand, OperationKind, ScrollAnchor, SortSpec, TabId};
 
 use crate::{BrowserViewModel, WorkspaceViewModel};
 
@@ -69,6 +69,13 @@ pub enum UiEvent {
     Scrolled {
         row: Option<usize>,
         offset: i32,
+    },
+    /// A file command from a shortcut or the Folder Items Context Menu.
+    /// Rename and New Folder first ask to open their inline editor.
+    FileCommand(OperationCommand),
+    /// Navigate into the package shown in `row`.
+    ShowPackageContents {
+        row: usize,
     },
 }
 
@@ -171,7 +178,29 @@ impl InputController {
             UiEvent::ReorderTab { tab, position } => Some(Command::ReorderTab { browser, tab, position }),
             UiEvent::Sort(sort) => Some(Command::SetSort { browser, tab: tab?, location: view.location()?.clone(), sort }),
             UiEvent::Scrolled { row, offset } => Some(Command::UpdateScrollHint { browser, tab: tab?, scroll: row.and_then(|row| view.entry(row)).map(|entry| ScrollAnchor::new(entry.name().clone(), offset)) }),
+            UiEvent::FileCommand(command) => {
+                let tab = tab?;
+                let kind = match command {
+                    OperationCommand::Copy => OperationKind::Copy,
+                    OperationCommand::Move => OperationKind::Move,
+                    OperationCommand::MoveToTrash => OperationKind::MoveToTrash,
+                    OperationCommand::DeletePermanently => OperationKind::DeletePermanently,
+                    OperationCommand::Rename | OperationCommand::NewFolder => return Some(Command::RequestNameEditor { browser, tab, command }),
+                };
+                Some(Command::StartOperation { browser, tab, kind })
+            }
+            UiEvent::ShowPackageContents { row } => at(row).map(|(tab, row, name)| Command::ShowPackageContents { browser, tab, row, name }),
         }
+    }
+
+    /// The command an inline editor's committed `name` starts.
+    pub fn name_command(&self, browser: BrowserSide, command: OperationCommand, name: EntryName, view: &BrowserViewModel) -> Option<Command> {
+        let kind = match command {
+            OperationCommand::Rename => OperationKind::Rename { to: name },
+            OperationCommand::NewFolder => OperationKind::NewFolder { name },
+            _ => return None,
+        };
+        Some(Command::StartOperation { browser, tab: view.active_tab()?, kind })
     }
 
     /// The command for a Sidebar gesture. `browser` and `active` are the

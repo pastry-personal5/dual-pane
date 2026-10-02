@@ -1,5 +1,6 @@
 #include "dual_pane_desktop/desktop_window.hpp"
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
+#include "dual-pane-desktop/src/operations_bridge.cxxqt.h"
 #include "dual-pane-desktop/src/workspace_bridge.cxxqt.h"
 #include "dual_pane_desktop/settings_glyph.hpp"
 
@@ -13,13 +14,17 @@
 #include <QtCore/QMimeData>
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
+#include <QtCore/QSet>
 #include <QtCore/QStorageInfo>
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractFileIconProvider>
+#include <QtGui/QAccessible>
+#include <QtGui/QCloseEvent>
 #include <QtGui/QColor>
+#include <QtGui/QCursor>
 #include <QtGui/QDrag>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QFontDatabase>
@@ -35,6 +40,7 @@
 #include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
@@ -43,6 +49,7 @@
 #include <QtWidgets/QMainWindow>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QMessageBox>
+#include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
@@ -86,6 +93,10 @@ constexpr int max_pending_icons = 128;
 constexpr int icon_cache_size = 1024;
 constexpr int tab_limit = 8;
 constexpr auto favorite_item_mime = "application/x-dual-pane-favorite-item";
+constexpr auto operation_panel_mime = "application/x-dual-pane-operation-panel";
+// File command codes of the Folder Items model.
+constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_new_folder = 3, command_trash = 4, command_delete = 5;
+constexpr int status_reason_milliseconds = 3000;
 constexpr auto window_color = "#1B1D21", surface_color = "#23262B", text_color = "#ECEFF3", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#1E4668", divider_hover_border_color = "#737A84", error_color = "#E5737A";
 
 // `toolbarState` flags from the Folder Items model.
@@ -158,6 +169,15 @@ auto style_sheet() -> QString {
       QToolButton#upButton, QToolButton#backButton, QToolButton#forwardButton, QToolButton#sortControl, QToolButton#newTabButton, QToolButton#closeTabButton, QToolButton#favoriteGroupMenuButton, QToolButton#addFavoriteItemButton, QToolButton#newGroupButton { border:none; }
       QWidget#browserTabsStrip { background:%1; }
       QLabel#expandOverlay { background:rgba(0, 0, 0, 160); color:white; }
+      QTreeView#folderItemsList[missingFolder="true"] { color:#6F757D; }
+      QLabel#missingFolderOverlay { background:transparent; color:white; }
+      QLabel#nameEditorError { color:%8; background:%1; }
+      QWidget#newFolderRow { background:%2; }
+      QWidget#operationPanelStrip { background:%1; border-top:1px solid %4; }
+      QFrame#operationPanel { background:%2; border:1px solid %4; }
+      QFrame#operationDecisionCard { background:%1; border:1px solid %8; }
+      QWidget#floatingOperationPanel { background:%1; color:%3; }
+      QLabel#operationPanelTitle { font-weight:bold; }
       QSplitter::handle { background:%4; }
     )")
         .arg(window_color)
@@ -424,6 +444,9 @@ class FolderItemsList final : public QTreeView {
     }
 
     void setColumnsHandler(std::function<void(const std::array<bool, column_count> &)> handler) { columns_handler_ = std::move(handler); }
+    /// Shows the Folder Items Context Menu at a global point for `row`, or
+    /// for empty space when `row` is -1.
+    void setMenuHandler(std::function<void(const QPoint &, int)> handler) { menu_handler_ = std::move(handler); }
 
     /// Moves keyboard focus here, which activates this Browser.
     void focusList() {
@@ -453,6 +476,8 @@ class FolderItemsList final : public QTreeView {
             focusList();
             if (index.isValid())
                 model_->secondaryRow(index.row());
+            if (menu_handler_)
+                menu_handler_(event->globalPosition().toPoint(), index.isValid() ? index.row() : -1);
         }
     }
     void mouseReleaseEvent(QMouseEvent *event) override { event->accept(); }
@@ -560,6 +585,7 @@ class FolderItemsList final : public QTreeView {
     FolderItemsListModel *model_;
     ItemIconDelegate *icons_;
     std::function<void(const std::array<bool, column_count> &)> columns_handler_;
+    std::function<void(const QPoint &, int)> menu_handler_;
     bool restoring_ = false;
 };
 
@@ -923,9 +949,18 @@ class FolderPane final : public QFrame {
         status->setObjectName(QStringLiteral("browserStatusBar"));
         status->setAccessibleName(QStringLiteral("Browser Status Bar"));
         status_ = status;
+        // The New Folder Name Editor is a temporary row pinned at the top of
+        // the listing.
+        new_folder_row_ = new QWidget(this);
+        new_folder_row_->setObjectName(QStringLiteral("newFolderRow"));
+        auto *new_folder_layout = new QVBoxLayout(new_folder_row_);
+        new_folder_layout->setContentsMargins(icon_column_width, 1, 4, 1);
+        new_folder_layout->setSpacing(1);
+        new_folder_row_->hide();
         layout->addWidget(title);
         layout->addWidget(summary);
         layout->addWidget(commands);
+        layout->addWidget(new_folder_row_);
         layout->addWidget(view_, 1);
         layout->addWidget(status);
         QObject::connect(model, &FolderItemsListModel::folderNameChanged, this, [title, model] { title->setText(model->getFolderName()); });
@@ -972,6 +1007,7 @@ class FolderPane final : public QFrame {
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return view_; }
     [[nodiscard]] auto status() const -> QLabel * { return status_; }
+    [[nodiscard]] auto new_folder_row() const -> QWidget * { return new_folder_row_; }
 
   private:
     void update_sort(FolderItemsListModel *model) {
@@ -984,13 +1020,184 @@ class FolderPane final : public QFrame {
 
     FolderItemsList *view_;
     QLabel *status_ = nullptr;
+    QWidget *new_folder_row_ = nullptr;
     std::array<QWidget *, 4> sort_groups_{};
     std::array<QToolButton *, 8> sorts_{};
 };
 
+/// The Rename Item Editor or the New Folder Name Editor. Return or focus loss
+/// commits and Escape abandons; while a commit waits for its job the text
+/// stays and cannot change.
+class FileNameEditor final : public QLineEdit {
+  public:
+    FileNameEditor(const QString &object_name, const QString &accessible_name, const QString &text, std::function<void()> commit, std::function<void()> cancel, QWidget *parent) : QLineEdit(text, parent), commit_(std::move(commit)), cancel_(std::move(cancel)) {
+        setObjectName(object_name);
+        setAccessibleName(accessible_name);
+        setProperty("inlineEditor", true);
+        selectAll();
+    }
+    void abandon() { abandoned_ = true; }
+
+  protected:
+    void keyPressEvent(QKeyEvent *event) override {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            event->accept();
+            if (!isReadOnly())
+                commit_();
+            return;
+        }
+        if (event->key() == Qt::Key_Escape) {
+            event->accept();
+            cancel_();
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+    void focusOutEvent(QFocusEvent *event) override {
+        QLineEdit::focusOutEvent(event);
+        if (!abandoned_ && !isReadOnly() && event->reason() != Qt::ActiveWindowFocusReason && event->reason() != Qt::PopupFocusReason)
+            commit_();
+    }
+
+  private:
+    std::function<void()> commit_;
+    std::function<void()> cancel_;
+    bool abandoned_ = false;
+};
+
+/// Drives one Browser's inline name editor through its job: a refused name
+/// keeps or reopens the editor with the typed text and the error, success
+/// closes it, and any other failure closes it so the job's panel shows it.
+class NameEditController final : public QObject {
+  public:
+    NameEditController(FolderItemsListModel *model, FolderItemsList *view, QWidget *new_folder_row) : model_(model), view_(view), new_folder_row_(new_folder_row) {
+        QObject::connect(model_, &FolderItemsListModel::editorRevisionChanged, this, [this] { open(); });
+    }
+
+    /// Follows the pending job after the session changed.
+    void update() {
+        if (pending_ < 0 || editor_ == nullptr)
+            return;
+        switch (model_->editorOutcome(pending_)) {
+        case 0:
+            return;
+        case 1:
+            rejected_ = pending_;
+            pending_ = -1;
+            editor_->setReadOnly(false);
+            show_error(model_->editorOutcomeText(rejected_));
+            editor_->setFocus(Qt::OtherFocusReason);
+            return;
+        default:
+            pending_ = -1;
+            close();
+        }
+    }
+
+  private:
+    void open() {
+        const int command = model_->editorCommand();
+        if (command != command_rename && command != command_new_folder)
+            return;
+        if (pending_ >= 0)
+            return;
+        close();
+        command_ = command;
+        const bool rename = command == command_rename;
+        QWidget *host = rename ? view_->viewport() : new_folder_row_;
+        editor_ = new FileNameEditor(rename ? QStringLiteral("renameItemEditor") : QStringLiteral("newFolderNameEditor"), rename ? QStringLiteral("Rename Item Editor") : QStringLiteral("New Folder Name Editor"), model_->editorText(), [this] { commit(); }, [this] { cancel(); }, host);
+        error_ = new QLabel(host);
+        error_->setObjectName(QStringLiteral("nameEditorError"));
+        error_->setWordWrap(true);
+        error_->hide();
+        if (rename) {
+            const int row = model_->editorRow();
+            const auto rect = view_->visualRect(model_->index(row, 1, QModelIndex()));
+            if (!rect.isValid()) {
+                close();
+                return;
+            }
+            editor_->setGeometry(rect.left(), rect.top(), qMax(rect.width(), 160), rect.height() + 6);
+            error_->setGeometry(rect.left(), rect.bottom() + 7, view_->viewport()->width() - rect.left(), 20);
+            // Only the name before its extension starts selected.
+            const auto text = editor_->text();
+            const auto dot = text.lastIndexOf(QLatin1Char('.'));
+            editor_->setSelection(0, static_cast<int>(dot > 0 ? dot : text.size()));
+        } else {
+            new_folder_row_->layout()->addWidget(editor_);
+            new_folder_row_->layout()->addWidget(error_);
+            new_folder_row_->show();
+        }
+        editor_->show();
+        editor_->setFocus(Qt::OtherFocusReason);
+    }
+    void commit() {
+        if (editor_ == nullptr || pending_ >= 0)
+            return;
+        const auto job = model_->commitName(command_, editor_->text(), rejected_);
+        if (job == -1) {
+            close();
+        } else if (job == -2) {
+            // The refused job stays, so a later retry keeps its target.
+            show_error(model_->nameError());
+        } else {
+            // The retry closed the refused job.
+            rejected_ = -1;
+            pending_ = job;
+            error_->hide();
+            editor_->setReadOnly(true);
+            update();
+        }
+    }
+    void cancel() {
+        if (pending_ < 0)
+            close();
+    }
+    void show_error(const QString &text) {
+        if (error_ == nullptr)
+            return;
+        error_->setText(text);
+        error_->setAccessibleName(text);
+        error_->show();
+        error_->raise();
+    }
+    /// Closes the editor. A job whose name was refused closes with it, so
+    /// nothing waits for a name that will never come.
+    void close() {
+        if (rejected_ >= 0) {
+            const auto rejected = rejected_;
+            rejected_ = -1;
+            model_->cancelOperation(rejected);
+        }
+        const bool had_focus = editor_ != nullptr && editor_->hasFocus();
+        if (editor_ != nullptr) {
+            editor_->abandon();
+            editor_->hide();
+            editor_->deleteLater();
+        }
+        if (error_ != nullptr)
+            error_->deleteLater();
+        editor_ = nullptr;
+        error_ = nullptr;
+        new_folder_row_->hide();
+        if (had_focus)
+            view_->focusList();
+    }
+
+    FolderItemsListModel *model_;
+    FolderItemsList *view_;
+    QWidget *new_folder_row_;
+    FileNameEditor *editor_ = nullptr;
+    QLabel *error_ = nullptr;
+    int command_ = -1;
+    std::int64_t pending_ = -1;
+    std::int64_t rejected_ = -1;
+};
+
 class Browser final : public QWidget {
   public:
-    Browser(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QWidget(parent), folder_(new FolderPane(model, icons, this)), overlay_(new QLabel(QStringLiteral("Expand"), this)) {
+    Browser(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QWidget(parent), model_(model), folder_(new FolderPane(model, icons, this)), overlay_(new QLabel(QStringLiteral("Expand"), this)), missing_(new QLabel(QStringLiteral("Command+R to Refresh"), this)), editors_(new NameEditController(model, folder_->view(), folder_->new_folder_row())) {
+        editors_->setParent(this);
         setObjectName(QStringLiteral("browser"));
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -1014,24 +1221,92 @@ class Browser final : public QWidget {
         font.setBold(true);
         overlay_->setFont(font);
         overlay_->hide();
+        missing_->setObjectName(QStringLiteral("missingFolderOverlay"));
+        missing_->setAccessibleName(QStringLiteral("Missing Folder Overlay"));
+        missing_->setAlignment(Qt::AlignCenter);
+        missing_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto missing_font = missing_->font();
+        missing_font.setPointSize(18);
+        missing_font.setBold(true);
+        missing_->setFont(missing_font);
+        missing_->hide();
+        QObject::connect(model, &FolderItemsListModel::missingFolderChanged, this, [this] { update_overlays(); });
+        // A refused file command's reason shows for a few seconds, then the
+        // Status Bar returns to its loading, error, or path text.
+        QObject::connect(model, &FolderItemsListModel::statusTokenChanged, this, [model] {
+            const int token = model->getStatusToken();
+            QTimer::singleShot(status_reason_milliseconds, model, [model, token] { model->expireStatus(token); });
+        });
+        folder_->view()->setMenuHandler([this](const QPoint &at, int row) { show_menu(at, row); });
     }
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return folder_->view(); }
     [[nodiscard]] auto folder() const -> FolderPane * { return folder_; }
+    [[nodiscard]] auto editors() const -> NameEditController * { return editors_; }
 
   protected:
     /// Below the usable width, an instruction covers only this Browser; it
     /// passes pointer input through and takes no keyboard commands.
     void resizeEvent(QResizeEvent *event) override {
         QWidget::resizeEvent(event);
-        overlay_->setGeometry(rect());
-        overlay_->setVisible(width() < narrow_browser_width);
-        overlay_->raise();
+        update_overlays();
     }
 
   private:
+    /// The narrow-Browser Expand overlay takes precedence over the Missing
+    /// Folder Overlay, which covers only the dimmed Folder Items.
+    void update_overlays() {
+        overlay_->setGeometry(rect());
+        const bool narrow = width() < narrow_browser_width;
+        overlay_->setVisible(narrow);
+        overlay_->raise();
+        auto *view = folder_->view();
+        const bool missing = model_->getMissingFolder();
+        if (view->property("missingFolder").toBool() != missing) {
+            view->setProperty("missingFolder", missing);
+            repolish(view);
+            view->viewport()->update();
+        }
+        missing_->setGeometry(QRect(view->viewport()->mapTo(this, QPoint(0, 0)), view->viewport()->size()));
+        missing_->setVisible(missing && !narrow);
+        if (missing && !narrow)
+            missing_->raise();
+    }
+    /// The Folder Items Context Menu. Items the application refuses now stay
+    /// disabled; empty space offers New Folder.
+    void show_menu(const QPoint &at, int row) {
+        QMenu menu(this);
+        menu.setObjectName(QStringLiteral("folderItemsContextMenu"));
+        menu.setAccessibleName(QStringLiteral("Folder Items Context Menu"));
+        const auto add = [this, &menu](const QString &text, int command) {
+            auto *action = menu.addAction(text);
+            action->setEnabled(model_->fileCommandAvailable(command));
+            QObject::connect(action, &QAction::triggered, this, [this, command] { model_->startFileCommand(command); });
+        };
+        if (row >= 0) {
+            add(QStringLiteral("Copy to Other Browser"), command_copy);
+            add(QStringLiteral("Move to Other Browser"), command_move);
+            add(QStringLiteral("Rename Item"), command_rename);
+            menu.addSeparator();
+            add(QStringLiteral("New Folder"), command_new_folder);
+            menu.addSeparator();
+            add(QStringLiteral("Move to Trash"), command_trash);
+            add(QStringLiteral("Delete Permanently"), command_delete);
+            if (model_->rowIsPackage(row)) {
+                menu.addSeparator();
+                QObject::connect(menu.addAction(QStringLiteral("Show Package Contents")), &QAction::triggered, this, [this, row] { model_->showPackageContents(row); });
+            }
+        } else {
+            add(QStringLiteral("New Folder"), command_new_folder);
+        }
+        menu.exec(at);
+    }
+
+    FolderItemsListModel *model_;
     FolderPane *folder_;
     QLabel *overlay_;
+    QLabel *missing_;
+    NameEditController *editors_;
 };
 
 /// An inline name editor. Return commits, Escape cancels, and focus loss
@@ -1428,6 +1703,459 @@ class FavoritesPanel final : public QWidget {
     bool editing_ = false;
 };
 
+/// One job's Operation Panel: progress, the Cancel Operation Button, and any
+/// Operation Decision Card. Dragging its title docks or floats it.
+class OperationPanel final : public QFrame {
+  public:
+    OperationPanel(OperationsModel *ops, std::int64_t job, std::function<void(OperationPanel *)> drag, QWidget *parent) : QFrame(parent), ops_(ops), job_(job), drag_(std::move(drag)), title_(new QLabel(this)), detail_(new QLabel(this)), progress_(new QProgressBar(this)), bytes_(new QLabel(this)), status_(new QLabel(this)), cancel_(new QPushButton(QStringLiteral("Cancel"), this)), close_(new QPushButton(QStringLiteral("Close"), this)), card_(new QFrame(this)), message_(new QLabel(card_)), choices_(new QHBoxLayout()), apply_(new QCheckBox(QStringLiteral("Apply to all"), card_)) {
+        setObjectName(QStringLiteral("operationPanel"));
+        setAccessibleName(QStringLiteral("Operation Panel"));
+        setMinimumWidth(320);
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(8, 6, 8, 6);
+        layout->setSpacing(4);
+        title_->setObjectName(QStringLiteral("operationPanelTitle"));
+        title_->setCursor(Qt::OpenHandCursor);
+        title_->setToolTip(QStringLiteral("Drag to dock or float this panel"));
+        title_->installEventFilter(this);
+        detail_->setWordWrap(true);
+        status_->setWordWrap(true);
+        progress_->setObjectName(QStringLiteral("operationProgressIndicator"));
+        progress_->setAccessibleName(QStringLiteral("Operation Progress Indicator"));
+        progress_->setTextVisible(false);
+        cancel_->setObjectName(QStringLiteral("cancelOperationButton"));
+        cancel_->setAccessibleName(QStringLiteral("Cancel Operation Button"));
+        for (auto *button : {cancel_, close_}) {
+            button->setAutoDefault(false);
+            button->setFocusPolicy(Qt::TabFocus);
+        }
+        QObject::connect(cancel_, &QPushButton::clicked, this, [this] { ops_->cancelOperation(job_); });
+        QObject::connect(close_, &QPushButton::clicked, this, [this] { ops_->closePanel(job_); });
+        card_->setObjectName(QStringLiteral("operationDecisionCard"));
+        card_->setAccessibleName(QStringLiteral("Operation Decision Card"));
+        card_->setFocusPolicy(Qt::NoFocus);
+        auto *card_layout = new QVBoxLayout(card_);
+        card_layout->setContentsMargins(6, 6, 6, 6);
+        message_->setWordWrap(true);
+        apply_->setFocusPolicy(Qt::TabFocus);
+        card_layout->addWidget(message_);
+        card_layout->addWidget(apply_);
+        card_layout->addLayout(choices_);
+        card_->hide();
+        auto *buttons = new QHBoxLayout();
+        buttons->addWidget(bytes_, 1);
+        buttons->addWidget(cancel_);
+        buttons->addWidget(close_);
+        layout->addWidget(title_);
+        layout->addWidget(detail_);
+        layout->addWidget(progress_);
+        layout->addWidget(status_);
+        layout->addLayout(buttons);
+        layout->addWidget(card_);
+    }
+
+    [[nodiscard]] auto job() const -> std::int64_t { return job_; }
+    [[nodiscard]] auto finished() const -> bool { return finished_; }
+    [[nodiscard]] auto title() const -> QString { return title_->text(); }
+
+    /// Shows the model's panel at `index`. A card that appears is announced
+    /// without taking focus, and none of its buttons is a default.
+    void update(int index) {
+        title_->setText(ops_->panelTitle(index));
+        detail_->setText(ops_->panelDetail(index));
+        status_->setText(ops_->panelStatus(index));
+        setAccessibleDescription(QStringLiteral("%1 %2. %3").arg(title_->text(), detail_->text(), status_->text()));
+        const int total = ops_->panelTotal(index);
+        finished_ = ops_->panelFinished(index);
+        if (total < 0 && !finished_) {
+            progress_->setRange(0, 0);
+        } else {
+            progress_->setRange(0, qMax(total, 1));
+            progress_->setValue(finished_ ? qMax(total, 1) : ops_->panelDone(index));
+        }
+        bytes_->setText(ops_->panelBytes(index));
+        cancel_->setVisible(!finished_);
+        cancel_->setEnabled(ops_->panelCanCancel(index));
+        close_->setVisible(finished_);
+        if (!ops_->panelHasDecision(index)) {
+            card_->hide();
+            shown_message_.clear();
+            shown_token_ = -1;
+            return;
+        }
+        const auto message = ops_->decisionMessage(index);
+        if (message == shown_message_ && ops_->decisionToken(index) == shown_token_ && card_->isVisible())
+            return;
+        const auto token = ops_->decisionToken(index);
+        shown_token_ = token;
+        shown_message_ = message;
+        message_->setText(message);
+        card_->setAccessibleDescription(message);
+        while (auto *child = choices_->takeAt(0)) {
+            if (auto *widget = child->widget())
+                widget->deleteLater();
+            delete child;
+        }
+        choices_->addStretch();
+        for (int choice = 0; choice < ops_->decisionChoiceCount(index); ++choice) {
+            auto *button = new QPushButton(ops_->decisionChoiceLabel(index, choice), card_);
+            button->setAutoDefault(false);
+            button->setDefault(false);
+            button->setFocusPolicy(Qt::TabFocus);
+            const int code = ops_->decisionChoiceCode(index, choice);
+            QObject::connect(button, &QPushButton::clicked, this, [this, token, code] { ops_->decide(job_, token, code, apply_->isVisible() && apply_->isChecked()); });
+            choices_->addWidget(button);
+        }
+        apply_->setChecked(false);
+        apply_->setVisible(ops_->decisionOffersApplyToAll(index));
+        card_->show();
+        QAccessibleEvent announcement(card_, QAccessible::Alert);
+        QAccessible::updateAccessibility(&announcement);
+    }
+
+  protected:
+    auto eventFilter(QObject *watched, QEvent *event) -> bool override {
+        if (watched == title_ && event->type() == QEvent::MouseButtonPress) {
+            press_ = dynamic_cast<QMouseEvent *>(event)->position().toPoint();
+            pressed_ = true;
+        } else if (watched == title_ && event->type() == QEvent::MouseButtonRelease) {
+            pressed_ = false;
+        } else if (watched == title_ && event->type() == QEvent::MouseMove && pressed_) {
+            const auto *mouse = dynamic_cast<QMouseEvent *>(event);
+            if ((mouse->position().toPoint() - press_).manhattanLength() >= QApplication::startDragDistance()) {
+                pressed_ = false;
+                drag_(this);
+                return true;
+            }
+        }
+        return QFrame::eventFilter(watched, event);
+    }
+
+  private:
+    OperationsModel *ops_;
+    std::int64_t job_;
+    std::function<void(OperationPanel *)> drag_;
+    QLabel *title_;
+    QLabel *detail_;
+    QProgressBar *progress_;
+    QLabel *bytes_;
+    QLabel *status_;
+    QPushButton *cancel_;
+    QPushButton *close_;
+    QFrame *card_;
+    QLabel *message_;
+    QHBoxLayout *choices_;
+    QCheckBox *apply_;
+    QString shown_message_;
+    std::int64_t shown_token_ = -1;
+    QPoint press_;
+    bool pressed_ = false;
+    bool finished_ = false;
+};
+
+/// A floating Operation Panel: a regular window that joins window cycling.
+/// It never takes focus when it appears. Only a finished panel can be
+/// closed; a close that is part of quitting goes to the workspace window's
+/// quit decision instead.
+class FloatingPanelWindow final : public QWidget {
+  public:
+    FloatingPanelWindow(OperationPanel *panel, OperationsModel *ops, const bool *quitting, QWidget *workspace) : QWidget(workspace, Qt::Window), panel_(panel), ops_(ops), quitting_(quitting), workspace_(workspace) {
+        setObjectName(QStringLiteral("floatingOperationPanel"));
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        panel_->setParent(this);
+        layout->addWidget(panel_);
+        auto *close = new QShortcut(QKeySequence::Close, this);
+        close->setContext(Qt::WindowShortcut);
+        QObject::connect(close, &QShortcut::activated, this, [this] {
+            if (panel_->finished())
+                ops_->closePanel(panel_->job());
+        });
+        apply_flags(false);
+    }
+
+    /// Takes the panel back out, for docking.
+    auto release() -> OperationPanel * {
+        layout()->removeWidget(panel_);
+        auto *panel = panel_;
+        panel_ = nullptr;
+        return panel;
+    }
+    void sync() {
+        if (panel_ == nullptr)
+            return;
+        setWindowTitle(panel_->title());
+        if (panel_->finished() != closable_)
+            apply_flags(panel_->finished());
+    }
+
+  protected:
+    void closeEvent(QCloseEvent *event) override {
+        if (*quitting_ || panel_ == nullptr) {
+            event->accept();
+            return;
+        }
+        event->ignore();
+        // A running panel has no close button, so any close request is part
+        // of quitting and goes to the workspace window's quit decision.
+        if (event->spontaneous() && panel_->finished()) {
+            ops_->closePanel(panel_->job());
+            return;
+        }
+        QTimer::singleShot(0, workspace_, [workspace = QPointer<QWidget>(workspace_)] {
+            if (workspace)
+                workspace->close();
+        });
+    }
+
+  private:
+    /// Only a finished panel shows a close button.
+    void apply_flags(bool closable) {
+        closable_ = closable;
+        const bool visible = isVisible();
+        setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::CustomizeWindowHint | (closable ? Qt::WindowCloseButtonHint : Qt::WindowType(0)));
+        if (visible)
+            show();
+    }
+
+    OperationPanel *panel_;
+    OperationsModel *ops_;
+    const bool *quitting_;
+    QWidget *workspace_;
+    bool closable_ = true;
+};
+
+/// The Operation Panel Strip below both Browsers. Docked panels arrange left
+/// to right; a panel dragged onto it docks.
+class OperationPanelStrip final : public QWidget {
+  public:
+    explicit OperationPanelStrip(QWidget *parent) : QWidget(parent), layout_(new QHBoxLayout(this)) {
+        setObjectName(QStringLiteral("operationPanelStrip"));
+        setAccessibleName(QStringLiteral("Operation Panel Strip"));
+        setAcceptDrops(true);
+        layout_->setContentsMargins(4, 4, 4, 4);
+        layout_->setSpacing(4);
+        layout_->addStretch();
+        hide();
+    }
+    void setDropHandler(std::function<void(std::int64_t)> handler) { drop_ = std::move(handler); }
+    void dock(OperationPanel *panel) {
+        panel->setParent(this);
+        layout_->insertWidget(layout_->count() - 1, panel);
+        panel->show();
+        show();
+    }
+    void undock(OperationPanel *panel) {
+        layout_->removeWidget(panel);
+        setVisible(layout_->count() > 1);
+    }
+
+  protected:
+    void dragEnterEvent(QDragEnterEvent *event) override { accept(event); }
+    void dragMoveEvent(QDragMoveEvent *event) override { accept(event); }
+    void dropEvent(QDropEvent *event) override {
+        if (!accept(event))
+            return;
+        drop_(event->mimeData()->data(QString::fromLatin1(operation_panel_mime)).toLongLong());
+    }
+
+  private:
+    auto accept(QDropEvent *event) -> bool {
+        if (!event->mimeData()->hasFormat(QString::fromLatin1(operation_panel_mime))) {
+            event->ignore();
+            return false;
+        }
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+        return true;
+    }
+
+    QHBoxLayout *layout_;
+    std::function<void(std::int64_t)> drop_;
+};
+
+/// Shows one Operation Panel per revealed job, floating by default. Where a
+/// panel sits is session-only presentation state.
+class OperationPanels final : public QObject {
+  public:
+    OperationPanels(OperationsModel *ops, OperationPanelStrip *strip, QWidget *workspace, const bool *quitting) : ops_(ops), strip_(strip), workspace_(workspace), quitting_(quitting) {
+        strip_->setDropHandler([this](std::int64_t job) { dock(job); });
+        QObject::connect(ops_, &OperationsModel::panelsRevisionChanged, this, [this] { reconcile(); });
+    }
+
+    /// The docked panel holding `widget`, if any.
+    [[nodiscard]] auto docked_panel(const QWidget *widget) const -> OperationPanel * {
+        for (const auto &placed : panels_)
+            if (placed.window == nullptr && inside(widget, placed.panel))
+                return placed.panel;
+        return nullptr;
+    }
+
+  private:
+    struct Placed {
+        OperationPanel *panel = nullptr;
+        FloatingPanelWindow *window = nullptr;
+    };
+
+    static auto inside(const QWidget *widget, const QWidget *ancestor) -> bool { return widget != nullptr && (widget == ancestor || ancestor->isAncestorOf(widget)); }
+
+    void reconcile() {
+        QSet<std::int64_t> present;
+        for (int index = 0; index < ops_->panelCount(); ++index) {
+            const auto job = ops_->panelId(index);
+            present.insert(job);
+            if (!panels_.contains(job)) {
+                // A new panel is filled before its window is sized.
+                auto *panel = new OperationPanel(ops_, job, [this](OperationPanel *dragged) { drag(dragged); }, nullptr);
+                panel->update(index);
+                float_panel(panel, std::nullopt);
+            }
+            const auto placed = panels_.value(job);
+            placed.panel->update(index);
+            if (placed.window != nullptr)
+                placed.window->sync();
+        }
+        for (auto it = panels_.begin(); it != panels_.end();) {
+            if (present.contains(it.key())) {
+                ++it;
+                continue;
+            }
+            if (it->window != nullptr) {
+                it->window->hide();
+                it->window->deleteLater();
+            } else {
+                strip_->undock(it->panel);
+                it->panel->deleteLater();
+            }
+            it = panels_.erase(it);
+        }
+    }
+    void float_panel(OperationPanel *panel, std::optional<QPoint> at) {
+        auto *window = new FloatingPanelWindow(panel, ops_, quitting_, workspace_);
+        panels_.insert(panel->job(), Placed{panel, window});
+        window->sync();
+        window->adjustSize();
+        if (at) {
+            window->move(*at);
+        } else {
+            // New panels cascade from the workspace window's lower right.
+            const auto corner = workspace_->geometry().bottomRight();
+            const int offset = 24 * static_cast<int>(panels_.size() - 1);
+            window->move(corner.x() - window->width() - 24 - offset, corner.y() - window->height() - 24 - offset);
+        }
+        window->show();
+    }
+    void dock(std::int64_t job) {
+        auto it = panels_.find(job);
+        if (it == panels_.end() || it->window == nullptr)
+            return;
+        auto *panel = it->window->release();
+        it->window->hide();
+        it->window->deleteLater();
+        it->window = nullptr;
+        strip_->dock(panel);
+    }
+    /// Starts a drag: a drop on the strip docks the panel, and a docked panel
+    /// dropped anywhere else floats where it was dropped.
+    void drag(OperationPanel *panel) {
+        const auto job = panel->job();
+        auto *mime = new QMimeData();
+        mime->setData(QString::fromLatin1(operation_panel_mime), QByteArray::number(static_cast<qlonglong>(job)));
+        auto *drag = new QDrag(panel);
+        drag->setMimeData(mime);
+        drag->setPixmap(panel->grab().scaledToWidth(qMin(panel->width(), 240), Qt::SmoothTransformation));
+        const auto action = drag->exec(Qt::MoveAction);
+        auto it = panels_.find(job);
+        if (action == Qt::IgnoreAction && it != panels_.end() && it->window == nullptr) {
+            strip_->undock(it->panel);
+            float_panel(it->panel, QCursor::pos());
+        }
+    }
+
+    OperationsModel *ops_;
+    OperationPanelStrip *strip_;
+    QWidget *workspace_;
+    const bool *quitting_;
+    QHash<std::int64_t, Placed> panels_;
+};
+
+/// One Permanent Delete Confirmation Window per pending deletion. It shows
+/// only the frozen target count, defaults to Cancel, and stays bound to its
+/// job whatever the Browsers do meanwhile.
+class DeleteConfirmations final : public QObject {
+  public:
+    DeleteConfirmations(OperationsModel *ops, QWidget *workspace) : ops_(ops), workspace_(workspace) {
+        QObject::connect(ops_, &OperationsModel::confirmationsRevisionChanged, this, [this] { reconcile(); });
+    }
+
+  private:
+    void reconcile() {
+        QSet<std::int64_t> present;
+        for (int index = 0; index < ops_->confirmationCount(); ++index) {
+            const auto job = ops_->confirmationId(index);
+            present.insert(job);
+            if (!boxes_.contains(job))
+                open(job, ops_->confirmationTargets(index));
+        }
+        for (auto it = boxes_.begin(); it != boxes_.end();) {
+            if (present.contains(it.key())) {
+                ++it;
+                continue;
+            }
+            if (it.value() != nullptr) {
+                QObject::disconnect(it.value(), nullptr, this, nullptr);
+                it.value()->close();
+            }
+            it = boxes_.erase(it);
+        }
+    }
+    void open(std::int64_t job, int targets) {
+        const auto count = targets == 1 ? QStringLiteral("1 item") : QStringLiteral("%1 items").arg(targets);
+        auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Delete Permanently"), QStringLiteral("Delete %1 permanently?").arg(count), QMessageBox::NoButton, workspace_);
+        box->setObjectName(QStringLiteral("permanentDeleteConfirmationWindow"));
+        box->setAccessibleName(QStringLiteral("Permanent Delete Confirmation Window"));
+        box->setInformativeText(QStringLiteral("This can’t be undone."));
+        auto *remove = box->addButton(QStringLiteral("Delete Permanently"), QMessageBox::DestructiveRole);
+        auto *cancel = box->addButton(QMessageBox::Cancel);
+        box->setDefaultButton(cancel);
+        box->setEscapeButton(cancel);
+        box->setWindowModality(Qt::NonModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QObject::connect(box, &QMessageBox::finished, this, [this, box, remove, job, targets] {
+            boxes_.remove(job);
+            if (box->clickedButton() == remove)
+                ops_->confirmDelete(job, targets);
+            else
+                ops_->cancelOperation(job);
+        });
+        boxes_.insert(job, box);
+        box->show();
+    }
+
+    OperationsModel *ops_;
+    QWidget *workspace_;
+    QHash<std::int64_t, QPointer<QMessageBox>> boxes_;
+};
+
+/// The workspace window. Every close, including Command+Q, Dock Quit, and the
+/// close button, asks `handler` whether to proceed.
+class WorkspaceWindow final : public QMainWindow {
+  public:
+    void setCloseHandler(std::function<void(QCloseEvent *)> handler) { close_ = std::move(handler); }
+
+  protected:
+    void closeEvent(QCloseEvent *event) override {
+        if (close_)
+            close_(event);
+        else
+            QMainWindow::closeEvent(event);
+    }
+
+  private:
+    std::function<void(QCloseEvent *)> close_;
+};
+
 /// The auxiliary Notices window. It never blocks browsing; storage errors
 /// offer Reset Settings behind an explicit confirmation.
 class NoticesWindow final : public QWidget {
@@ -1471,6 +2199,12 @@ class NoticesWindow final : public QWidget {
                 reset->setAccessibleName(QStringLiteral("Reset Settings"));
                 QObject::connect(reset, &QPushButton::clicked, this, [this] { confirm_reset(); });
                 layout->addWidget(reset);
+            }
+            if (bridge_->noticeOffersJournalRetry(index)) {
+                auto *retry = new QPushButton(QStringLiteral("Try Again"), list_);
+                retry->setAccessibleName(QStringLiteral("Try Again"));
+                QObject::connect(retry, &QPushButton::clicked, this, [this] { bridge_->retryJournal(); });
+                layout->addWidget(retry);
             }
         }
         if (bridge_->noticeCount() == 0)
@@ -1591,12 +2325,14 @@ class BrowserHighlightController final : public QObject {
 };
 
 /// Binds every delivered action to its effective shortcut from settings and
-/// rebinds after a load or reset. While an inline editor has focus, only Quit
-/// stays active.
+/// rebinds after a load or reset. File commands on Folder Items act only
+/// while a Folder Items List has focus. While an inline editor has focus,
+/// only Quit stays active.
 class ShortcutBinder final {
   public:
     using Handler = std::function<void()>;
-    ShortcutBinder(QWidget *window, WorkspaceBridge *bridge, QHash<QString, Handler> handlers) : window_(window), bridge_(bridge), handlers_(std::move(handlers)) {}
+    using ListHandler = std::function<void(int)>;
+    ShortcutBinder(QWidget *window, WorkspaceBridge *bridge, QHash<QString, Handler> handlers, std::array<QWidget *, 2> lists, QHash<QString, ListHandler> list_handlers) : window_(window), bridge_(bridge), handlers_(std::move(handlers)), lists_(lists), list_handlers_(std::move(list_handlers)) {}
 
     void rebind() {
         for (auto *shortcut : shortcuts_) {
@@ -1609,6 +2345,15 @@ class ShortcutBinder final {
         for (int index = 0; index < bridge_->bindingCount(); ++index) {
             const auto action = bridge_->bindingAction(index);
             const auto sequence = bridge_->bindingSequence(index);
+            if (const auto list_handler = list_handlers_.value(action); list_handler && !sequence.isEmpty()) {
+                for (int browser = 0; browser < 2; ++browser) {
+                    auto *shortcut = new QShortcut(QKeySequence::fromString(sequence, QKeySequence::PortableText), lists_.at(browser));
+                    shortcut->setContext(Qt::WidgetShortcut);
+                    QObject::connect(shortcut, &QShortcut::activated, lists_.at(browser), [list_handler, browser] { list_handler(browser); });
+                    shortcuts_.push_back(shortcut);
+                }
+                continue;
+            }
             const auto handler = handlers_.value(action);
             if (sequence.isEmpty() || !handler)
                 continue;
@@ -1637,6 +2382,8 @@ class ShortcutBinder final {
     QWidget *window_;
     WorkspaceBridge *bridge_;
     QHash<QString, Handler> handlers_;
+    std::array<QWidget *, 2> lists_;
+    QHash<QString, ListHandler> list_handlers_;
     std::vector<QShortcut *> shortcuts_;
     bool editing_ = false;
 };
@@ -1645,7 +2392,10 @@ class ShortcutBinder final {
 /// A refresh that triggers another call refreshes again instead of nesting.
 class RefreshCoordinator final {
   public:
-    RefreshCoordinator(FolderItemsListModel *left, FolderItemsListModel *right, WorkspaceBridge *bridge) : left_(left), right_(right), bridge_(bridge) {}
+    RefreshCoordinator(FolderItemsListModel *left, FolderItemsListModel *right, WorkspaceBridge *bridge, OperationsModel *operations) : left_(left), right_(right), bridge_(bridge), operations_(operations) {}
+    /// Runs after every refresh, for binders that follow the session as a
+    /// whole, such as inline editors waiting on a job.
+    void addListener(std::function<void()> listener) { listeners_.push_back(std::move(listener)); }
     void refresh() {
         if (refreshing_) {
             again_ = true;
@@ -1658,6 +2408,9 @@ class RefreshCoordinator final {
             left_->refresh();
             right_->refresh();
             bridge_->refresh();
+            operations_->refresh();
+            for (const auto &listener : listeners_)
+                listener();
         }
         refreshing_ = false;
     }
@@ -1666,6 +2419,8 @@ class RefreshCoordinator final {
     FolderItemsListModel *left_;
     FolderItemsListModel *right_;
     WorkspaceBridge *bridge_;
+    OperationsModel *operations_;
+    std::vector<std::function<void()>> listeners_;
     bool refreshing_ = false;
     bool again_ = false;
 };
@@ -1720,14 +2475,16 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     char name[] = "dual-pane";
     char *argv[] = {name, nullptr};
     QApplication app(argc, argv);
-    QMainWindow window;
+    WorkspaceWindow window;
     FolderItemsListModel left_model, right_model;
     right_model.setRightBrowser();
     WorkspaceBridge bridge;
-    RefreshCoordinator coordinator(&left_model, &right_model, &bridge);
+    OperationsModel operations;
+    RefreshCoordinator coordinator(&left_model, &right_model, &bridge, &operations);
     QObject::connect(&left_model, &FolderItemsListModel::sessionChanged, &window, [&coordinator] { coordinator.refresh(); });
     QObject::connect(&right_model, &FolderItemsListModel::sessionChanged, &window, [&coordinator] { coordinator.refresh(); });
     QObject::connect(&bridge, &WorkspaceBridge::sessionChanged, &window, [&coordinator] { coordinator.refresh(); });
+    QObject::connect(&operations, &OperationsModel::sessionChanged, &window, [&coordinator] { coordinator.refresh(); });
     DrainScheduler scheduler(&bridge);
     IconLoader icons;
 
@@ -1747,8 +2504,72 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     auto *sidebar = new Sidebar(&bridge, focus_active_list, show_notices, &standard_layout);
     split->addWidget(left_browser);
     split->addWidget(right_browser);
+    // The Operation Panel Strip runs below both Browsers.
+    auto *browser_area = new QWidget(&standard_layout);
+    auto *browser_area_layout = new QVBoxLayout(browser_area);
+    browser_area_layout->setContentsMargins(0, 0, 0, 0);
+    browser_area_layout->setSpacing(0);
+    browser_area_layout->addWidget(split, 1);
+    auto *strip = new OperationPanelStrip(browser_area);
+    browser_area_layout->addWidget(strip);
     standard_layout.addWidget(sidebar);
-    standard_layout.addWidget(split);
+    standard_layout.addWidget(browser_area);
+    bool quitting = false;
+    OperationPanels panels(&operations, strip, &window, &quitting);
+    DeleteConfirmations confirmations(&operations, &window);
+    for (auto *browser : browsers)
+        coordinator.addListener([browser] { browser->editors()->update(); });
+    QTimer operations_tick;
+    operations_tick.setSingleShot(true);
+    QObject::connect(&operations_tick, &QTimer::timeout, &operations, [&operations] { operations.tick(); });
+    QObject::connect(&operations, &OperationsModel::nextDeadlineChanged, &window, [&operations, &operations_tick] {
+        const int deadline = operations.getNextDeadline();
+        if (deadline < 0)
+            operations_tick.stop();
+        else
+            operations_tick.start(deadline + 1);
+    });
+    // Command+Q, Dock Quit, and the close button all arrive here. With
+    // operations running, the quit waits for confirmation; quitting cancels
+    // them, and cleanup continues for a bounded time after the event loop.
+    QPointer<QMessageBox> quit_prompt;
+    const auto finish_quit = [&quitting] {
+        quitting = true;
+        QTimer::singleShot(0, qApp, [] { QApplication::quit(); });
+    };
+    window.setCloseHandler([&](QCloseEvent *event) {
+        if (quitting) {
+            event->accept();
+            return;
+        }
+        if (operations.requestQuit()) {
+            event->accept();
+            finish_quit();
+            return;
+        }
+        event->ignore();
+        if (quit_prompt) {
+            quit_prompt->raise();
+            return;
+        }
+        const int running = operations.quitPromptRunning();
+        auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Quit Dual Pane"), QStringLiteral("Quit Dual Pane?"), QMessageBox::NoButton, &window);
+        box->setObjectName(QStringLiteral("quitConfirmationWindow"));
+        box->setAccessibleName(QStringLiteral("Quit Confirmation Window"));
+        box->setInformativeText(running == 1 ? QStringLiteral("1 file operation is still running. Quitting cancels it; work already done stays.") : QStringLiteral("%1 file operations are still running. Quitting cancels them; work already done stays.").arg(running));
+        auto *quit = box->addButton(QStringLiteral("Quit"), QMessageBox::DestructiveRole);
+        auto *cancel = box->addButton(QMessageBox::Cancel);
+        box->setDefaultButton(cancel);
+        box->setEscapeButton(cancel);
+        box->setWindowModality(Qt::WindowModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QObject::connect(box, &QMessageBox::finished, &window, [&operations, box, quit, finish_quit] {
+            if (box->clickedButton() == quit && operations.confirmQuit())
+                finish_quit();
+        });
+        quit_prompt = box;
+        box->open();
+    });
     window.setCentralWidget(&standard_layout);
     window.setWindowTitle(QStringLiteral("Dual Pane"));
     window.resize(initial_window_width, initial_window_height);
@@ -1773,16 +2594,31 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     handlers.insert(QStringLiteral("FocusOtherBrowser"), [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 1 : 0)->view()->focusList(); });
     handlers.insert(QStringLiteral("NavigateParent"), [active_model] { active_model()->goToParent(); });
     handlers.insert(QStringLiteral("CloseWindow"), [&window] { window.close(); });
-    handlers.insert(QStringLiteral("QuitApplication"), [] { QApplication::quit(); });
+    // The workspace window decides first, before any other window is asked.
+    handlers.insert(QStringLiteral("QuitApplication"), [&window] { window.close(); });
     handlers.insert(QStringLiteral("NewTab"), [active_model] { active_model()->newTab(); });
-    handlers.insert(QStringLiteral("CloseTab"), [active_model] { active_model()->closeActiveTab(); });
+    // Command+W reaches a docked panel that has focus: it closes a finished
+    // panel and does nothing on a running or waiting one.
+    handlers.insert(QStringLiteral("CloseTab"), [active_model, &panels, &operations] {
+        if (auto *panel = panels.docked_panel(QApplication::focusWidget())) {
+            if (panel->finished())
+                operations.closePanel(panel->job());
+            return;
+        }
+        active_model()->closeActiveTab();
+    });
+    handlers.insert(QStringLiteral("NewFolder"), [active_model] { active_model()->startFileCommand(command_new_folder); });
     handlers.insert(QStringLiteral("NavigateBack"), [active_model] { active_model()->goBack(); });
     handlers.insert(QStringLiteral("NavigateForward"), [active_model] { active_model()->goForward(); });
     handlers.insert(QStringLiteral("RefreshFolder"), [active_model] { active_model()->refreshFolder(); });
     const std::array<QString, 8> sorts = {QStringLiteral("SortByNameAscending"), QStringLiteral("SortByNameDescending"), QStringLiteral("SortByTypeAscending"), QStringLiteral("SortByTypeDescending"), QStringLiteral("SortByDateAscending"), QStringLiteral("SortByDateDescending"), QStringLiteral("SortBySizeAscending"), QStringLiteral("SortBySizeDescending")};
     for (int choice = 0; choice < static_cast<int>(sorts.size()); ++choice)
         handlers.insert(sorts.at(choice), [active_model, choice] { active_model()->setSort(choice); });
-    ShortcutBinder shortcuts(&window, &bridge, handlers);
+    QHash<QString, ShortcutBinder::ListHandler> list_handlers;
+    const std::array<std::pair<QString, int>, 5> file_commands = {{{QStringLiteral("CopyToOtherBrowser"), command_copy}, {QStringLiteral("MoveToOtherBrowser"), command_move}, {QStringLiteral("RenameItem"), command_rename}, {QStringLiteral("MoveToTrash"), command_trash}, {QStringLiteral("DeletePermanently"), command_delete}}};
+    for (const auto &file_command : file_commands)
+        list_handlers.insert(file_command.first, [models, command = file_command.second](int browser) { models.at(browser)->startFileCommand(command); });
+    ShortcutBinder shortcuts(&window, &bridge, handlers, {left_browser->view(), right_browser->view()}, list_handlers);
     QObject::connect(&bridge, &WorkspaceBridge::bindingsRevisionChanged, &window, [&shortcuts] { shortcuts.rebind(); });
 
     // Focus entering any control inside a Browser activates that Browser.
@@ -1813,7 +2649,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     // The lambdas above capture stack objects that are destroyed in reverse
     // order below; focus changes during that teardown must not reach them.
     QObject::disconnect(&app, nullptr, &window, nullptr);
-    for (QObject *source : std::initializer_list<QObject *>{&bridge, &left_model, &right_model})
+    for (QObject *source : std::initializer_list<QObject *>{&bridge, &left_model, &right_model, &operations})
         QObject::disconnect(source, nullptr, &window, nullptr);
     volume_reader->wait();
     {

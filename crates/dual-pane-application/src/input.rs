@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::{CleanupResult, FavoriteProbeOutcome, PlannedItem, RowChange, ScanFailure, SettingsFailure, SettingsSnapshot, StepResult};
-use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
+use crate::{ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, PlannedItem, RowChange, ScanFailure, SettingsFailure, SettingsSnapshot, StepResult};
+use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
@@ -20,6 +20,20 @@ pub enum Command {
         tab: TabId,
         kind: OperationKind,
     },
+    /// Tries another name for a Rename or New Folder whose name was refused.
+    /// The new job keeps the refused job's frozen folder and target, whatever
+    /// the tab shows now; the refused job closes only if the name is valid.
+    RetryName {
+        id: OperationId,
+        name: EntryName,
+    },
+    /// Opens the inline editor for Rename or New Folder when the command is
+    /// available; otherwise reports why it is not.
+    RequestNameEditor {
+        browser: BrowserSide,
+        tab: TabId,
+        command: OperationCommand,
+    },
     ConfirmPermanentDelete {
         id: OperationId,
         targets: usize,
@@ -33,6 +47,18 @@ pub enum Command {
     },
     CancelOperation {
         id: OperationId,
+    },
+    /// Removes a finished job once its panel hides or closes, or once its
+    /// Notice is recorded when no panel was shown.
+    DismissOperation {
+        id: OperationId,
+    },
+    /// Asks the runtime to reopen the operation safety journal.
+    RetryJournal,
+    /// Quits the application. While operations run, an unconfirmed request
+    /// only asks for confirmation; a confirmed one cancels every job.
+    Quit {
+        confirmed: bool,
     },
     ActivateBrowser {
         browser: BrowserSide,
@@ -132,7 +158,16 @@ pub enum Command {
         browser: BrowserSide,
         tab: TabId,
     },
+    /// Activates the entry: enters a folder, opens a regular file or
+    /// package with its default application, or resolves a link first.
     OpenEntry {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
+    /// Navigates into a package instead of opening it.
+    ShowPackageContents {
         browser: BrowserSide,
         tab: TabId,
         row: usize,
@@ -179,12 +214,24 @@ pub enum Command {
 /// `LocationInvalidated` reports that a location's contents may have changed;
 /// every tab showing or loading it rereads it. `SettingsReset` reports where
 /// the replaced database was preserved, when there was one to preserve.
+/// `OperationProgress` is a coalesced display update for the step with that
+/// generation. `ItemResolved` answers `WorkRequest::ResolveItem`, and
+/// `OpenFailed` reports that macOS refused to open an item. `JournalStatus`
+/// arrives at launch and after each reopen attempt; until the first one,
+/// the journal counts as available. `TemporariesSwept` reports the launch
+/// sweep of temporaries left by earlier launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     OperationScanned { id: OperationId, generation: u64, plan: Result<Arc<[PlannedItem]>, ScanFailure> },
     OperationStepped { id: OperationId, generation: u64, result: StepResult },
+    OperationFinalized { id: OperationId, generation: u64, result: FinalizeResult },
     OperationCleaned { id: OperationId, generation: u64, result: CleanupResult },
     OperationExecutorUnavailable { id: OperationId, generation: u64 },
+    OperationProgress { id: OperationId, generation: u64, bytes: ByteProgress },
+    ItemResolved { browser: BrowserSide, tab: TabId, token: RequestToken, item: Location, target: ResolvedTarget },
+    OpenFailed { item: Location },
+    JournalStatus { available: bool },
+    TemporariesSwept { removed: usize, failed: Vec<Location> },
     LocationInvalidated { location: Location },
     FolderItemsLoaded { browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>> },
     FolderItemsFailed { browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind },
@@ -198,6 +245,16 @@ pub enum Event {
     SettingsReset { backup: Option<Location> },
     SettingsResetFailed { failure: SettingsFailure },
 }
+/// What a link resolved to on a worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedTarget {
+    Folder,
+    File,
+    Package,
+    /// Missing, unreadable, or neither a file nor a folder.
+    Unavailable,
+}
+
 impl From<Command> for Input {
     fn from(value: Command) -> Self {
         Self::Command(value)

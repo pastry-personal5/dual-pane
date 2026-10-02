@@ -12,6 +12,9 @@ use dual_pane_application::{Key, Shortcut};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
+use crate::operation_journal::{Journal, journal_path};
+use crate::operation_lane::{STEP_BUDGET, Services};
+use crate::operation_step::NativeFileSystem;
 use crate::runtime::Runtime;
 use crate::settings_storage::SettingsWorker;
 
@@ -98,6 +101,11 @@ pub mod ffi {
         fn notice_text(self: &WorkspaceBridge, notice: i32) -> QString;
         #[cxx_name = "noticeOffersReset"]
         fn notice_offers_reset(self: &WorkspaceBridge, notice: i32) -> bool;
+        /// Whether the Notice offers Try Again for the safety journal.
+        #[cxx_name = "noticeOffersJournalRetry"]
+        fn notice_offers_journal_retry(self: &WorkspaceBridge, notice: i32) -> bool;
+        #[cxx_name = "retryJournal"]
+        fn retry_journal(self: Pin<&mut WorkspaceBridge>);
         /// Resets settings after the person confirmed it.
         #[cxx_name = "resetSettings"]
         fn reset_settings(self: Pin<&mut WorkspaceBridge>);
@@ -152,9 +160,12 @@ pub struct WorkspaceBridgeRust {
 impl ffi::WorkspaceBridge {
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
-        let BrowserStartup { location, home, settings_path, source_factory, location_probe } = *startup;
+        let BrowserStartup { location, home, settings_path, source_factory, location_probe, launch } = *startup;
         match Runtime::start(source_factory, location_probe, Box::new(ffi::schedule_gui_drain)) {
-            Ok(runtime) => {
+            Ok(mut runtime) => {
+                // Without the lane, operations fail closed with a Notice.
+                let journal = Journal::new(settings_path.as_deref().map(journal_path), launch);
+                runtime.attach_operations(Services { fs: std::sync::Arc::new(NativeFileSystem), journal, budget: STEP_BUDGET }).ok();
                 let settings = settings_path.and_then(|path| SettingsWorker::start_with_wake(path, Box::new(ffi::schedule_gui_drain)).ok());
                 let mut coordinator = WorkspaceSession::with_settings(runtime, home, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
                 coordinator.start(location);
@@ -274,6 +285,13 @@ impl ffi::WorkspaceBridge {
     }
     fn notice_offers_reset(&self, notice: i32) -> bool {
         self.notice(notice).is_some_and(|notice| notice.offers_reset)
+    }
+    fn notice_offers_journal_retry(&self, notice: i32) -> bool {
+        self.notice(notice).is_some_and(|notice| notice.offers_journal_retry)
+    }
+    fn retry_journal(mut self: Pin<&mut Self>) {
+        with_session(|session| session.submit(dual_pane_application::Command::RetryJournal));
+        self.as_mut().session_changed();
     }
     fn notice(&self, notice: i32) -> Option<&dual_pane_adapters::NoticeViewModel> {
         usize::try_from(notice).ok().and_then(|notice| self.rust().shown.notices().get(notice))
