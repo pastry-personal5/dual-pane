@@ -10,7 +10,7 @@ This document is the active source of truth for committed product behavior, safe
 - Tabs in each Browser, including tab history and an active tab.
 - One level of Favorite Groups containing Favorite Items in the Sidebar. People can create, rename, reorder, move, and delete them; their hierarchy and order remain in memory and across relaunches.
 - Copy and move between Browsers; rename; create directory; move to Trash; and permanent deletion.
-- Opening a regular file with its macOS default application.
+- Opening a regular file or a macOS package, such as an application bundle, with its default application.
 - Restoring each Browser's open tabs, their order, active tab, locations, and active Browser when the application relaunches. Folder sort choices are restored from location-shared memory; text filtering is outside Phase 3 behavior and session state.
 - Watching open tab locations and automatically refreshing Folder Items, including inactive tabs, while preserving matching selection and cursor state.
 
@@ -31,9 +31,10 @@ Favorite Group names and Favorite Item Aliases reject empty or whitespace-only t
 - A file onto an existing folder with the same name, or a folder onto an existing file, offers **Try Again**, **Skip**, and **Cancel** in its Operation Decision Card. Neither item is replaced.
 - A recoverable error, such as permission denied, a privacy restriction, no space, or an item in use, offers **Try Again**, **Skip**, and **Cancel** in its Operation Decision Card.
 - If a recursive source scan cannot read a folder, **Skip** omits that folder's unread subtree and continues with other targets. Any containing directory that still holds skipped content must remain during permanent deletion.
+- When permanent deletion or a move removes a source folder after handling its contents, a folder that cannot be removed offers **Try Again**, **Skip**, and **Cancel**; Skip keeps it. Folders that still hold skipped or failed content are kept without asking.
 - Try Again/Skip/Cancel decisions have no option to apply the choice to remaining items.
 - A rename or New Folder name collision never overwrites the existing Item.
-- Opening a symbolic link to a folder navigates into it; activating a link to a regular file opens its target. Copy and move act on the link itself, and operations never follow links inside folders.
+- Opening a symbolic link to a folder navigates into it; activating a link to a regular file opens its target. Activating a macOS package (a bundle such as an `.app`), or a link to one, launches or opens it with its default application; **Show Package Contents** navigates into it. Copy and move act on the link itself, and operations never follow links inside folders.
 - The safety invariants for replacement, cross-volume moves, symlinks, cancellation, and error handling are defined in [architecture.md](architecture.md#44-data-safety-invariants).
 
 ## Session recovery
@@ -49,4 +50,3 @@ The [Favorites policy](#favorites) governs unavailable Favorite Items independen
 - Built-in viewer or Quick Look UI.
 - Archive browsing.
 - Remote file systems, including SFTP and SMB.
-- Package-specific browsing behavior, including application bundles.

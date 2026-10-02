@@ -19,7 +19,7 @@ Every product-facing value at this boundary is Qt-free: settings, defaults, acti
 | Favorite Groups and Favorite Items | P3-M2 persistence records; P3-M5 domain hierarchy and application Favorites state | Ordered settings database tables | P3-M2 defines and tests storage; P3-M5 adds editing rules; P3-M6 delivers the Sidebar. |
 | Global sort/filter defaults | Application defaults | Settings database only if made user-configurable | P3-M4 decides the interaction; P3-M5 models tab-local filter state. |
 | Open tab order, active tab/Browser, current locations, and tab-local state | Application workspace snapshot | Settings database session tables | P3-M9 saves and restores; back/forward history stays in memory for the current session. |
-| Operation recovery records | Runtime safety journal | Separate runtime-owned durable record | File-operation milestones; never mixed with settings transactions. |
+| Operation recovery records | Runtime safety journal | Separate runtime-owned durable record | File-operation milestones; never mixed with settings transactions. P3-M8 stores it in its own SQLite file, which Reset Settings never touches. |
 
 ## Folder sort memory
 

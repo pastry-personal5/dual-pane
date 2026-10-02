@@ -41,7 +41,7 @@ The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider
     - Folder Pane
       - Folder Pane Toolbar Rows #1 and #2
       - Folder Pane Toolbar Row #3 with Back Button, Forward Button, Up Button, and sort controls
-      - Folder Items List and Folder Items Context Menu
+      - Folder Items List, Folder Items Context Menu, and Missing Folder Overlay
       - Browser Status Bar
   - Operation Panel Strip below both Browsers, containing docked Operation Panels
 - Floating Operation Panels, each with Operation Progress Indicator, Cancel Operation Button, and any Operation Decision Card for its job

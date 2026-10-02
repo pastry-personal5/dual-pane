@@ -50,6 +50,7 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Size Descending Sort Button | `size_descending_sort_button` |
 | Folder Items List | `folder_items_list` |
 | Folder Items Context Menu | `folder_items_context_menu` |
+| Missing Folder Overlay | `missing_folder_overlay` |
 | Rename Item Editor | `rename_item_editor` |
 | New Folder Name Editor | `new_folder_name_editor` |
 | Operation Panel Strip | `operation_panel_strip` |
@@ -102,6 +103,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Rename Item | `RenameItem` | Planned ID |
 | Move to Trash | `MoveToTrash` | Planned ID |
 | Delete Permanently | `DeletePermanently` | Planned ID |
+| Show Package Contents | `ShowPackageContents` | Planned ID, no default shortcut |
 
 ## Deferred components
 

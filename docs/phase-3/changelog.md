@@ -2,6 +2,29 @@
 
 Status: Active
 
+## 2026-10-02 — P3-M8 planning
+
+- Planned P3-M8 as one milestone with an ordered checklist. Owner decisions:
+  - **Native layer:** pinned `libc` for native calls; Qt for Trash; clone/copy with full metadata.
+  - **Copies:** every copied file goes through a temporary and `RENAME_EXCL`. Replace uses plain `rename()`. A cross-volume source-removal failure is a recoverable error.
+  - **Runtime:** a two-worker file-operation lane; a 500 ms panel reveal; floating panels plus the drag-to-dock strip.
+  - **Feedback:** refresh at terminal outcome only; item progress plus current-file bytes; a confirmed quit while jobs run.
+- Safety journal: a separate SQLite file, which satisfies the P3-M2 separation rule. It writes one record per operation and destination directory. Temporary names carry a random launch ID. The launch sweep deletes only exact-pattern files or links from earlier launches. If the journal cannot open, Copy is disabled until Try Again in its Notice reopens it, and a cross-volume move item raises a recoverable error.
+- P3-M7 contract extensions, recorded here and in the [P3-M8 architecture](milestone-08-architecture.md). P3-M7's checklist and tests are unchanged.
+  - **Folder finalization:** a post-order phase for permanent deletion and moves, because a folder-removal failure could not be expressed. [architecture.md](../architecture.md#43-file-operations-and-decisions) step 7 is updated.
+  - **Rename and New Folder:** typed name rejections for the editors, plus a name-less availability query.
+  - **Jobs:** job dismissal, byte-progress events, and new error kinds. A worker panic reuses the executor-unavailable terminal event instead of a new internal kind.
+  - **Opening and quit:** a package flag on listed entries, set by the directory reader; an open-item request for links; the quit confirmation state; and a journal-status event.
+- Interaction decisions:
+  - **Packages and scope:** activating a macOS package opens it, and Show Package Contents navigates in. This widens the included scope and removes the package out-of-scope line in [product-behavior.md](../product-behavior.md).
+  - **Shortcuts:** file-command shortcuts act only while the Folder Items List has focus; New Folder stays window-wide.
+  - **Editors:** they commit asynchronously and reopen on a name problem after focus loss. The New Folder Name Editor is an empty row pinned at the top.
+  - **Decision Cards:** they never take focus and have no default button. Floating panels join macOS window cycling, and docked panels are in the Tab order.
+  - **Missing folders:** the tab keeps its path and rows and shows the Missing Folder Overlay.
+  - **Trash:** a volume without Trash is a recoverable error, never permanent deletion.
+  - **Temporaries:** only current-launch temporaries are hidden, so leftovers stay visible. The owner confirmed this narrowing of the earlier hide-all answer.
+- Verification is automated first, then a human check for drag-docking, real Trash, default-application and package opening, and card focus.
+
 ## 2026-10-02 — P3-M7 follow-up review
 
 - A Rename or New Folder name collision no longer leaves an uncancellable job. Cancelling it, like cancelling a pending permanent-delete confirmation, closes the job as cancelled without a cleanup request.
