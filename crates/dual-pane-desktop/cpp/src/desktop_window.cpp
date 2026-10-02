@@ -1282,6 +1282,7 @@ class FavoritesPanel final : public QWidget {
             auto *menu_button = command_button(QStringLiteral("favoriteGroupMenuButton"), QStringLiteral("⋯"), QStringLiteral("Group Actions"), QStringLiteral("Favorite Group Menu Button"), header);
             menu_button->setFocusPolicy(Qt::TabFocus);
             menu_button->setPopupMode(QToolButton::InstantPopup);
+            menu_button->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image:none; width:0px; }"));
             menu_button->setEnabled(ready);
             auto *menu = new QMenu(menu_button);
             menu->setObjectName(QStringLiteral("favoriteGroupMenu"));
