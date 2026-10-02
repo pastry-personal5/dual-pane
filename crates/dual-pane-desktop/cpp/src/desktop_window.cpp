@@ -933,6 +933,9 @@ class FolderPane final : public QFrame {
         // columns share the Date pair.
         view_->setColumnsHandler([this](const std::array<bool, column_count> &visible) {
             const std::array<bool, 4> fields_visible = {true, visible.at(2), visible.at(3) || visible.at(4), visible.at(5)};
+            // Once Exact Date hides, the Date pair only occupies the
+            // remaining Relative Date column's width.
+            sort_groups_.at(2)->setFixedWidth(relative_date_column_width + (visible.at(4) ? column_minimum.at(4) : 0));
             for (int field = 0; field < static_cast<int>(sort_groups_.size()); ++field)
                 sort_groups_.at(field)->setVisible(fields_visible.at(field));
             for (int choice = 0; choice < static_cast<int>(sorts_.size()); ++choice)
@@ -1568,8 +1571,12 @@ class ShortcutBinder final {
     ShortcutBinder(QWidget *window, WorkspaceBridge *bridge, QHash<QString, Handler> handlers) : window_(window), bridge_(bridge), handlers_(std::move(handlers)) {}
 
     void rebind() {
-        for (auto *shortcut : shortcuts_)
+        for (auto *shortcut : shortcuts_) {
+            // deleteLater leaves the old binding alive until the event loop
+            // resumes; it must stop matching keys before replacements exist.
+            shortcut->setEnabled(false);
             shortcut->deleteLater();
+        }
         shortcuts_.clear();
         for (int index = 0; index < bridge_->bindingCount(); ++index) {
             const auto action = bridge_->bindingAction(index);

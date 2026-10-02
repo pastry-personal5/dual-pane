@@ -70,16 +70,24 @@ impl SettingsDatabase {
         }
         let mut connection = Connection::open(path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
-        connection.pragma_update(None, "journal_mode", "WAL")?;
         migrate(&mut connection)?;
-        preload_bindings(&mut connection)?;
-        Ok(Self { connection })
+        let mut database = Self { connection };
+        // A damaged existing database must remain untouched until the person
+        // explicitly resets it. Validate before changing its journal mode or
+        // inserting newly catalogued actions.
+        database.load()?;
+        database.connection.pragma_update(None, "journal_mode", "WAL")?;
+        preload_bindings(&mut database.connection)?;
+        Ok(database)
     }
     pub fn load(&self) -> Result<SettingsSnapshot, SettingsStorageError> {
+        Self::load_connection(&self.connection)
+    }
+    fn load_connection(connection: &Connection) -> Result<SettingsSnapshot, SettingsStorageError> {
         let bindings = ActionId::ALL
             .into_iter()
             .map(|action| {
-                self.connection
+                connection
                     .query_row("SELECT command, shift, option, control, key FROM action_binding WHERE action = ?1", [action.as_str()], |row| {
                         let command = row.get::<_, Option<i64>>(0)?.unwrap_or_default() != 0;
                         let shift = row.get::<_, Option<i64>>(1)?.unwrap_or_default() != 0;
@@ -99,11 +107,11 @@ impl SettingsDatabase {
             .flatten()
             .flatten()
             .collect();
-        let mut statement = self.connection.prepare("SELECT target, field, direction FROM folder_sort ORDER BY recent ASC")?;
+        let mut statement = connection.prepare("SELECT target, field, direction FROM folder_sort ORDER BY recent ASC")?;
         let folder_sorts = statement.query_map([], |row| Ok((decode_location(&row.get::<_, Vec<u8>>(0)?).map_err(to_sql_error)?, decode_sort(row.get(1)?, row.get(2)?).map_err(to_sql_error)?)))?.collect::<Result<Vec<_>, _>>()?;
-        let initialized = self.connection.query_row("SELECT value FROM setting_marker WHERE key = 'favorites_initialized'", [], |row| row.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0;
-        let groups = self.connection.prepare("SELECT id, name, position FROM favorite_group ORDER BY position, id")?.query_map([], |row| Ok(FavoriteGroupRecord { id: row.get(0)?, name: row.get(1)?, position: row.get(2)? }))?.collect::<Result<Vec<_>, _>>()?;
-        let items = self.connection.prepare("SELECT id, group_id, name, target, position FROM favorite_item ORDER BY group_id, position, id")?.query_map([], |row| Ok(FavoriteItemRecord { id: row.get(0)?, group_id: row.get(1)?, name: row.get(2)?, target: decode_location(&row.get::<_, Vec<u8>>(3)?).map_err(to_sql_error)?, position: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
+        let initialized = connection.query_row("SELECT value FROM setting_marker WHERE key = 'favorites_initialized'", [], |row| row.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0;
+        let groups = connection.prepare("SELECT id, name, position FROM favorite_group ORDER BY position, id")?.query_map([], |row| Ok(FavoriteGroupRecord { id: row.get(0)?, name: row.get(1)?, position: row.get(2)? }))?.collect::<Result<Vec<_>, _>>()?;
+        let items = connection.prepare("SELECT id, group_id, name, target, position FROM favorite_item ORDER BY group_id, position, id")?.query_map([], |row| Ok(FavoriteItemRecord { id: row.get(0)?, group_id: row.get(1)?, name: row.get(2)?, target: decode_location(&row.get::<_, Vec<u8>>(3)?).map_err(to_sql_error)?, position: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
         let favorites = FavoritesRecords { initialized, groups, items };
         favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
         Ok(SettingsSnapshot { bindings, folder_sorts, favorites })
@@ -170,6 +178,9 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
         tx.execute("UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'CloseWindow' AND IFNULL(command, 0) = 1 AND IFNULL(shift, 0) = 0 AND IFNULL(option, 0) = 0 AND IFNULL(control, 0) = 0 AND key = 'W'", [])?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    // Validate migrated records before committing the schema change. A
+    // malformed old collection leaves the original database intact.
+    SettingsDatabase::load_connection(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -482,6 +493,24 @@ mod tests {
 
         db.connection.execute("INSERT INTO favorite_group(id, name, position) VALUES (1, ' ', 0)", []).unwrap();
         assert!(matches!(db.load(), Err(SettingsStorageError::InvalidData("Favorites hierarchy"))));
+    }
+    #[test]
+    fn failed_open_does_not_preload_bindings_or_commit_a_migration() {
+        for version in [2, SCHEMA_VERSION] {
+            let (_directory, path) = temp_database();
+            let db = SettingsDatabase::open(&path).unwrap();
+            db.connection.execute("DELETE FROM action_binding WHERE action = 'NewTab'", []).unwrap();
+            db.connection.execute("INSERT INTO favorite_group(id, name, position) VALUES (1, ' ', 0)", []).unwrap();
+            db.connection.pragma_update(None, "user_version", version).unwrap();
+            drop(db);
+
+            assert!(matches!(SettingsDatabase::open(&path), Err(SettingsStorageError::InvalidData("Favorites hierarchy"))));
+            let connection = Connection::open(&path).unwrap();
+            let stored_version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+            let new_tab_bindings: i64 = connection.query_row("SELECT COUNT(*) FROM action_binding WHERE action = 'NewTab'", [], |row| row.get(0)).unwrap();
+            assert_eq!(stored_version, version);
+            assert_eq!(new_tab_bindings, 0);
+        }
     }
     #[test]
     fn supported_old_schema_migrates_transactionally() {
