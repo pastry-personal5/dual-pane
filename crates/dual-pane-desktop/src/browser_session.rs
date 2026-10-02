@@ -20,12 +20,6 @@ pub const DRAIN_TIME_BUDGET: Duration = Duration::from_millis(4);
 /// loop has exited.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectionMovement {
-    Previous,
-    Next,
-}
-
 /// What the desktop needs to start: where both Browsers open and how they read
 /// listings and probe locations.
 pub struct BrowserStartup {
@@ -115,37 +109,6 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         }
     }
 
-    pub fn activate(&mut self, browser: BrowserSide) {
-        self.submit(Command::ActivateBrowser { browser });
-    }
-
-    pub fn clear_selection(&mut self, browser: BrowserSide) {
-        self.submit(Command::ActivateBrowser { browser });
-        self.submit(Command::ClearSelection { browser });
-    }
-
-    pub(crate) fn move_selection(&mut self, browser: BrowserSide, movement: SelectionMovement) {
-        let view = self.view(browser);
-        let row_count = view.row_count();
-        if row_count == 0 {
-            return;
-        }
-        let selected = view.selected_row();
-        let target = match (selected, movement) {
-            (None, _) => 0,
-            (Some(0), SelectionMovement::Previous) => 0,
-            (Some(row), SelectionMovement::Previous) => row - 1,
-            (Some(row), SelectionMovement::Next) => row.saturating_add(1).min(row_count - 1),
-        };
-        self.submit_ui(browser, UiEvent::SelectRow { row: target });
-    }
-
-    pub(crate) fn activate_selection(&mut self, browser: BrowserSide) {
-        if let Some(row) = self.view(browser).selected_row() {
-            self.submit_ui(browser, UiEvent::ActivateRow { row });
-        }
-    }
-
     pub fn drain(&mut self) -> bool {
         if let Some(worker) = &self.settings_worker {
             for result in worker.take_results() {
@@ -196,6 +159,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
 mod tests {
     use std::sync::Arc;
 
+    use dual_pane_adapters::SelectionMovement;
     use dual_pane_application::{Command, Event, WorkRequest};
     use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken, Selection, SortSpec, TabId};
 
@@ -328,17 +292,17 @@ mod tests {
         let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(Location::root());
 
-        session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
+        session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
         assert_eq!(session.view(BrowserSide::Left).selected_row(), None);
 
         session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("first"), entry("second"), entry("third")]), changes: None });
-        session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
+        session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
         assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
-        session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
+        session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
         assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
-        session.move_selection(BrowserSide::Left, SelectionMovement::Next);
-        session.move_selection(BrowserSide::Left, SelectionMovement::Next);
-        session.move_selection(BrowserSide::Left, SelectionMovement::Next);
+        session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Next));
+        session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Next));
+        session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Next));
         assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(2));
         assert_eq!(session.view(BrowserSide::Right).selected_row(), None);
     }
@@ -351,7 +315,7 @@ mod tests {
         session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 });
         session.submit(Command::SelectAll { browser: BrowserSide::Left });
         assert_eq!(session.view(BrowserSide::Left).selection().entries().len(), 2);
-        session.move_selection(BrowserSide::Left, SelectionMovement::Previous);
+        session.submit_ui(BrowserSide::Left, UiEvent::MoveSelection(SelectionMovement::Previous));
         assert_eq!(session.view(BrowserSide::Left).selection().entries(), &[EntryName::new("first").unwrap()]);
         assert_eq!(session.view(BrowserSide::Left).selected_row(), Some(0));
     }
@@ -368,7 +332,7 @@ mod tests {
 
         session.submit_ui(BrowserSide::Left, UiEvent::GoToParent);
         session.submit_ui(BrowserSide::Right, UiEvent::SelectRow { row: 0 });
-        session.activate_selection(BrowserSide::Right);
+        session.submit_ui(BrowserSide::Right, UiEvent::ActivateSelection);
 
         assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first().next().next(), location: Location::root(), sort: SortSpec::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next().next().next(), location: location.join(&folder), sort: SortSpec::default(), previous: None }]);
     }

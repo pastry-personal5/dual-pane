@@ -156,7 +156,7 @@ proptest! {
                     let old = if browser == BrowserSide::Left { &before.0.1 } else { &before.1.1 };
                     let new = workspace.entries(browser);
                     for output in &transition.outputs {
-                        if let Output::FolderItemsRowsChanged { changes, .. } = output {
+                        if let Output::FolderItemsLoaded { changes: Some(changes), .. } = output {
                             let mut rows = old.clone();
                             for change in changes {
                                 prop_assert!(change.row + change.removed <= rows.len(), "a row change leaves the shown rows");

@@ -1,8 +1,7 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{Command, Event, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoritesRecords, Input, Output, RowChange, SettingsFailure, SettingsState, SettingsStatus, WorkRequest, fresh_profile_favorites, fresh_profile_screenshots};
-use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken, Selection, SortSpec, TabId, valid_favorite_name};
+use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, valid_favorite_name};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Transition {
@@ -36,26 +35,15 @@ struct BrowserState {
     order: BrowserTabs,
     tabs: Vec<TabState>,
 }
+/// One tab: its domain history of visited folders, the Folder Items it shows,
+/// and its outstanding read.
 #[derive(Debug)]
 struct TabState {
     id: TabId,
-    history: Vec<HistoryEntry>,
-    current: Option<usize>,
+    history: TabHistory,
     folder_items: Option<FolderItems>,
     pending: Option<PendingRead>,
     error: Option<ListingError>,
-}
-#[derive(Debug, Clone, Default)]
-struct HistoryEntry {
-    location: Location,
-    view: ViewState,
-}
-#[derive(Debug, Clone, Default)]
-struct ViewState {
-    selection: Selection,
-    cursor: Option<EntryName>,
-    anchor: Option<EntryName>,
-    scroll: Option<(EntryName, i32)>,
 }
 #[derive(Debug)]
 struct FolderItems {
@@ -96,7 +84,6 @@ impl Workspace {
             Input::Command(Command::GoBack { browser }) => self.travel(browser, false),
             Input::Command(Command::GoForward { browser }) => self.travel(browser, true),
             Input::Command(Command::Refresh { browser }) => self.refresh_tab(browser, self.active_tab(browser)),
-            Input::Command(Command::InvalidateLocation { location }) => self.refresh_location(&location),
             Input::Command(Command::SetSort { location, sort }) => self.set_sort(location, sort),
             Input::Command(Command::CreateFavoriteGroup { name }) => self.create_favorite_group(name),
             Input::Command(Command::RenameFavoriteGroup { id, name }) => self.rename_favorite_group(id, name),
@@ -113,10 +100,11 @@ impl Workspace {
             Input::Command(Command::ClearSelection { browser }) => self.clear_selection(browser),
             Input::Command(Command::OpenEntry { browser, row, name }) => self.open_entry(browser, row, &name),
             Input::Command(Command::GoToParent { browser }) => self.go_to_parent(browser),
-            Input::Command(Command::UpdateScrollHint { browser, anchor, offset }) => self.scroll(browser, anchor, offset),
+            Input::Command(Command::UpdateScrollHint { browser, scroll }) => self.scroll(browser, scroll),
             Input::Command(Command::SelectRange { browser, row, name }) => self.select_range(browser, row, &name),
             Input::Command(Command::MoveSelection { browser, row, name }) => self.move_selection(browser, row, &name),
             Input::Command(Command::SecondarySelect { browser, row, name }) => self.secondary_select(browser, row, &name),
+            Input::Event(Event::LocationInvalidated { location }) => self.refresh_location(&location),
             Input::Event(Event::FolderItemsLoaded { browser, tab, token, entries, changes }) => self.loaded(browser, tab, token, entries, changes),
             Input::Event(Event::FolderItemsFailed { browser, tab, token, kind }) => self.failed(browser, tab, token, kind),
             Input::Event(Event::FolderItemsCancelled { browser, tab, token }) => self.cancelled(browser, tab, token),
@@ -160,7 +148,8 @@ impl Workspace {
         self.tab(side, self.active_tab(side)).and_then(|t| t.pending.as_ref().map(|x| &x.location))
     }
     pub fn selection(&self, side: BrowserSide) -> &Selection {
-        &self.active_history(side).view.selection
+        static NONE: Selection = Selection::new();
+        self.tab(side, self.active_tab(side)).and_then(|tab| tab.history.current()).map_or(&NONE, |visit| visit.state().selection())
     }
     pub fn favorites(&self) -> &FavoritesRecords {
         self.settings.favorites()
@@ -190,10 +179,6 @@ impl Workspace {
     }
     fn tab_mut(&mut self, side: BrowserSide, id: TabId) -> Option<&mut TabState> {
         self.browser_mut(side).tabs.iter_mut().find(|t| t.id == id)
-    }
-    fn active_history(&self, side: BrowserSide) -> &HistoryEntry {
-        let tab = self.tab(side, self.active_tab(side)).expect("active tab invariant");
-        &tab.history[tab.current.unwrap_or(0)]
     }
     fn activate_browser(&mut self, browser: BrowserSide) -> Transition {
         if self.active_browser == browser {
@@ -295,9 +280,9 @@ impl Workspace {
     /// keep moving instead of re-requesting the same entry.
     fn history_step(&self, browser: BrowserSide, forward: bool) -> Option<(usize, Location)> {
         let tab = self.tab(browser, self.active_tab(browser))?;
-        let base = tab.pending.as_ref().and_then(|pending| pending.history_target).or(tab.current)?;
-        let target = if forward { base.checked_add(1) } else { base.checked_sub(1) }?;
-        tab.history.get(target).map(|entry| (target, entry.location.clone()))
+        let base = tab.pending.as_ref().and_then(|pending| pending.history_target).or(tab.history.current_index())?;
+        let target = tab.history.neighbor(base, forward)?;
+        tab.history.get(target).map(|visit| (target, visit.location().clone()))
     }
     fn travel(&mut self, browser: BrowserSide, forward: bool) -> Transition {
         let tab = self.active_tab(browser);
@@ -466,8 +451,13 @@ impl Workspace {
         if favorites.items.iter().any(|other| other.group_id == group_id && other.name == item.name) {
             return Transition::default();
         }
+        let same_group = item.group_id == group_id;
         item.group_id = group_id;
-        let target_index = favorites.items.iter().enumerate().filter(|(_, other)| other.group_id == group_id).nth(position).map_or(favorites.items.len(), |(index, _)| index);
+        // Past the group's end, the Item goes right after the group's last
+        // Item, or back to its own index, so a move to the current position
+        // leaves the records unchanged.
+        let group_rows = favorites.items.iter().enumerate().filter(|(_, other)| other.group_id == group_id).map(|(row, _)| row).collect::<Vec<_>>();
+        let target_index = group_rows.get(position).copied().or_else(|| group_rows.last().map(|last| last + 1)).unwrap_or(if same_group { index } else { favorites.items.len() });
         favorites.items.insert(target_index, item);
         normalize_item_positions(&mut favorites);
         self.commit_favorites(favorites)
@@ -499,7 +489,9 @@ impl Workspace {
             return Transition::default();
         }
         favorites.initialized = true;
-        if favorites.hierarchy().is_err() {
+        // An edit that changes nothing, such as moving an Item to its own
+        // position, neither reports a change nor queues a save.
+        if favorites == *self.settings.favorites() || favorites.hierarchy().is_err() {
             return Transition::default();
         }
         self.settings.replace_favorites(favorites.clone());
@@ -512,70 +504,37 @@ impl Workspace {
         (self.settings_status == SettingsStatus::Loaded).then(|| WorkRequest::SaveSettings { revision: self.settings.revision(), snapshot: self.settings.snapshot() })
     }
     fn select(&mut self, browser: BrowserSide, row: usize, name: &EntryName, toggle: bool) -> Transition {
-        let tab = self.active_tab(browser);
-        let valid = self.tab(browser, tab).and_then(|t| t.folder_items.as_ref()).and_then(|f| f.entries.get(row)).is_some_and(|entry| entry.name() == name);
-        if !valid {
-            return Transition::default();
-        }
-        let history = self.active_history_mut(browser);
-        let cursor_changed = history.view.cursor.as_ref() != Some(name);
-        let anchor_changed = history.view.anchor.as_ref().is_some_and(|anchor| anchor != name) || (!toggle && history.view.anchor.is_none());
-        let selection_changed = if toggle { history.view.selection.toggle(name.clone()) } else { history.view.selection.select(name.clone()) };
-        if !toggle || history.view.anchor.is_some() {
-            history.view.anchor = Some(name.clone());
-        }
-        history.view.cursor = Some(name.clone());
-        if selection_changed || cursor_changed || anchor_changed { Transition { outputs: vec![Output::SelectionChanged { browser, tab, selection: history.view.selection.clone(), row: Some(row) }], work: vec![] } } else { Transition::default() }
+        self.change_visit(browser, Some(row), |visit, entries| if toggle { visit.toggle(entries, row, name) } else { visit.select(entries, row, name) })
     }
     fn select_all(&mut self, browser: BrowserSide) -> Transition {
-        let tab = self.active_tab(browser);
-        if self.tab(browser, tab).and_then(|t| t.current).is_none() {
-            return Transition::default();
-        }
-        let entries = self.entries(browser).iter().map(|e| e.name().clone()).collect();
-        let row = self.active_history(browser).view.cursor.as_ref().and_then(|n| self.entries(browser).iter().position(|e| e.name() == n));
-        let history = self.active_history_mut(browser);
-        if history.view.selection.replace(entries) { Transition { outputs: vec![Output::SelectionChanged { browser, tab, selection: history.view.selection.clone(), row }], work: vec![] } } else { Transition::default() }
+        self.change_visit(browser, None, VisitState::select_all)
     }
     fn select_range(&mut self, browser: BrowserSide, row: usize, name: &EntryName) -> Transition {
-        let tab = self.active_tab(browser);
-        let entries = self.entries(browser);
-        if entries.get(row).is_none_or(|entry| entry.name() != name) {
-            return Transition::default();
-        }
-        let Some(anchor) = self.active_history(browser).view.anchor.as_ref() else { return Transition::default() };
-        let Some(anchor_row) = entries.iter().position(|entry| entry.name() == anchor) else { return Transition::default() };
-        let (start, end) = if anchor_row <= row { (anchor_row, row) } else { (row, anchor_row) };
-        let selection = entries[start..=end].iter().map(|entry| entry.name().clone()).collect();
-        let view = self.active_history_mut(browser);
-        let changed = view.view.selection.replace(selection) || view.view.cursor.as_ref() != Some(name);
-        view.view.cursor = Some(name.clone());
-        if changed { Transition { outputs: vec![Output::SelectionChanged { browser, tab, selection: view.view.selection.clone(), row: Some(row) }], work: vec![] } } else { Transition::default() }
+        self.change_visit(browser, Some(row), |visit, entries| visit.select_range(entries, row, name))
     }
     fn move_selection(&mut self, browser: BrowserSide, row: usize, name: &EntryName) -> Transition {
         self.select(browser, row, name, false)
     }
     fn secondary_select(&mut self, browser: BrowserSide, row: usize, name: &EntryName) -> Transition {
-        if self.entries(browser).get(row).is_none_or(|entry| entry.name() != name) {
-            return Transition::default();
-        }
-        let selected = self.selection(browser).contains(name);
-        if selected {
-            return Transition::default();
-        }
-        let tab = self.active_tab(browser);
-        let history = self.active_history_mut(browser);
-        history.view.selection.select(name.clone());
-        history.view.cursor = Some(name.clone());
-        Transition { outputs: vec![Output::SelectionChanged { browser, tab, selection: history.view.selection.clone(), row: Some(row) }], work: vec![] }
+        self.change_visit(browser, Some(row), |visit, entries| visit.select_secondary(entries, row, name))
     }
     fn clear_selection(&mut self, browser: BrowserSide) -> Transition {
         let tab = self.active_tab(browser);
-        if self.tab(browser, tab).and_then(|t| t.current).is_none() {
+        let Some(visit) = self.tab_mut(browser, tab).and_then(|state| state.history.current_mut()) else { return Transition::default() };
+        if visit.state_mut().clear_selection() { Transition { outputs: vec![Output::SelectionChanged { browser, tab, selection: visit.state().selection().clone(), row: None }], work: vec![] } } else { Transition::default() }
+    }
+    /// Applies one selection gesture to the active tab's current visit against
+    /// its shown Folder Items, and reports the selection when it changed.
+    /// `cursor_row` is the validated row a gesture moves the cursor to; `None`
+    /// looks the unchanged cursor up instead.
+    fn change_visit(&mut self, browser: BrowserSide, cursor_row: Option<usize>, gesture: impl FnOnce(&mut VisitState, &[Entry]) -> bool) -> Transition {
+        let tab = self.active_tab(browser);
+        let Some(TabState { history, folder_items: Some(items), .. }) = self.tab_mut(browser, tab) else { return Transition::default() };
+        let Some(visit) = history.current_mut() else { return Transition::default() };
+        if !gesture(visit.state_mut(), &items.entries) {
             return Transition::default();
         }
-        let history = self.active_history_mut(browser);
-        if history.view.selection.clear() { Transition { outputs: vec![Output::SelectionChanged { browser, tab, selection: history.view.selection.clone(), row: None }], work: vec![] } } else { Transition::default() }
+        Transition { outputs: vec![Output::SelectionChanged { browser, tab, selection: visit.state().selection().clone(), row: cursor_row.or_else(|| visit.state().cursor_row(&items.entries)) }], work: vec![] }
     }
     fn open_entry(&mut self, browser: BrowserSide, row: usize, name: &EntryName) -> Transition {
         self.tab(browser, self.active_tab(browser)).and_then(|t| t.folder_items.as_ref()).and_then(|f| f.entries.get(row).filter(|e| e.name() == name && e.can_enter()).map(|_| f.location.join(name))).map_or_else(Transition::default, |location| self.navigate(browser, location, None))
@@ -583,58 +542,40 @@ impl Workspace {
     fn go_to_parent(&mut self, browser: BrowserSide) -> Transition {
         self.location(browser).and_then(Location::parent).map_or_else(Transition::default, |location| self.navigate(browser, location, None))
     }
-    fn scroll(&mut self, browser: BrowserSide, anchor: Option<EntryName>, offset: i32) -> Transition {
-        if self.tab(browser, self.active_tab(browser)).and_then(|t| t.current).is_none() {
-            return Transition::default();
+    fn scroll(&mut self, browser: BrowserSide, scroll: Option<ScrollAnchor>) -> Transition {
+        let tab = self.active_tab(browser);
+        if let Some(TabState { history, folder_items: Some(items), .. }) = self.tab_mut(browser, tab)
+            && let Some(visit) = history.current_mut()
+        {
+            visit.state_mut().set_scroll(&items.entries, scroll);
         }
-        let available = anchor.as_ref().is_none_or(|name| self.entries(browser).iter().any(|entry| entry.name() == name));
-        self.active_history_mut(browser).view.scroll = anchor.filter(|_| available).map(|name| (name, offset));
         Transition::default()
     }
     fn loaded(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>>) -> Transition {
         let Some(pending) = self.take_pending(browser, tab, token) else { return Transition::default() };
-        let state = self.tab_mut(browser, tab).expect("pending tab exists");
-        if pending.history_target.is_none() && state.folder_items.as_ref().is_none_or(|f| f.location != pending.location) {
-            let cut = state.current.map_or(0, |current| current + 1);
-            state.history.truncate(cut);
-            state.history.push(HistoryEntry { location: pending.location.clone(), view: ViewState::default() });
-            state.current = Some(state.history.len() - 1);
-        } else if let Some(target) = pending.history_target {
-            state.current = Some(target);
-        }
-        let view = state.current.and_then(|i| state.history.get_mut(i)).expect("loaded history");
-        // One lookup set keeps reconciling a large selection linear in the
-        // listing size on the GUI owner.
-        let present = entries.iter().map(Entry::name).collect::<HashSet<_>>();
-        view.view.selection.retain(|name| present.contains(name));
-        if view.view.cursor.as_ref().is_some_and(|name| !present.contains(name)) {
-            view.view.cursor = None;
-        }
-        if view.view.anchor.as_ref().is_some_and(|name| !present.contains(name)) {
-            view.view.anchor = None;
-        }
-        if view.view.scroll.as_ref().is_some_and(|(name, _)| !present.contains(name)) {
-            view.view.scroll = None;
-        }
+        let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
+        state.history.arrive(&pending.location, pending.history_target);
+        let Some(visit) = state.history.current_mut() else { return Transition::default() };
+        visit.state_mut().reconcile(&entries);
         // A same-folder reload keeps the worker's row change so the view keeps
         // its rows and scroll position. A change computed against anything but
         // the shown Folder Items, or one that does not fit them, replaces every
         // row instead, as does a new folder.
         let changes = match (state.folder_items.as_ref(), pending.base.as_ref(), changes) {
-            (Some(old), Some(base), Some(changes)) if Arc::ptr_eq(&old.entries, base) && changes_fit(&changes, old.entries.len(), entries.len()) => changes,
-            (old, _, _) => whole_replacement(old.map_or(0, |old| old.entries.len()), entries.len()),
+            (Some(old), Some(base), Some(changes)) if Arc::ptr_eq(&old.entries, base) && changes_fit(&changes, old.entries.len(), entries.len()) => Some(changes),
+            _ => None,
         };
         state.folder_items = Some(FolderItems { location: pending.location.clone(), entries: Arc::clone(&entries) });
         state.error = None;
-        let row = view.view.cursor.as_ref().and_then(|name| state.folder_items.as_ref().and_then(|items| items.entries.iter().position(|entry| entry.name() == name)));
-        Transition { outputs: vec![Output::FolderItemsRowsChanged { browser, tab, changes }, Output::FolderItemsReplaced { browser, tab, location: pending.location, entries, scroll_hint: view.view.scroll.clone() }, Output::SelectionChanged { browser, tab, selection: view.view.selection.clone(), row }], work: vec![] }
+        let visit = visit.state();
+        Transition { outputs: vec![Output::FolderItemsLoaded { browser, tab, location: pending.location, scroll_hint: visit.scroll().cloned(), changes, entries: Arc::clone(&entries) }, Output::SelectionChanged { browser, tab, selection: visit.selection().clone(), row: visit.cursor_row(&entries) }], work: vec![] }
     }
     fn failed(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind) -> Transition {
-        self.take_pending(browser, tab, token).map_or_else(Transition::default, |pending| {
-            let error = ListingError::new(pending.location, kind);
-            self.tab_mut(browser, tab).expect("pending tab exists").error = Some(error.clone());
-            Transition { outputs: vec![Output::FolderItemsFailed { browser, tab, error }], work: vec![] }
-        })
+        let Some(pending) = self.take_pending(browser, tab, token) else { return Transition::default() };
+        let error = ListingError::new(pending.location, kind);
+        let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
+        state.error = Some(error.clone());
+        Transition { outputs: vec![Output::FolderItemsFailed { browser, tab, error }], work: vec![] }
     }
     fn cancelled(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken) -> Transition {
         self.take_pending(browser, tab, token).map_or_else(Transition::default, |_| Transition { outputs: vec![Output::FolderItemsCancelled { browser, tab }], work: vec![] })
@@ -642,20 +583,14 @@ impl Workspace {
     fn take_pending(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken) -> Option<PendingRead> {
         self.tab_mut(browser, tab)?.pending.take_if(|pending| pending.token == token)
     }
-    fn active_history_mut(&mut self, side: BrowserSide) -> &mut HistoryEntry {
-        let id = self.active_tab(side);
-        let tab = self.tab_mut(side, id).expect("active tab invariant");
-        let index = tab.current.expect("commands need a confirmed folder");
-        &mut tab.history[index]
-    }
     fn tab_view(&self, browser: BrowserSide, id: TabId) -> Output {
         let tab = self.tab(browser, id).expect("tab view needs a live tab");
         let entries = tab.folder_items.as_ref().map_or_else(|| Arc::from([]), |items| Arc::clone(&items.entries));
         let location = tab.folder_items.as_ref().map(|items| items.location.clone());
-        let view = tab.current.and_then(|index| tab.history.get(index)).map(|entry| &entry.view);
-        let selection = view.map_or_else(Selection::default, |view| view.selection.clone());
-        let row = view.and_then(|view| view.cursor.as_ref()).and_then(|name| entries.iter().position(|entry| entry.name() == name));
-        Output::TabViewChanged { browser, tab: id, location, entries, selection, row, scroll_hint: view.and_then(|view| view.scroll.clone()), loading: tab.pending.is_some(), error: tab.error.clone() }
+        let visit = tab.history.current().map(Visit::state);
+        let selection = visit.map_or_else(Selection::default, |visit| visit.selection().clone());
+        let row = visit.and_then(|visit| visit.cursor_row(&entries));
+        Output::TabViewChanged { browser, tab: id, location, selection, row, scroll_hint: visit.and_then(|visit| visit.scroll().cloned()), entries, loading: tab.pending.is_some(), error: tab.error.clone() }
     }
 }
 impl BrowserState {
@@ -665,7 +600,7 @@ impl BrowserState {
 }
 impl TabState {
     fn new(id: TabId) -> Self {
-        Self { id, history: vec![HistoryEntry { location: Location::root(), view: ViewState::default() }], current: None, folder_items: None, pending: None, error: None }
+        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None }
     }
 }
 
@@ -697,8 +632,4 @@ fn changes_fit(changes: &[RowChange], old_len: usize, new_len: usize) -> bool {
         next = change.row.saturating_add(change.inserted);
     }
     len == new_len
-}
-
-fn whole_replacement(removed: usize, inserted: usize) -> Vec<RowChange> {
-    if removed == 0 && inserted == 0 { vec![] } else { vec![RowChange { row: 0, removed, inserted }] }
 }

@@ -1,13 +1,13 @@
-use dual_pane_adapters::{BrowserPresenter, FolderItemsUpdate, InputController, UiEvent};
+use dual_pane_adapters::{BrowserPresenter, FolderItemsUpdate, InputController, SelectionMovement, UiEvent};
 use dual_pane_application::{Command, Output, RowChange};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, TabId};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
 #[test]
 fn controller_uses_exact_row_identity() {
     let entry = Entry::new(EntryName::new("docs").unwrap(), EntryKind::Directory);
     let mut presenter = BrowserPresenter::new(BrowserSide::Left);
-    presenter.apply(&Output::FolderItemsReplaced { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::from(vec![entry.clone()]), scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::from(vec![entry.clone()]), changes: None, scroll_hint: None });
     assert_eq!(InputController::new().command(BrowserSide::Left, UiEvent::ActivateRow { row: 0 }, presenter.view()), Some(Command::OpenEntry { browser: BrowserSide::Left, row: 0, name: entry.name().clone() }));
 }
 
@@ -18,20 +18,19 @@ fn inactive_tab_result_does_not_replace_the_visible_listing() {
     let second = TabId::new(2);
     let shown = Entry::new(EntryName::new("shown").unwrap(), EntryKind::File);
     let hidden = Entry::new(EntryName::new("hidden").unwrap(), EntryKind::File);
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::from(vec![shown]), selection: Default::default(), row: None, scroll_hint: Some((EntryName::new("shown").unwrap(), 7)), loading: false, error: None });
-    presenter.apply(&Output::FolderItemsReplaced { browser: BrowserSide::Left, tab: second, location: Location::root(), entries: Arc::from(vec![hidden]), scroll_hint: Some((EntryName::new("hidden").unwrap(), 9)) });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::from(vec![shown]), selection: Default::default(), row: None, scroll_hint: Some(ScrollAnchor::new(EntryName::new("shown").unwrap(), 7)), loading: false, error: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: second, location: Location::root(), entries: Arc::from(vec![hidden]), changes: None, scroll_hint: Some(ScrollAnchor::new(EntryName::new("hidden").unwrap(), 9)) });
     assert_eq!(presenter.view().row(0).unwrap().name, "shown");
-    assert_eq!(presenter.view().scroll_hint(), Some(&(EntryName::new("shown").unwrap(), 7)));
+    assert_eq!(presenter.view().scroll_hint(), Some(&ScrollAnchor::new(EntryName::new("shown").unwrap(), 7)));
 }
 
 fn files(names: &[&str]) -> Arc<[Entry]> {
     names.iter().map(|name| Entry::new(EntryName::new(*name).unwrap(), EntryKind::File)).collect()
 }
 
-/// Applies one reload of `tab` the way the workspace reports it.
+/// Applies one same-folder reload of `tab` the way the workspace reports it.
 fn reload(presenter: &mut BrowserPresenter, tab: TabId, change: Option<RowChange>, names: &[&str]) {
-    presenter.apply(&Output::FolderItemsRowsChanged { browser: BrowserSide::Left, tab, changes: change.into_iter().collect() });
-    presenter.apply(&Output::FolderItemsReplaced { browser: BrowserSide::Left, tab, location: Location::root(), entries: files(names), scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab, location: Location::root(), entries: files(names), changes: Some(change.into_iter().collect()), scroll_hint: None });
 }
 
 fn shown(names: &[&str]) -> BrowserPresenter {
@@ -74,22 +73,86 @@ fn a_tab_switch_or_inconsistent_change_resets() {
     assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
 }
 
-fn folder(name: &str) -> Location {
-    Location::root().join(&EntryName::new(name).unwrap())
+#[test]
+fn a_listing_without_a_row_change_resets() {
+    let mut presenter = shown(&["a", "b", "c"]);
+    let before = presenter.view().clone();
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root().join(&EntryName::new("b").unwrap()), entries: files(&["x", "y"]), changes: None, scroll_hint: None });
+    assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
+
+    let mut presenter = BrowserPresenter::new(BrowserSide::Left);
+    let before = presenter.view().clone();
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: files(&["x", "y"]), changes: None, scroll_hint: None });
+    assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
+}
+
+/// The row a movement selects in `rows` rows with the cursor at `cursor`.
+fn moved(rows: &[&str], cursor: Option<usize>, movement: SelectionMovement) -> Option<usize> {
+    let mut presenter = shown(rows);
+    presenter.apply(&Output::SelectionChanged { browser: BrowserSide::Left, tab: TabId::new(0), selection: Selection::default(), row: cursor });
+    match InputController::new().command(BrowserSide::Left, UiEvent::MoveSelection(movement), presenter.view()) {
+        Some(Command::MoveSelection { row, name, .. }) => {
+            assert_eq!(name.as_bytes(), rows[row].as_bytes());
+            Some(row)
+        }
+        other => {
+            assert_eq!(other, None);
+            None
+        }
+    }
 }
 
 #[test]
-fn navigating_to_another_folder_or_the_first_listing_resets() {
-    let mut presenter = BrowserPresenter::new(BrowserSide::Left);
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: TabId::new(0), location: Some(folder("a")), entries: files(&["a", "b", "c"]), selection: Default::default(), row: None, scroll_hint: None, loading: false, error: None });
-    let before = presenter.view().clone();
-    presenter.apply(&Output::FolderItemsRowsChanged { browser: BrowserSide::Left, tab: TabId::new(0), changes: vec![RowChange { row: 0, removed: 3, inserted: 2 }] });
-    presenter.apply(&Output::FolderItemsReplaced { browser: BrowserSide::Left, tab: TabId::new(0), location: folder("b"), entries: files(&["x", "y"]), scroll_hint: None });
-    assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
+fn selection_movement_follows_the_keyboard_rules() {
+    use SelectionMovement::{First, Last, Next, PageDown, PageUp, Previous};
+    let rows = ["a", "b", "c", "d", "e"];
+    let cases = [
+        // Without a cursor, End and Page Down select the last row and every other movement the first.
+        (None, Previous, 0),
+        (None, Next, 0),
+        (None, First, 0),
+        (None, PageUp { rows: 2 }, 0),
+        (None, Last, 4),
+        (None, PageDown { rows: 2 }, 4),
+        // With a cursor, movement clamps at both ends.
+        (Some(0), Previous, 0),
+        (Some(2), Previous, 1),
+        (Some(2), Next, 3),
+        (Some(4), Next, 4),
+        (Some(3), First, 0),
+        (Some(1), Last, 4),
+        (Some(3), PageUp { rows: 2 }, 1),
+        (Some(1), PageUp { rows: 2 }, 0),
+        (Some(1), PageDown { rows: 2 }, 3),
+        (Some(3), PageDown { rows: 2 }, 4),
+        // A page is at least one row.
+        (Some(2), PageDown { rows: 0 }, 3),
+    ];
+    for (cursor, movement, expected) in cases {
+        assert_eq!(moved(&rows, cursor, movement), Some(expected), "{cursor:?} {movement:?}");
+    }
+    for movement in [Previous, Next, First, Last, PageUp { rows: 1 }, PageDown { rows: 1 }] {
+        assert_eq!(moved(&[], None, movement), None, "an empty list ignores {movement:?}");
+    }
+}
 
+#[test]
+fn activation_and_clearing_map_to_their_commands() {
+    let controller = InputController::new();
+    let mut presenter = shown(&["a", "b"]);
+    assert_eq!(controller.command(BrowserSide::Left, UiEvent::FocusBrowser, presenter.view()), None);
+    assert_eq!(controller.command(BrowserSide::Left, UiEvent::ClearSelection, presenter.view()), Some(Command::ClearSelection { browser: BrowserSide::Left }));
+    assert_eq!(controller.command(BrowserSide::Left, UiEvent::ActivateSelection, presenter.view()), None);
+    presenter.apply(&Output::SelectionChanged { browser: BrowserSide::Left, tab: TabId::new(0), selection: Selection::default(), row: Some(1) });
+    assert_eq!(controller.command(BrowserSide::Left, UiEvent::ActivateSelection, presenter.view()), Some(Command::OpenEntry { browser: BrowserSide::Left, row: 1, name: EntryName::new("b").unwrap() }));
+}
+
+#[test]
+fn the_folder_name_is_the_last_location_component() {
+    assert_eq!(BrowserPresenter::new(BrowserSide::Left).view().folder_name(), "/");
+    assert_eq!(shown(&[]).view().folder_name(), "/");
     let mut presenter = BrowserPresenter::new(BrowserSide::Left);
-    let before = presenter.view().clone();
-    presenter.apply(&Output::FolderItemsRowsChanged { browser: BrowserSide::Left, tab: TabId::new(0), changes: vec![RowChange { row: 0, removed: 0, inserted: 2 }] });
-    presenter.apply(&Output::FolderItemsReplaced { browser: BrowserSide::Left, tab: TabId::new(0), location: folder("a"), entries: files(&["x", "y"]), scroll_hint: None });
-    assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
+    let nested = Location::root().join(&EntryName::new("parent").unwrap()).join(&EntryName::new("child").unwrap());
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: nested, entries: files(&[]), changes: None, scroll_hint: None });
+    assert_eq!(presenter.view().folder_name(), "child");
 }

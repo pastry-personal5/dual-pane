@@ -12,6 +12,7 @@ mod request_token;
 mod selection;
 mod sort_spec;
 mod tab;
+mod tab_history;
 
 pub use browser::BrowserTabs;
 pub use browser_side::BrowserSide;
@@ -23,3 +24,4 @@ pub use request_token::RequestToken;
 pub use selection::Selection;
 pub use sort_spec::{SortDirection, SortField, SortSpec};
 pub use tab::TabId;
+pub use tab_history::{ScrollAnchor, TabHistory, Visit, VisitState};

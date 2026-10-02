@@ -239,10 +239,12 @@ class FolderItemsList final : public QTreeView {
         switch (arrow_action(event->key())) {
         case ArrowAction::Previous:
             model_->select_previous();
+            scroll_to_selected();
             event->accept();
             return;
         case ArrowAction::Next:
             model_->select_next();
+            scroll_to_selected();
             event->accept();
             return;
         case ArrowAction::Parent:
@@ -256,38 +258,31 @@ class FolderItemsList final : public QTreeView {
         case ArrowAction::None:
             break;
         }
-        const int count = model_->rowCount(QModelIndex());
-        if (count == 0) {
-            event->accept();
-            return;
-        }
-        const int selected = model_->getSelectedRow();
-        int target = selected;
+        // The input controller chooses the target row; the view measures only
+        // the fully visible row count a page movement needs.
         const int page = qMax(1, viewport()->height() / qMax(1, sizeHintForRow(0)));
         switch (event->key()) {
         case Qt::Key_Home:
-            target = 0;
+            model_->select_first();
             break;
         case Qt::Key_End:
-            target = count - 1;
+            model_->select_last();
             break;
         case Qt::Key_PageUp:
-            target = selected < 0 ? 0 : qMax(0, selected - page);
+            model_->select_page_up(page);
             break;
         case Qt::Key_PageDown:
-            target = selected < 0 ? count - 1 : qMin(count - 1, selected + page);
+            model_->select_page_down(page);
             break;
         case Qt::Key_Return:
-            if (selected >= 0)
-                model_->activate_row(selected);
+            model_->activate_selected();
             event->accept();
             return;
         default:
             event->accept();
             return;
         }
-        model_->select_row(target);
-        scrollTo(model_->index(target, 0));
+        scroll_to_selected();
         event->accept();
     }
 
@@ -304,6 +299,11 @@ class FolderItemsList final : public QTreeView {
         model_->activate_browser();
         if (activation_handler_)
             activation_handler_();
+    }
+    /// Keeps the row a keyboard movement selected visible.
+    void scroll_to_selected() {
+        if (const int selected = model_->getSelectedRow(); selected >= 0)
+            scrollTo(model_->index(selected, 0));
     }
     void synchronize_selection() {
         const auto row = model_->getSelectedRow();

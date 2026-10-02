@@ -6,6 +6,11 @@ use crate::EntryName;
 pub struct Selection(Vec<EntryName>);
 
 impl Selection {
+    /// An empty selection, usable in constants.
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
     pub fn selected(&self) -> Option<&EntryName> {
         self.0.first()
     }

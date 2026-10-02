@@ -7,14 +7,14 @@ This index lists the design and process docs, one line each. Read only the doc y
 | Doc | What it covers |
 |-----|----------------|
 | [development-process.md](development-process.md) | Phases, milestones, IDs (`P1-M2`), definition of done, where plans live, and doc status values |
-| [architecture.md](architecture.md) | Active Clean Architecture boundaries, technical stack, workspace layout, threading, file-operation safety, and testing. |
+| [architecture.md](architecture.md) | Active Clean Architecture with MVVM presentation and command-based input, technical stack, crate boundaries, threading, file-operation safety, and testing. |
 | [product-behavior.md](product-behavior.md) | Active product scope, Favorites identity, file-operation safeguards, session recovery, Notices startup policy, and exclusions. |
 | [ux-terms.md](ux-terms.md) | Canonical component and action names, code mappings, and naming exemptions. |
 | [ux-information-architecture.md](ux-information-architecture.md) | Current Standard Layout and planned Phase 3 component containment. |
 | [ux-gui.md](ux-gui.md) | Version 2.0.0 interaction table and planned Phase 3 tabs, Favorites, commands, operation UI, Notices, sort, and refresh rules. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and which phase is active. |
-| [phase-3/phase-3.md](phase-3/phase-3.md) | Planned Phase 3 goal, exit criteria, and milestone sequence for tabs, file operations, session recovery, and watching. |
+| [phase-3/phase-3.md](phase-3/phase-3.md) | Active Phase 3 goal, exit criteria, and milestone sequence for tabs, file operations, session recovery, and watching. |
 | [phase-3/milestone-01-overview.md](phase-3/milestone-01-overview.md) | P3-M1 scope and executable completion checklist. |
 | [phase-3/milestone-01-architecture.md](phase-3/milestone-01-architecture.md) | P3-M1 naming and bridge migration approach. |
 | [phase-3/milestone-02-overview.md](phase-3/milestone-02-overview.md) | P3-M2 scope and checklist for Phase 3 configuration, defaults, Favorites, settings, and persistent storage. |

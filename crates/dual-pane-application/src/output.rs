@@ -1,10 +1,9 @@
 use crate::{FavoritesRecords, SettingsFailure};
-use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, Selection, TabId};
+use dual_pane_domain::{BrowserSide, Entry, ListingError, Location, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
 /// A framework-neutral contiguous listing mutation. `removed` rows beginning
-/// at `row` are replaced by `inserted` rows. A whole-list replacement is still
-/// an explicit, valid delta rather than an implicit widget reset.
+/// at `row` are replaced by `inserted` rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowChange {
     pub row: usize,
@@ -12,15 +11,19 @@ pub struct RowChange {
     pub inserted: usize,
 }
 
+/// What changed, for presentation.
+///
+/// In `FolderItemsLoaded`, `changes` turns the Folder Items the tab showed
+/// before into `entries`. `None` means every row is replaced, as for another
+/// folder, a first listing, or a gateway change that does not fit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
     ActiveBrowserChanged { browser: BrowserSide },
     ActiveTabChanged { browser: BrowserSide, tab: TabId },
     TabsChanged { browser: BrowserSide, active_tab: TabId },
-    TabViewChanged { browser: BrowserSide, tab: TabId, location: Option<Location>, entries: Arc<[Entry]>, selection: Selection, row: Option<usize>, scroll_hint: Option<(EntryName, i32)>, loading: bool, error: Option<ListingError> },
+    TabViewChanged { browser: BrowserSide, tab: TabId, location: Option<Location>, entries: Arc<[Entry]>, selection: Selection, row: Option<usize>, scroll_hint: Option<ScrollAnchor>, loading: bool, error: Option<ListingError> },
     LoadingStarted { browser: BrowserSide, tab: TabId, location: Location },
-    FolderItemsReplaced { browser: BrowserSide, tab: TabId, location: Location, entries: Arc<[Entry]>, scroll_hint: Option<(EntryName, i32)> },
-    FolderItemsRowsChanged { browser: BrowserSide, tab: TabId, changes: Vec<RowChange> },
+    FolderItemsLoaded { browser: BrowserSide, tab: TabId, location: Location, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>>, scroll_hint: Option<ScrollAnchor> },
     SelectionChanged { browser: BrowserSide, tab: TabId, selection: Selection, row: Option<usize> },
     FolderItemsFailed { browser: BrowserSide, tab: TabId, error: ListingError },
     FolderItemsCancelled { browser: BrowserSide, tab: TabId },
@@ -43,7 +46,7 @@ pub fn listing_changes(old: &[Entry], new: &[Entry]) -> Vec<RowChange> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dual_pane_domain::{EntryKind, EntryMetadata};
+    use dual_pane_domain::{EntryKind, EntryMetadata, EntryName};
     use proptest::prelude::*;
 
     fn entry(name: u8, size: u8) -> Entry {

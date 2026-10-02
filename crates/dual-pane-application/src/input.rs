@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{FavoriteProbeOutcome, RowChange, SettingsFailure, SettingsSnapshot};
-use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingErrorKind, Location, RequestToken, SortSpec, TabId};
+use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingErrorKind, Location, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
@@ -22,7 +22,6 @@ pub enum Command {
     GoBack { browser: BrowserSide },
     GoForward { browser: BrowserSide },
     Refresh { browser: BrowserSide },
-    InvalidateLocation { location: Location },
     SetSort { location: Location, sort: SortSpec },
     CreateFavoriteGroup { name: String },
     RenameFavoriteGroup { id: i64, name: String },
@@ -39,7 +38,7 @@ pub enum Command {
     ClearSelection { browser: BrowserSide },
     OpenEntry { browser: BrowserSide, row: usize, name: EntryName },
     GoToParent { browser: BrowserSide },
-    UpdateScrollHint { browser: BrowserSide, anchor: Option<EntryName>, offset: i32 },
+    UpdateScrollHint { browser: BrowserSide, scroll: Option<ScrollAnchor> },
     SelectRange { browser: BrowserSide, row: usize, name: EntryName },
     MoveSelection { browser: BrowserSide, row: usize, name: EntryName },
     SecondarySelect { browser: BrowserSide, row: usize, name: EntryName },
@@ -51,8 +50,11 @@ pub enum Command {
 /// Items into `entries`, or is `None` when the request carried none.
 /// `ScreenshotsFolderProbed` answers `WorkRequest::ProbeScreenshotsFolder`;
 /// only `Available` adds Screenshots to the seeded Favorites.
+/// `LocationInvalidated` reports that a location's contents may have changed;
+/// every tab showing or loading it rereads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    LocationInvalidated { location: Location },
     FolderItemsLoaded { browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>> },
     FolderItemsFailed { browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind },
     FolderItemsCancelled { browser: BrowserSide, tab: TabId, token: RequestToken },

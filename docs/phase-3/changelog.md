@@ -4,6 +4,33 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3.
 
+## 2026-10-02 — Tab history and visit state in the domain
+
+- The owner moved tab history, cursor, range anchor, and scroll position into the domain, as the [P3-M5 plan](milestone-05-architecture.md) intended. This supersedes the "application state" wording in the architecture review entry below. [Architecture §3.1](../architecture.md#31-domain--stable-file-manager-policy) now names the domain types:
+  - `TabHistory` holds a tab's ordered `Visit`s and a current position that always stays in range. It handles new visits, Forward truncation, and Back/Forward arrival.
+  - Each visit's `VisitState` holds the `Selection`, cursor, range anchor, and `ScrollAnchor`. It applies plain, Command, Shift, right-click, Select All, and clear gestures, checks each named entry against the current Folder Items, and reconciles after a reload in linear time.
+  - `ScrollAnchor` replaces the `(EntryName, i32)` scroll hints in `Command::UpdateScrollHint` and the listing outputs.
+- Clearing the selection also clears the cursor and keeps the range anchor, so a later reload or tab switch no longer reports the cleared row as the cursor row again.
+- `Workspace` keeps request tokens, pending reads, the rule that a pending Back or Forward counts as taken, and output emission; selection gestures delegate to the domain. A domain property test checks that random gestures, reloads, and arrivals keep every name present and the history position in range. The existing application tests pass unchanged apart from the new scroll-hint type.
+
+## 2026-10-02 — MVVM and command-based architecture styles
+
+- The owner made MVVM and a command-based style part of the decided architecture. The new [Architectural styles](../architecture.md#architectural-styles) section names Clean Architecture as the dependency frame, MVVM with one-way binding for presentation, and typed command messages handled by `Workspace::handle` for input. It maps each role to its ring and code and states the binding and command rules. "Command-based" means command messages, not command objects with `execute` or `undo`; undo remains outside product scope.
+- Conformance fixes:
+  - The desktop no longer builds commands or formats display text itself.
+  - Focus activation and clearing the selection now go through `UiEvent` and the `InputController`.
+  - The controller chooses Home, End, Page Up, Page Down, and Return targets. The View supplies only the fully visible row count, and it keeps the selected row visible after every keyboard movement, including Up and Down.
+  - `BrowserViewModel` formats the folder-name label.
+- Shortcuts are still hard-coded Qt key sequences until P3-M6 wires delivered actions to the `ActionId` catalogue.
+
+## 2026-10-02 — Architecture review fixes
+
+- One `Output::FolderItemsLoaded` replaces the paired `FolderItemsRowsChanged` and `FolderItemsReplaced` outputs. It carries the listing with `changes: Option<Vec<RowChange>>`, and `None` means every row is replaced. The reducer alone decides between a row delta and a full replacement, so the presenter no longer stores a pending change or compares locations to decide it again.
+- Location invalidation is an externally observed fact, so `Command::InvalidateLocation` became `Event::LocationInvalidated`. P3-M10's watcher submits it.
+- The Qt-free `InputController` now maps one-row arrow movement and cursor activation (`UiEvent::MoveSelection`, `UiEvent::ActivateSelection`) to `Command::MoveSelection` and `Command::OpenEntry`. The desktop session no longer computes target rows.
+- A Favorites edit that changes nothing, such as moving a Group or Item to its current position, no longer emits `FavoritesChanged` or queues a save.
+- Docs: the [data-safety invariants](../architecture.md#44-data-safety-invariants) moved verbatim from the planned remote-volume section to their own section, and their references now link there. Architecture §3.1 now describes the domain types that exist (`BrowserTabs`, `Selection`, and the Favorites hierarchy); tab history, cursor, anchor, and scroll are application state. Two notes were added: settings work runs on its own worker, and the bridge's session mutex only holds the session for the GUI thread.
+
 ## 2026-10-02 — Row deltas on workers and background Screenshots probe
 
 - The owner chose to move the Folder Items diff to the workers, as [architecture §3.4](../architecture.md#34-frameworks-and-drivers--replaceable-mechanics) requires. A same-folder `ReadDirectory` request carries the tab's shown Folder Items as `previous`; the reader lane sorts, diffs against them, and returns the row change in `FolderItemsLoaded`. The reducer no longer compares listings. It accepts the change only when it was computed against the still-shown Folder Items and fits their row count; otherwise it replaces every row.

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dual_pane_application::{Output, RowChange};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, Selection, TabId};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, ScrollAnchor, Selection, TabId};
 
 /// What a Browser shows. Rows are formatted when requested, so updating the view
 /// model costs the same for any directory size.
@@ -14,7 +14,7 @@ pub struct BrowserViewModel {
     entries: Arc<[Entry]>,
     selection: Selection,
     selected_row: Option<usize>,
-    scroll_hint: Option<(EntryName, i32)>,
+    scroll_hint: Option<ScrollAnchor>,
     folder_items_revision: u64,
     /// How this revision's rows differ from the previous revision's, or
     /// `None` when every row must be treated as replaced.
@@ -60,6 +60,12 @@ impl BrowserViewModel {
         &self.location_text
     }
 
+    /// The shown folder's own name for titles and tab labels, or `/` for the
+    /// root and before the first listing.
+    pub fn folder_name(&self) -> &str {
+        self.location_text.rsplit('/').find(|part| !part.is_empty()).unwrap_or("/")
+    }
+
     pub fn is_loading(&self) -> bool {
         self.loading
     }
@@ -86,7 +92,7 @@ impl BrowserViewModel {
         self.selected_row
     }
 
-    pub fn scroll_hint(&self) -> Option<&(EntryName, i32)> {
+    pub fn scroll_hint(&self) -> Option<&ScrollAnchor> {
         self.scroll_hint.as_ref()
     }
 
@@ -131,11 +137,6 @@ pub struct BrowserPresenter {
     browser: BrowserSide,
     active_tab: Option<TabId>,
     view: BrowserViewModel,
-    /// The active tab's announced row change, applied with its listing.
-    pending_changes: Option<Vec<RowChange>>,
-    /// The folder whose Folder Items are shown. A row change is kept only for
-    /// a reload of this folder; another folder's listing replaces every row.
-    shown_location: Option<Location>,
 }
 
 impl Default for BrowserPresenter {
@@ -146,7 +147,7 @@ impl Default for BrowserPresenter {
 
 impl BrowserPresenter {
     pub fn new(browser: BrowserSide) -> Self {
-        Self { browser, active_tab: None, view: BrowserViewModel::default(), pending_changes: None, shown_location: None }
+        Self { browser, active_tab: None, view: BrowserViewModel::default() }
     }
 
     pub fn view(&self) -> &BrowserViewModel {
@@ -155,7 +156,7 @@ impl BrowserPresenter {
 
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
-            Output::LoadingStarted { browser, .. } | Output::FolderItemsReplaced { browser, .. } | Output::FolderItemsRowsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } => *browser,
+            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } => *browser,
             Output::FavoritesChanged { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } => return,
         };
         if output_browser != self.browser {
@@ -163,7 +164,7 @@ impl BrowserPresenter {
         }
         match output {
             Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => self.active_tab = Some(*tab),
-            Output::LoadingStarted { tab, .. } | Output::FolderItemsReplaced { tab, .. } | Output::FolderItemsRowsChanged { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
+            Output::LoadingStarted { tab, .. } | Output::FolderItemsLoaded { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
                 if self.active_tab.is_some_and(|active| active != *tab) {
                     return;
                 }
@@ -184,15 +185,13 @@ impl BrowserPresenter {
                 self.view.status_text = if *loading { "Loading…".to_owned() } else { self.view.error.clone().unwrap_or_else(|| self.view.location_text.clone()) };
                 self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
                 self.view.folder_items_delta = None;
-                self.pending_changes = None;
-                self.shown_location = location.clone();
             }
             Output::LoadingStarted { .. } => {
                 self.view.loading = true;
                 self.view.error = None;
                 self.view.status_text = "Loading…".to_owned();
             }
-            Output::FolderItemsReplaced { location, entries, scroll_hint, .. } => {
+            Output::FolderItemsLoaded { location, entries, changes, scroll_hint, .. } => {
                 self.view.location_text = location_text(location);
                 self.view.entries = Arc::clone(entries);
                 self.view.scroll_hint = scroll_hint.clone();
@@ -200,11 +199,8 @@ impl BrowserPresenter {
                 self.view.error = None;
                 self.view.status_text = self.view.location_text.clone();
                 self.view.folder_items_revision = self.view.folder_items_revision.wrapping_add(1);
-                let changes = self.pending_changes.take();
-                self.view.folder_items_delta = changes.filter(|_| self.shown_location.as_ref() == Some(location));
-                self.shown_location = Some(location.clone());
+                self.view.folder_items_delta = changes.clone();
             }
-            Output::FolderItemsRowsChanged { changes, .. } => self.pending_changes = Some(changes.clone()),
             Output::SelectionChanged { selection, row, .. } => {
                 self.view.selection = selection.clone();
                 self.view.selected_row = *row;

@@ -3,7 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QList, QModelIndex, QString, QVariant};
-use dual_pane_adapters::{BrowserViewModel, FolderItemsUpdate, UiEvent, reader_start_failure_status};
+use dual_pane_adapters::{BrowserViewModel, FolderItemsUpdate, SelectionMovement, UiEvent, reader_start_failure_status};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
@@ -80,6 +80,12 @@ pub mod ffi {
         fn select_row(self: Pin<&mut FolderItemsListModel>, row: i32);
         fn select_previous(self: Pin<&mut FolderItemsListModel>);
         fn select_next(self: Pin<&mut FolderItemsListModel>);
+        fn select_first(self: Pin<&mut FolderItemsListModel>);
+        fn select_last(self: Pin<&mut FolderItemsListModel>);
+        /// Moves the selection up by `rows`, the fully visible row count.
+        fn select_page_up(self: Pin<&mut FolderItemsListModel>, rows: i32);
+        /// Moves the selection down by `rows`, the fully visible row count.
+        fn select_page_down(self: Pin<&mut FolderItemsListModel>, rows: i32);
         fn clear_selection(self: Pin<&mut FolderItemsListModel>);
         fn activate_row(self: Pin<&mut FolderItemsListModel>, row: i32);
         fn activate_selected(self: Pin<&mut FolderItemsListModel>);
@@ -89,6 +95,10 @@ pub mod ffi {
 }
 
 const DISPLAY_ROLE: i32 = 0;
+/// The one session both Browser models share. Only the GUI thread uses it, so
+/// the mutex is a holder rather than synchronization; its order comes from the
+/// GUI thread's event loop. Each caller releases it before notifying Qt, which
+/// may call back into a model.
 static SESSION: OnceLock<Mutex<Option<WorkspaceSession>>> = OnceLock::new();
 fn session() -> &'static Mutex<Option<WorkspaceSession>> {
     SESSION.get_or_init(|| Mutex::new(None))
@@ -165,9 +175,10 @@ impl ffi::FolderItemsListModel {
         self.as_mut().set_selected_row(selected);
         let status = self.rust().shown.status_text().to_owned();
         self.as_mut().set_status_text(QString::from(status.as_str()));
-        let path = self.rust().shown.location_text().to_owned();
-        self.as_mut().set_path_text(QString::from(path.as_str()));
-        self.as_mut().set_folder_name(QString::from(path.rsplit('/').find(|part| !part.is_empty()).unwrap_or("/")));
+        let path = QString::from(self.rust().shown.location_text());
+        self.as_mut().set_path_text(path);
+        let folder_name = QString::from(self.rust().shown.folder_name());
+        self.as_mut().set_folder_name(folder_name);
     }
     /// Replaces the shown view, notifying Qt of only the rows that changed
     /// when the new listing is a same-folder reload of the shown one.
@@ -214,10 +225,11 @@ impl ffi::FolderItemsListModel {
         self.as_mut().refresh();
         more
     }
+    /// Activation changes no Browser view model, so nothing is refreshed.
     fn activate_browser(self: Pin<&mut Self>) {
         let browser = self.rust().browser;
         if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.activate(browser);
+            coordinator.submit_ui(browser, UiEvent::FocusBrowser);
         }
     }
     fn select_row(mut self: Pin<&mut Self>, row: i32) {
@@ -226,17 +238,27 @@ impl ffi::FolderItemsListModel {
         }
     }
     fn select_previous(mut self: Pin<&mut Self>) {
-        self.as_mut().move_selection(crate::browser_session::SelectionMovement::Previous);
+        self.as_mut().submit_ui(UiEvent::MoveSelection(SelectionMovement::Previous));
     }
     fn select_next(mut self: Pin<&mut Self>) {
-        self.as_mut().move_selection(crate::browser_session::SelectionMovement::Next);
+        self.as_mut().submit_ui(UiEvent::MoveSelection(SelectionMovement::Next));
+    }
+    fn select_first(mut self: Pin<&mut Self>) {
+        self.as_mut().submit_ui(UiEvent::MoveSelection(SelectionMovement::First));
+    }
+    fn select_last(mut self: Pin<&mut Self>) {
+        self.as_mut().submit_ui(UiEvent::MoveSelection(SelectionMovement::Last));
+    }
+    fn select_page_up(mut self: Pin<&mut Self>, rows: i32) {
+        let rows = usize::try_from(rows).unwrap_or(0);
+        self.as_mut().submit_ui(UiEvent::MoveSelection(SelectionMovement::PageUp { rows }));
+    }
+    fn select_page_down(mut self: Pin<&mut Self>, rows: i32) {
+        let rows = usize::try_from(rows).unwrap_or(0);
+        self.as_mut().submit_ui(UiEvent::MoveSelection(SelectionMovement::PageDown { rows }));
     }
     fn clear_selection(mut self: Pin<&mut Self>) {
-        let browser = self.rust().browser;
-        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.clear_selection(browser);
-        }
-        self.as_mut().refresh();
+        self.as_mut().submit_ui(UiEvent::ClearSelection);
     }
     fn activate_row(mut self: Pin<&mut Self>, row: i32) {
         if let Ok(row) = usize::try_from(row) {
@@ -244,11 +266,7 @@ impl ffi::FolderItemsListModel {
         }
     }
     fn activate_selected(mut self: Pin<&mut Self>) {
-        let browser = self.rust().browser;
-        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.activate_selection(browser);
-        }
-        self.as_mut().refresh();
+        self.as_mut().submit_ui(UiEvent::ActivateSelection);
     }
     fn go_to_parent(mut self: Pin<&mut Self>) {
         self.as_mut().submit_ui(UiEvent::GoToParent);
@@ -257,13 +275,6 @@ impl ffi::FolderItemsListModel {
         let browser = self.rust().browser;
         if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
             coordinator.submit_ui(browser, event);
-        }
-        self.as_mut().refresh();
-    }
-    fn move_selection(mut self: Pin<&mut Self>, movement: crate::browser_session::SelectionMovement) {
-        let browser = self.rust().browser;
-        if let Some(coordinator) = session().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut() {
-            coordinator.move_selection(browser, movement);
         }
         self.as_mut().refresh();
     }

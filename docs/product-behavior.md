@@ -33,7 +33,7 @@ Favorite Group names and Favorite Item Aliases reject empty or whitespace-only t
 - Try Again/Skip/Cancel decisions have no option to apply the choice to remaining items.
 - A rename or New Folder name collision never overwrites the existing Item.
 - Opening a symbolic link to a folder navigates into it; activating a link to a regular file opens its target. Copy and move act on the link itself, and operations never follow links inside folders.
-- The safety invariants for replacement, cross-volume moves, symlinks, cancellation, and error handling are defined in [architecture.md](architecture.md).
+- The safety invariants for replacement, cross-volume moves, symlinks, cancellation, and error handling are defined in [architecture.md](architecture.md#44-data-safety-invariants).
 
 ## Session recovery
 

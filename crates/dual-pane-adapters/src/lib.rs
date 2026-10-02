@@ -8,4 +8,4 @@ mod browser_presenter;
 mod input_controller;
 
 pub use browser_presenter::{BrowserPresenter, BrowserViewModel, FolderItemsUpdate, RowKind, RowViewModel, reader_start_failure_status};
-pub use input_controller::{InputController, UiEvent};
+pub use input_controller::{InputController, SelectionMovement, UiEvent};

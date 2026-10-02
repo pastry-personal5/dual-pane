@@ -2,7 +2,7 @@
 
 Status: Active
 
-This document defines Dual Pane's Clean Architecture boundaries, technical stack, physical workspace layout, and safety constraints. [product-behavior.md](product-behavior.md) owns product scope; [ux-gui.md](ux-gui.md) owns current user-visible behavior.
+This document defines Dual Pane's architectural styles (Clean Architecture with MVVM presentation and command-based input), technical stack, crate boundaries, and safety constraints. [planned-repository-architecture.md](planned-repository-architecture.md) owns the physical repository layout, [product-behavior.md](product-behavior.md) owns product scope, and [ux-gui.md](ux-gui.md) owns current user-visible behavior.
 
 ## 1. Goals and constraints
 
@@ -63,6 +63,40 @@ The outermost implementations necessarily import Qt or macOS SDKs. Those third-p
 
 An outer ring may translate its native representation at the boundary. Its translated value, rather than a `QString`, Objective-C object, file descriptor, `NSError`, or Qt model index, crosses inward.
 
+### Architectural styles
+
+Dual Pane combines three architectural styles. Clean Architecture sets the direction of source-code dependencies and is the outer frame. Inside it, presentation follows **Model–View–ViewModel (MVVM)** with one-way binding, and input follows a **command-based** style built on typed command messages. Neither style may break the dependency rule. Each MVVM and command role lives in the ring that owns its policy or technology:
+
+| Role | Style | Ring and code | Responsibility |
+|---|---|---|---|
+| Model | MVVM | Application `Workspace` and the domain values and policies it uses | The single source of truth for state and rules. It changes only by handling an input. |
+| ViewModel | MVVM | Interface-adapter presenters, such as `BrowserPresenter` producing `BrowserViewModel` | A Qt-free projection of application output that holds display text, formatting, and row-change instructions. It holds no authoritative state and can be rebuilt from application output. |
+| Command surface | MVVM and command-based | Interface-adapter `InputController` | Turns a `UiEvent` and the current ViewModel into an application `Command`. This is how a gesture requests a change. |
+| View | MVVM | C++ Qt Widgets, with CXX-Qt objects such as `FolderItemsListModel` as binders | Renders ViewModel state and reports gestures as `UiEvent` values. It makes no file-manager decision. |
+| Command | Command-based | Application `Command` | A typed, UI-neutral request. It names its target by the stable identity observed when the gesture happened, such as Browser, tab ID, or exact entry name and row. |
+| Event | Command-based | Application `Event` | An externally observed fact, such as a work result or a location invalidation. It carries a request token wherever its relevance can expire. |
+| Handler | Command-based | Application `Workspace::handle` | The one handler for every command and event. It validates the input, changes state, and returns outputs and work requests. |
+| Outbound command | Command-based | Application `WorkRequest`, carried out by drivers | A request for outside work. Its result returns as an `Event`, never through a callback. |
+
+Qt calls its item-view adapters "models". A Qt item model is a View-side binder that exposes ViewModel rows to Qt's item views. It is not the MVVM Model and holds no policy.
+
+#### MVVM rules
+
+- Binding is one-way. ViewModel state reaches the View through Qt property change notifications and item-model notifications (row insertion, removal, `dataChanged`, or reset). The View never writes ViewModel or application state; it requests change only by sending a `UiEvent` that becomes a `Command`. There is no two-way binding.
+- After each handled input, the GUI owner gives the outputs to every presenter. Each binder then applies only the difference from what its View shows. A programmatic update of Qt selection, current index, or scroll position never emits a new command.
+- View-local state stays in the View: focus, hover, drag feedback, the live scroll offset, and measurements such as the number of fully visible rows. When such state affects behavior, the View reports it as a command, such as `Command::UpdateScrollHint`, or as a `UiEvent` parameter, such as a page size. The decision stays outside the View.
+- A ViewModel formats and words. It does not decide validity or availability; enablement, such as whether Back is available, comes from application state and reaches the View through the ViewModel.
+- ViewModels and the command surface are tested without Qt in the adapters crate. View tests cover only binding and native behavior.
+
+#### Command rules
+
+- Every way to invoke an action produces the same `Command`: pointer, keyboard, menu, toolbar, drag-and-drop, or test. A shortcut-capable action has a stable `ActionId` whose effective binding comes from settings ([P3-M2 actions](phase-3/milestone-02-architecture.md#actions-and-shortcut-settings)). P3-M6 [wires the delivered actions](phase-3/milestone-06-architecture.md#widgets-focus-and-visible-state) to that catalogue.
+- Commands are data, not objects with behavior. They carry no callback, perform no I/O, and are interpreted only by `Workspace::handle`.
+- The serialized owner handles inputs one at a time and in order. An input that arrives during handling, such as a terminal event returned directly by work dispatch, waits in a queue and is never handled re-entrantly.
+- The handler validates every command against current state and rejects one that no longer applies without changing state, such as a stale tab, a row whose entry changed, or an unavailable action. A disabled control is a convenience, not the validation.
+- Commands do not have to be reversible. Undo is outside product scope, and adding it requires a product decision.
+- Because inputs are plain values, tests drive the application by replaying command and event sequences ([§7](#7-verification-strategy)).
+
 ## 3. Boundary ownership
 
 The workspace uses four crates to enforce these boundaries:
@@ -83,8 +117,8 @@ The domain ring contains rules that remain meaningful if the UI, operating syste
 | Area | Responsibility |
 |---|---|
 | Value types | Browser side, tab ID, operation ID, request/version token, location, entry name, file kind, sort specification, and capability values. Their representations are platform-neutral. |
-| Workspace structure | `Browser`, `Tab`, tab history, `Selection`, and `Cursor` types that enforce their own invariants: each Browser has at least one tab and exactly one active tab, history positions stay in range, and cursor and selection refer only to entries in the current Folder Items. |
-| Policies | Operation intent validity; conflict, kind-mismatch, and destructive-operation decision requirements; directory-merge semantics; safe-operation semantics; stale-result identity rules; sort ordering; and other validation that does not require I/O. |
+| Workspace structure | `BrowserTabs` keeps each Browser's ordered tab IDs nonempty, with exactly one active tab. `TabHistory` holds a tab's ordered `Visit`s; its current position always names a visit, and a new visit after Back discards the Forward visits. Each visit's `VisitState` holds the `Selection`, cursor, range anchor, and `ScrollAnchor`. It applies selection gestures and reconciles after a reload against the current Folder Items, so cursor, anchor, scroll, and selection refer only to entries that are present. The application keeps request tokens, pending reads, and the rule that a pending Back or Forward counts as taken. |
+| Policies | The one-level Favorites hierarchy and its naming rules; operation intent validity; conflict, kind-mismatch, and destructive-operation decision requirements; directory-merge semantics; safe-operation semantics; stale-result identity rules; sort ordering; and other validation that does not require I/O. |
 | Errors | Stable, user-relevant categories with operation and path context, never native error objects. |
 
 `Location` and entry identity are platform-neutral domain values, not leaked native paths or file handles. A platform adapter may supply an opaque stable identity when one is available; the domain must not assume that an identity survives a rename, a volume boundary, or every provider-backed location.
@@ -98,7 +132,7 @@ The application ring coordinates the product's use cases. It owns the single `Wo
 | Input boundary | Commands and externally observed facts: navigate, select, tab operations, file-operation requests, decisions, cancellation, Folder Items results, watcher invalidations, operation step results, and settings load/save results. |
 | Workspace use cases | Validate inputs, evolve the workspace state, issue work requests, reject stale results, and produce application output. |
 | Workspace state | Two Browsers of domain tabs; outstanding request tokens and loading state; file operations with their plans, progress, and pending decisions; and preferences required to carry out use cases. It has one serialized owner. |
-| Output models | Immutable, framework-neutral values describing Browsers, jobs, decisions, and recoverable errors. Folder Items changes are row deltas (insert, remove, update) against the previous Folder Items so that views keep scroll position, cursor, and selection. They state *what changed*, not how a widget redraws it. |
+| Output models | Immutable, framework-neutral values describing Browsers, jobs, decisions, and recoverable errors. Folder Items changes are row deltas (insert, remove, update) against the previous Folder Items so that views keep scroll position, cursor, and selection; a listing with no applicable delta is marked as replacing every row. They state *what changed*, not how a widget redraws it. |
 | Work requests | Typed, purpose-specific descriptions of outside work the use cases need: read a directory, execute an operation step, start or stop watching a location, load or save settings, and open a file with its default application. |
 
 Use cases are a pure reducer. The application never calls outward, holds a callback, or waits:
@@ -119,12 +153,12 @@ Interface adapters translate between the user interface and the application boun
 
 | Adapter | Responsibility |
 |---|---|
-| Input controller | Maps Qt-free UI events (for example `UiEvent::DropOnBrowser { browser, row }` or a menu command identifier) plus current view context into application commands. It does not decide whether a command is valid. |
-| Presenter | Maps application output into plain-Rust view-models: row view-models with display text and icon kind, row-delta instructions, Operation Panel status, Operation Decision Card choices, and Notices. It owns formatting and wording, not policy or the set of available user actions. |
+| Input controller | The ViewModel's command surface. It maps Qt-free UI events, such as `UiEvent::DropOnBrowser { browser, row }` or a menu command identifier, plus the current view context into application commands. It does not decide whether a command is valid. |
+| Presenter | Maps application output into the plain-Rust MVVM ViewModels: row view-models with display text and icon kind, row-delta instructions, Operation Panel status, Operation Decision Card choices, and Notices. It owns formatting and wording, not policy or the set of available user actions. |
 
-The Qt delivery driver performs only the mechanical translation from Qt signals, actions, and model indexes to `UiEvent` values and from view-models to Qt model notifications and widgets.
+The Qt delivery driver is the MVVM View. It performs only the mechanical translation from Qt signals, actions, and model indexes to `UiEvent` values and from view-models to Qt model notifications and widgets, following the [MVVM and command rules](#architectural-styles).
 
-The presenter may keep rendering caches that can be reconstructed from application output. Cursor, selection, active Browser, pending conflict decisions, and other behaviorally significant state remain in the application ring.
+The presenter may keep rendering caches that can be reconstructed from application output. Cursor, selection, active Browser, pending conflict decisions, and other behaviorally significant state remain in the domain and application rings.
 
 ### 3.4 Frameworks and drivers — replaceable mechanics
 
@@ -136,7 +170,7 @@ This outer ring owns concrete technology and resource lifetime. It includes the 
 | Runtime | Receives work requests from the reducer, dispatches them to gateways on the worker pool, owns cancellation primitives and native handles, and delivers every typed result as an application input on the GUI thread. A worker, watcher, or dialog never mutates workspace state directly. |
 | File-system gateway | Reads directories, then sorts and computes row deltas against the previous Folder Items snapshot on a worker. Scans operation sources and executes operation steps using macOS facilities. Probes mounted-volume capabilities outside the GUI thread, enforces only the syscall-level protections the mounted file system actually supports, and classifies native errors into application error categories. |
 | Watcher gateway | Watches a requested location and reports invalidation; it never refreshes a Browser or changes state itself. |
-| Settings gateway | Stores application-defined settings, Favorites, and session values at an application-support location using driver-owned encoding and transactional durable writes. |
+| Settings gateway | Stores application-defined settings, Favorites, and session values at an application-support location using driver-owned encoding and transactional durable writes. It runs on its own serialized worker; the desktop session routes settings work requests there rather than through the listing runtime. |
 
 Infrastructure code may contain FFI and `unsafe`, but it is isolated here. Each unsafe boundary is minimal and documented with a `SAFETY:` explanation. Native types, file descriptors, Qt objects, and platform error objects never escape this ring.
 
@@ -158,7 +192,7 @@ Qt signal / drag-and-drop / menu action
   → Qt delivery driver: Qt model notifications, Operation Panels, Notices, or confirmation UI
 ```
 
-Menus, toolbars, drag-and-drop, tests, and future shortcuts all use the same command boundary. The interface adapter may report invalid input, but it does not replace application validation with widget-specific rules.
+This loop is the command-based input and one-way MVVM binding described in [Architectural styles](#architectural-styles). The interface adapter may report invalid input, but it does not replace application validation with widget-specific rules.
 
 ### 4.2 Blocking work and external events
 
@@ -190,6 +224,18 @@ File operations cross two boundaries: policy decides whether the operation may p
 
 Product-level delete behavior, conflict choices, and confirmation policy are defined in [product-behavior.md](product-behavior.md); no driver may infer them from a menu label or platform default.
 
+### 4.4 Data-safety invariants
+
+The architecture requires these data-safety invariants:
+
+- A conflict is established by the write primitive or an equivalent atomic reservation, never only by a check-then-write race. Name equality is therefore whatever the destination file system decides (including APFS case and Unicode rules); the application never pre-compares names to decide safety.
+- A replacement must not destroy an existing destination until the replacement data is complete and the final switch is safe for the relevant object and volume.
+- Replacement applies only to a file replacing a file. A directory arriving at an existing directory is merged; a file/folder kind mismatch is never resolved by replacing either side.
+- A cross-volume move completes each destination copy successfully before removal of its corresponding source.
+- Recursive work never follows symlinks: a symlink is copied or moved as a link, and work remains inside its intended source and destination trees. Navigating into a symlinked directory is ordinary navigation, not recursive work.
+- Cancellation leaves completed work intact and removes only known partial artifacts created by the cancelled operation.
+- Errors retain operation and location context. Drivers classify native failures; application chooses recovery choices; presentation chooses wording and accessibility treatment.
+
 ## 5. Ownership, concurrency, and safety
 
 | Resource | Owner | Rule |
@@ -218,7 +264,7 @@ Every GUI-thread action is short and non-waiting. Application transitions proces
 
 The event-loop budget covers controller mapping, one `Workspace::handle` transition, presentation, model notification, and scheduling the next drain. Progress updates are rate-limited or coalesced, repeated watcher invalidations for the same location become one refresh request, and paint is requested with Qt's coalescing update path rather than forced synchronously. Exact slice sizes and time budgets are measured and tuned later, but an event storm, large directory, or fast worker must always leave turns for input, painting, window management, dialogs, and accessibility.
 
-Locks, if the chosen runtime needs them, protect only driver-local mutable resources and have a narrow lifetime. Workspace state is not shared behind a mutex: its serialized input owner is its synchronization mechanism. Qt thread affinity and application event ordering therefore remain visible architectural rules rather than accidental properties of locking.
+Locks, if the chosen runtime needs them, protect only driver-local mutable resources and have a narrow lifetime. Workspace state is not shared behind a mutex: its serialized input owner is its synchronization mechanism. A GUI-thread-only holder that lets several Qt objects reach that owner is not shared state; it is released before Qt is notified. Qt thread affinity and application event ordering therefore remain visible architectural rules rather than accidental properties of locking.
 
 ### 5.2 Planned desktop execution model
 
@@ -303,7 +349,7 @@ Watch notifications on remote volumes are advisory. The watcher uses native noti
 
 #### Safe operations and uncertain outcomes
 
-Remote mutation uses the same data-safety invariants as local mutation, with additional distrust of cached metadata and acknowledgements. Immediately before each namespace or destructive step, the gateway revalidates the mount and connectivity generations, source, destination parent, relevant identities, and required capabilities. It uses the mounted file system's atomic no-overwrite or exclusive-create primitive rather than a check-then-write sequence. Server locks and advisory locks are not correctness boundaries because another client or reconnect may invalidate them. If exclusive publication, required durability, or macOS Trash semantics are unavailable or unknown, the affected replace, move, or Trash operation reports a typed unsupported-safety failure; Trash never degrades to permanent deletion and no operation silently substitutes a weaker algorithm. Free-space and quota values are hints only; the executor still handles failure from every write and close.
+Remote mutation uses the same [data-safety invariants](#44-data-safety-invariants) as local mutation, with additional distrust of cached metadata and acknowledgements. Immediately before each namespace or destructive step, the gateway revalidates the mount and connectivity generations, source, destination parent, relevant identities, and required capabilities. It uses the mounted file system's atomic no-overwrite or exclusive-create primitive rather than a check-then-write sequence. Server locks and advisory locks are not correctness boundaries because another client or reconnect may invalidate them. If exclusive publication, required durability, or macOS Trash semantics are unavailable or unknown, the affected replace, move, or Trash operation reports a typed unsupported-safety failure; Trash never degrades to permanent deletion and no operation silently substitutes a weaker algorithm. Free-space and quota values are hints only; the executor still handles failure from every write and close.
 
 Copies write to an operation-owned, uniquely named partial artifact in the destination directory or volume. Data is streamed in cancellation-sized chunks, write and close/flush errors are checked, and the final destination switch occurs only after the completed artifact is verified to the degree supported by that volume. Replacement does not remove the old destination until that point. Cross-volume moves do not remove the source until the destination is complete and verified.
 
@@ -318,16 +364,6 @@ Unmount and remount notifications are delivered as application inputs. An unmoun
 Most tests use a deterministic fault-injecting gateway, not a real user share. It simulates delayed and permanently blocked calls, disconnect before and after a server commit, stale replies, remount at the same path with a new generation, missing persistent IDs, case-insensitive names, unavailable exclusive rename, watcher loss, queue saturation, and cancellation at every operation boundary. Properties prove that local work remains serviceable, worker counts remain bounded, stale results never commit, an uncertain mutation is never replayed automatically, and no source is removed before verified destination completion.
 
 Opt-in macOS integration tests may use only a disposable, test-owned share backed by a temporary directory and provisioned for that test run. They never mutate an existing mounted share or a real user path. The milestone that introduces such a harness must separately approve its server or mounting tool, credentials handling, teardown, and licensing.
-
-The architecture requires these data-safety invariants:
-
-- A conflict is established by the write primitive or an equivalent atomic reservation, never only by a check-then-write race. Name equality is therefore whatever the destination file system decides (including APFS case and Unicode rules); the application never pre-compares names to decide safety.
-- A replacement must not destroy an existing destination until the replacement data is complete and the final switch is safe for the relevant object and volume.
-- Replacement applies only to a file replacing a file. A directory arriving at an existing directory is merged; a file/folder kind mismatch is never resolved by replacing either side.
-- A cross-volume move completes each destination copy successfully before removal of its corresponding source.
-- Recursive work never follows symlinks: a symlink is copied or moved as a link, and work remains inside its intended source and destination trees. Navigating into a symlinked directory is ordinary navigation, not recursive work.
-- Cancellation leaves completed work intact and removes only known partial artifacts created by the cancelled operation.
-- Errors retain operation and location context. Drivers classify native failures; application chooses recovery choices; presentation chooses wording and accessibility treatment.
 
 ## 6. Error, settings, and observability boundaries
 
@@ -345,7 +381,7 @@ Logging is an outer concern. Structured operation context may be carried in appl
 
 | Boundary | Primary tests | Evidence |
 |---|---|---|
-| Domain | Unit and property tests | Browser, tab, history, selection, and cursor invariants and policy choices hold without I/O. |
+| Domain | Unit and property tests | Tab order and active-tab, tab history, selection, cursor, range anchor, scroll, Favorites hierarchy, and sort invariants and policy choices hold without I/O. |
 | Application | Unit and property tests of `Workspace::handle` | Commands/events yield the correct state, outputs, work requests, token rejection, row deltas, and operation/decision lifecycle, with no fakes. |
 | Adapters | Focused controller/presenter tests without Qt | UI events map to the right application commands; outputs become view-models without duplicating policy. |
 | Drivers | Temporary-directory, fault-injection, and Qt smoke tests | Error mapping, exclusive writes, metadata behavior, symlink safety, settings atomicity, model notifications, GUI-thread confinement, cancellation, bounded event delivery, mount-generation invalidation, and uncertain-outcome reconciliation. |

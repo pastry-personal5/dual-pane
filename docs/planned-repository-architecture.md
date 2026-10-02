@@ -81,7 +81,7 @@ Cargo package and directory names are identical. Their Rust crate identifiers us
 |---|---|---|---|---|
 | `dual-pane-domain` | `dual_pane_domain` | Domain | None | Platform-neutral value types, invariants, policies, and stable errors. |
 | `dual-pane-application` | `dual_pane_application` | Application | `dual-pane-domain` | Input boundary, workspace state, the `Workspace::handle` reducer, application outputs, and work-request and result types. |
-| `dual-pane-adapters` | `dual_pane_adapters` | Interface adapters | `dual-pane-domain`, `dual-pane-application` | Qt-free input controllers and presenters that produce plain-Rust view-models. |
+| `dual-pane-adapters` | `dual_pane_adapters` | Interface adapters | `dual-pane-domain`, `dual-pane-application` | Qt-free MVVM ViewModels: presenters that produce plain-Rust view-models and input controllers that turn UI events into commands. |
 | `dual-pane-desktop` | `dual_pane_desktop` | Frameworks, drivers, composition root | The three inner crates | Qt delivery, CXX-Qt bridge, the work-request runtime and event delivery, macOS and settings gateways, and executable wiring. |
 
 These rules apply to every crate:
