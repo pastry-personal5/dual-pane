@@ -2,6 +2,10 @@
 
 Status: Active
 
+## 2026-10-02 — Relative Date hue range
+
+- The owner narrowed the Relative Date strip hue from 0°–270° to 10°–260°; saturation and lightness are unchanged. A Qt 6.11.2 color probe measured active endpoints `#E8B9B0` and `#C3B0E8` with at least 10.22:1 black-text contrast, and dimmed endpoints `#C2A099` and `#A799C2` with at least 7.69:1 contrast. The dimmed color had lower luminance at each of 10,001 sampled positions. The [GUI rule](../ux-gui.md#folder-items-fields-and-display) records the new range.
+
 ## 2026-10-02 — P3-M8 presentation
 
 - **Name editors:** `Command::RequestNameEditor` opens the Rename or New Folder editor only when the command is available, and otherwise reports `OperationRejected`. A refusal therefore reaches the Status Bar the same way a refused shortcut does.

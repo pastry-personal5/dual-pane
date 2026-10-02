@@ -336,7 +336,7 @@ class ItemIconDelegate final : public QStyledItemDelegate {
             const auto age = index.data(relative_age_role);
             const auto position = std::clamp(age.toDouble() / 1'000'000.0, 0.0, 1.0);
             const bool active = view_->property("browserActive").toBool() && view_->property("windowActive").toBool();
-            const auto background = age.isValid() ? QColor::fromHslF(static_cast<float>(0.75 * position), active ? 0.55F : 0.25F, active ? 0.8F : 0.68F) : QColor(active ? QStringLiteral("#D0D0D0") : QStringLiteral("#989898"));
+            const auto background = age.isValid() ? QColor::fromHslF(static_cast<float>((10.0 + (250.0 * position)) / 360.0), active ? 0.55F : 0.25F, active ? 0.8F : 0.68F) : QColor(active ? QStringLiteral("#D0D0D0") : QStringLiteral("#989898"));
             const auto swatch = option.rect.adjusted(2, 2, -2, -2);
             painter->save();
             painter->fillRect(swatch, background);
