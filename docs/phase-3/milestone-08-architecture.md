@@ -1,6 +1,6 @@
 # P3-M8 architecture
 
-Status: Active
+Status: Done
 
 P3-M8 supplies the outer-ring half of the P3-M7 workflow: a native gateway behind the scan, execute, and cancel requests, plus the presentation of operation state. It also extends the P3-M7 contract where native work showed gaps: folder finalization, name problems, job dismissal, byte progress, and opening.
 
@@ -34,7 +34,7 @@ The desktop crate gains an operation gateway on the file-operation lane describe
 - **Copy.** `clonefile` on the same APFS volume, else `copyfile` with all metadata and `COPYFILE_NOFOLLOW`. Links are copied as links; special files raise unsupported item. The `copyfile` callback publishes byte progress and checks the cancel flag.
 - **Move.** A same-volume file, or a directory whose destination is absent and whose subtree holds no scan-skip placeholder, moves with one `RENAME_EXCL`. The result is `Advanced` with the subtree counted as completed. Otherwise entries move one by one: same-volume replacement is a single `rename()`, cross-volume goes through a temporary, verify, then source removal. Source directories are left for finalization.
 - **Rename.** Use `RENAME_EXCL`. On `EEXIST`, if the destination resolves to the source's device and inode, read the parent directory. If no separate entry has the exact destination bytes, the volume has matched the same entry under a case or normalization variant, so perform a plain `rename()`. Otherwise it is a hard link, which is a real collision. Identity decides this, never a name comparison, as [architecture 4.4](../architecture.md#44-data-safety-invariants) requires. `ENAMETOOLONG` and the volume's invalid-name errors become name rejections.
-- **Trash.** `QFile::moveToTrash` from the C++ bridge, one root per call. Qt's docs state no thread guarantee, so a temp-directory test decides: worker thread if safe, otherwise a serialized GUI-thread queue, one root per turn, cancellable between roots. Qt reports only success or failure, so a failure maps to Trash unavailable, never to deletion. The runtime reports `LocationInvalidated` for the parent of the returned `pathInTrash`.
+- **Trash.** `QFile::moveToTrash` from the C++ bridge, one root per call. Qt's docs state no thread guarantee, so a temp-directory test decided: Trash runs on the file-operation workers, and the serialized GUI-thread queue is not needed ([changelog](changelog.md#2026-10-02--p3-m8-trash-on-a-worker-thread)). Qt reports only success or failure, so a failure maps to Trash unavailable, never to deletion. The runtime reports `LocationInvalidated` for the parent of the returned `pathInTrash`.
 - **Permanent delete.** The main pass unlinks files and links with `unlinkat`, never following links. Finalization removes directories with `rmdir`, deepest first.
 - **Cancellation.** Check a shared flag before each side effect, between units, and in the `copyfile` callback. Remove only this operation's temporaries. If cleanup cannot prove a safe result, report uncertain cleanup.
 - **Errors.** Map `errno` to the application error kinds at the edge and keep raw errors in logs only. Each job runs behind a panic boundary and publishes the executor-unavailable terminal event without replaying the step. A fresh worker then removes that operation's temporaries using its journal records and the exact name pattern. Anything it cannot remove stays recorded for the next launch.
@@ -67,7 +67,7 @@ Follow the existing MVVM path: application output, presenter, bridge model, widg
 2. **Application tests:** the contract extensions, with the P3-M7 suite unchanged.
 3. **Runtime and bridge tests:** admission, lease serialization, per-operation ordering of cancel after a step, time-budget yields, coalesced progress, exactly-once terminal events, stale results, and decision round trips.
 4. **Presenter and widget tests:** panel and card state, reveal timing with a fake clock, Status Bar expiry, shortcut focus scope, editor pending and reopen states, Notices entries, refresh targets, the overlay, and the quit prompt.
-5. **Human check at the end** for drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual behavior. Then run the repository gate.
+5. **Human check at the end** for drag-docking, real Trash, default-application and package opening, card focus and announcements, and visual behavior. Then run the repository gate. The owner deferred this check to a later phase ([open item](open-items.md#p3-m8-native-behavior-is-unverified)).
 
 ## Risks
 

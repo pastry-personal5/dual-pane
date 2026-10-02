@@ -47,7 +47,7 @@ Out of scope: session restoration and the Notices startup preference (P3-M9), na
 
 Ordered by dependency; each later group builds on the earlier ones.
 
-The owner marked P3-M8 Done on 2026-10-02 without the human check. The items still unchecked are implemented, and their command, presenter, and bridge logic has automated tests, but their native behavior is unverified. That verification, and any fixes or enhancements it leads to, moves to a later phase; see [Deferred human check](#deferred-human-check).
+The owner marked P3-M8 Done on 2026-10-02 without the human check; see [Deferred human check](#deferred-human-check).
 
 ### Application contract extensions
 
@@ -103,7 +103,7 @@ The owner marked P3-M8 Done on 2026-10-02 without the human check. The items sti
 
 ### Deferred human check
 
-The items below are implemented. Their command, presenter, and bridge logic has automated tests; what remains needs the native interface, which an agent session does not launch. The owner deferred this check to a later phase, tracked in [open items](open-items.md#p3-m8-native-behavior-is-unverified). Each related checklist item stays unchecked until a person verifies it:
+The items below are implemented. Their command, presenter, and bridge logic has automated tests; what remains needs the native interface, which an agent session does not launch. The owner deferred this check to a later phase, tracked in [open items](open-items.md#p3-m8-native-behavior-is-unverified). Every unchecked item in this checklist stays unchecked until a person verifies it. The Trash and default-application opening items are checked on automated tests of their logic, with the real Trash and opening faked, so their native behavior is also part of this check:
 
 - the Folder Items Context Menu and its disabled items
 - file-command shortcuts acting only from a focused Folder Items List, and the Status Bar reason clearing after three seconds
