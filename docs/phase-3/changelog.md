@@ -4,6 +4,12 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-03 — P3-M9 plan review follow-up
+
+- Made restored-folder read priority deterministic: the saved active Browser's active tab, the other Browser's active tab, then the remaining tabs in Left-then-Right strip order.
+- Required one read transaction for the settings snapshot and session rows, plus Qt-representability checks for persisted layout values, so a concurrent write or malformed numeric value cannot yield a torn or unsafe launch layout.
+- Made the timeout boundary concrete: Reset remains unavailable while the sole settings worker is still loading, then can clear session-write protection only after a late successful load and a successful reset. Added explicit quit-while-Waiting behavior and verification.
+
 ## 2026-10-03 — P3-M9 planning
 
 - Planned P3-M9 as one milestone with an ordered checklist ([overview](milestone-09-overview.md), [architecture](milestone-09-architecture.md)).
