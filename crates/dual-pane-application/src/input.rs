@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, PlannedItem, RowChange, ScanFailure, SettingsFailure, SettingsSnapshot, StepResult};
+use crate::{ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, PlannedItem, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, StepResult, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +202,12 @@ pub enum Command {
     },
     /// Replaces stored settings after the person explicitly confirmed it.
     ResetSettings,
+    SetHideNoticesAtStartup {
+        hide: bool,
+    },
+    UpdateWindowLayout {
+        layout: WindowLayout,
+    },
 }
 
 /// Externally observed facts, usually the results of work requests.
@@ -222,28 +228,112 @@ pub enum Command {
 /// sweep of temporaries left by earlier launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    OperationScanned { id: OperationId, generation: u64, plan: Result<Arc<[PlannedItem]>, ScanFailure> },
-    OperationStepped { id: OperationId, generation: u64, result: StepResult },
-    OperationFinalized { id: OperationId, generation: u64, result: FinalizeResult },
-    OperationCleaned { id: OperationId, generation: u64, result: CleanupResult },
-    OperationExecutorUnavailable { id: OperationId, generation: u64 },
-    OperationProgress { id: OperationId, generation: u64, bytes: ByteProgress },
-    ItemResolved { browser: BrowserSide, tab: TabId, token: RequestToken, item: Location, target: ResolvedTarget },
-    OpenFailed { item: Location },
-    JournalStatus { available: bool },
-    TemporariesSwept { removed: usize, failed: Vec<Location> },
-    LocationInvalidated { location: Location },
-    FolderItemsLoaded { browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>> },
-    FolderItemsFailed { browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind },
-    FolderItemsCancelled { browser: BrowserSide, tab: TabId, token: RequestToken },
-    FavoriteTargetProbed { item_id: i64, target: Location, outcome: FavoriteProbeOutcome },
-    ScreenshotsFolderProbed { location: Location, outcome: FavoriteProbeOutcome },
-    SettingsSaved { revision: u64 },
-    SettingsSaveFailed { revision: u64, failure: SettingsFailure },
-    SettingsLoaded { snapshot: SettingsSnapshot },
-    SettingsLoadFailed { failure: SettingsFailure },
-    SettingsReset { backup: Option<Location> },
-    SettingsResetFailed { failure: SettingsFailure },
+    OperationScanned {
+        id: OperationId,
+        generation: u64,
+        plan: Result<Arc<[PlannedItem]>, ScanFailure>,
+    },
+    OperationStepped {
+        id: OperationId,
+        generation: u64,
+        result: StepResult,
+    },
+    OperationFinalized {
+        id: OperationId,
+        generation: u64,
+        result: FinalizeResult,
+    },
+    OperationCleaned {
+        id: OperationId,
+        generation: u64,
+        result: CleanupResult,
+    },
+    OperationExecutorUnavailable {
+        id: OperationId,
+        generation: u64,
+    },
+    OperationProgress {
+        id: OperationId,
+        generation: u64,
+        bytes: ByteProgress,
+    },
+    ItemResolved {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+        item: Location,
+        target: ResolvedTarget,
+    },
+    OpenFailed {
+        item: Location,
+    },
+    JournalStatus {
+        available: bool,
+    },
+    TemporariesSwept {
+        removed: usize,
+        failed: Vec<Location>,
+    },
+    LocationInvalidated {
+        location: Location,
+    },
+    FolderItemsLoaded {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+        entries: Arc<[Entry]>,
+        changes: Option<Vec<RowChange>>,
+    },
+    FolderItemsFailed {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+        kind: ListingErrorKind,
+    },
+    FolderItemsCancelled {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+    },
+    FavoriteTargetProbed {
+        item_id: i64,
+        target: Location,
+        outcome: FavoriteProbeOutcome,
+    },
+    ScreenshotsFolderProbed {
+        location: Location,
+        outcome: FavoriteProbeOutcome,
+    },
+    SettingsSaved {
+        revision: u64,
+    },
+    SettingsSaveFailed {
+        revision: u64,
+        failure: SettingsFailure,
+    },
+    SettingsLoaded {
+        snapshot: SettingsSnapshot,
+    },
+    /// Settings storage uses this atomic result so a launch cannot combine a
+    /// settings moment with a session from another moment.
+    SettingsLoadedWithSession {
+        snapshot: SettingsSnapshot,
+        session: SessionSnapshot,
+    },
+    SettingsLoadFailed {
+        failure: SettingsFailure,
+    },
+    SettingsLoadFailedAtLaunch {
+        failure: SettingsFailure,
+    },
+    SettingsLoadTimedOut,
+    StartupPeriodElapsed,
+    SettingsReset {
+        backup: Option<Location>,
+    },
+    SettingsResetFailed {
+        failure: SettingsFailure,
+    },
 }
 /// What a link resolved to on a worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

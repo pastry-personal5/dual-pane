@@ -1,4 +1,4 @@
-use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteProbeOutcome, FavoriteRejection, Notice, NoticeKind, Output, RowChange, SettingsFailure, SettingsSnapshot, SettingsStatus, WorkRequest, Workspace};
+use dual_pane_application::{BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteProbeOutcome, FavoriteRejection, Notice, NoticeKind, Output, RowChange, SessionSnapshot, SettingsFailure, SettingsSnapshot, SettingsStatus, TabSnapshot, WindowFrame, WindowLayout, WindowState, WorkRequest, Workspace, WorkspaceSnapshot};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, ScrollAnchor, SortDirection, SortField, SortSpec, TabId};
 use std::sync::Arc;
 
@@ -558,4 +558,36 @@ fn a_cleared_selection_stays_without_a_cursor_row_after_a_reload() {
     let (_, token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
     let reloaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("a"), entry("b")]), changes: None }.into());
     assert!(reloaded.outputs.iter().any(|output| matches!(output, Output::SelectionChanged { row: None, .. })));
+}
+
+#[test]
+fn restoration_discards_only_conclusive_first_read_failures() {
+    let left = location("restored-left");
+    let right = location("restored-right");
+    let layout = WindowLayout { frame: WindowFrame { x: 1, y: 2, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 };
+    let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: left.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: right }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout };
+    let mut workspace = Workspace::with_home(location("home"));
+    let restored = workspace.handle(Event::SettingsLoadedWithSession { snapshot: SettingsSnapshot::default(), session: SessionSnapshot::Saved(session) }.into());
+    let (tab, token) = restored
+        .work
+        .iter()
+        .find_map(|work| match work {
+            WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, token, location, .. } if *location == left => Some((*tab, *token)),
+            _ => None,
+        })
+        .expect("left restoration read");
+    let busy = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: dual_pane_domain::ListingErrorKind::Busy }.into());
+    assert!(!busy.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if matches!(notice.kind, NoticeKind::TabDiscarded { .. }))));
+    let retry = workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into());
+    let retry_token = retry
+        .work
+        .iter()
+        .find_map(|work| match work {
+            WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: read_tab, token, .. } if *read_tab == tab => Some(*token),
+            _ => None,
+        })
+        .expect("retry read");
+    let discarded = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token: retry_token, kind: dual_pane_domain::ListingErrorKind::PermissionDenied }.into());
+    assert!(discarded.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if matches!(notice.kind, NoticeKind::TabDiscarded { ref location, reason: dual_pane_domain::ListingErrorKind::PermissionDenied } if *location == left))));
+    assert!(discarded.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { browser: BrowserSide::Left, location: folder, .. } if *folder == location("home"))));
 }

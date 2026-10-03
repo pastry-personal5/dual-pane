@@ -164,15 +164,14 @@ pub struct WorkspaceBridgeRust {
 impl ffi::WorkspaceBridge {
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
-        let BrowserStartup { location, home, settings_path, source_factory, location_probe, launch } = *startup;
+        let BrowserStartup { home, settings_path, source_factory, location_probe, launch } = *startup;
         match Runtime::start(source_factory, location_probe, Box::new(ffi::schedule_gui_drain)) {
             Ok(mut runtime) => {
                 // Without the lane, operations fail closed with a Notice.
                 let journal = Journal::new(settings_path.as_deref().map(journal_path), launch);
                 runtime.attach_operations(Services { fs: std::sync::Arc::new(NativeFileSystem), journal, budget: STEP_BUDGET }).ok();
                 let settings = settings_path.and_then(|path| SettingsWorker::start_with_wake(path, Box::new(ffi::schedule_gui_drain)).ok());
-                let mut coordinator = WorkspaceSession::with_settings(runtime, home, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
-                coordinator.start(location);
+                let coordinator = WorkspaceSession::with_settings(runtime, home, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
                 *SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(coordinator);
                 self.as_mut().session_changed();
             }

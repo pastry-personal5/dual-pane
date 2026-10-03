@@ -66,7 +66,7 @@ impl Reads {
                         self.live.remove(&(*browser, *tab));
                     }
                 }
-                WorkRequest::Operation(_) | WorkRequest::SaveSettings { .. } | WorkRequest::ProbeScreenshotsFolder { .. } | WorkRequest::ProbeFavoriteTarget { .. } | WorkRequest::LoadSettings | WorkRequest::ResetSettings | WorkRequest::ResolveItem { .. } | WorkRequest::ReopenJournal => {}
+                WorkRequest::Operation(_) | WorkRequest::SaveSettings { .. } | WorkRequest::SaveSession { .. } | WorkRequest::ProbeScreenshotsFolder { .. } | WorkRequest::ProbeFavoriteTarget { .. } | WorkRequest::LoadSettings | WorkRequest::ResetSettings | WorkRequest::ResolveItem { .. } | WorkRequest::ReopenJournal => {}
             }
         }
     }

@@ -33,7 +33,12 @@ fn show(workspace: &mut Workspace, browser: BrowserSide, at: &Location, entries:
 }
 fn ready() -> Workspace {
     let mut workspace = Workspace::new();
-    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot { favorites: FavoritesRecords { initialized: true, ..FavoritesRecords::default() }, ..SettingsSnapshot::default() } }.into());
+    let transition = workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot { favorites: FavoritesRecords { initialized: true, ..FavoritesRecords::default() }, ..SettingsSnapshot::default() } }.into());
+    for work in transition.work {
+        if let WorkRequest::ReadDirectory { browser, tab, token, .. } = work {
+            workspace.handle(Event::FolderItemsCancelled { browser, tab, token }.into());
+        }
+    }
     workspace
 }
 fn rejection(transition: &Transition) -> Option<FavoriteRejection> {
@@ -217,7 +222,8 @@ fn a_confirmed_reset_reloads_fresh_settings_and_ignores_older_saves() {
 
     let backup = location("settings.failed");
     let done = workspace.handle(Event::SettingsReset { backup: Some(backup.clone()) }.into());
-    assert_eq!(done.work, vec![WorkRequest::LoadSettings]);
+    assert!(done.work.iter().any(|work| matches!(work, WorkRequest::LoadSettings)));
+    assert_eq!(done.work.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).count(), 2);
     assert!(done.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, open: true } if notice.kind == NoticeKind::SettingsReset { backup: Some(backup.clone()) })));
     let reloaded = workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
     assert!(reloaded.work.iter().any(|work| matches!(work, WorkRequest::ProbeScreenshotsFolder { .. })), "a fresh database is seeded again");

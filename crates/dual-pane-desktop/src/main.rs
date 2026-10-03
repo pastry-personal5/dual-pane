@@ -26,7 +26,6 @@ use crate::folder_items::ListingRules;
 use crate::operation_journal::{LaunchId, is_launch_temporary};
 use crate::runtime::{FolderItemsSource, FolderItemsSourceFactory, LocationProbe};
 fn main() -> ExitCode {
-    let location = env::current_dir().ok().and_then(|path| native_location::location_from_path(&path)).unwrap_or_else(Location::root);
     let home = env::var_os("HOME").and_then(|path| native_location::location_from_path(Path::new(&path))).unwrap_or_else(Location::root);
     let launch = LaunchId::generate();
     // Listings hide this launch's operation temporaries and mark packages.
@@ -36,7 +35,7 @@ fn main() -> ExitCode {
     });
     let settings_path = env::var_os("HOME").map(|home| settings_storage::application_support_database_path(Path::new(&home)));
     let location_probe: LocationProbe = Box::new(location_probe::probe_directory);
-    let startup = BrowserStartup { location, home, settings_path, source_factory, location_probe, launch };
+    let startup = BrowserStartup { home, settings_path, source_factory, location_probe, launch };
     let status = workspace_bridge::ffi::run_desktop(Box::new(startup));
 
     u8::try_from(status).map_or(ExitCode::FAILURE, ExitCode::from)

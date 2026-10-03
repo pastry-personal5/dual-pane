@@ -7,11 +7,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{ActionBinding, ActionId, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Key, SettingsFailure, SettingsSnapshot, Shortcut};
-use dual_pane_domain::{EntryName, Location, SortDirection, SortField, SortSpec};
+use dual_pane_application::{ActionBinding, ActionId, BrowserSnapshot, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot};
+use dual_pane_domain::{BrowserSide, EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(50);
 type BindingParameters = (&'static str, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>);
 
@@ -81,9 +81,12 @@ impl SettingsDatabase {
         Ok(database)
     }
     pub fn load(&self) -> Result<SettingsSnapshot, SettingsStorageError> {
+        Ok(self.load_with_session()?.snapshot)
+    }
+    pub fn load_with_session(&self) -> Result<LoadedSettings, SettingsStorageError> {
         Self::load_connection(&self.connection)
     }
-    fn load_connection(connection: &Connection) -> Result<SettingsSnapshot, SettingsStorageError> {
+    fn load_connection(connection: &Connection) -> Result<LoadedSettings, SettingsStorageError> {
         let bindings = ActionId::ALL
             .into_iter()
             .map(|action| {
@@ -110,11 +113,14 @@ impl SettingsDatabase {
         let mut statement = connection.prepare("SELECT target, field, direction FROM folder_sort ORDER BY recent ASC")?;
         let folder_sorts = statement.query_map([], |row| Ok((decode_location(&row.get::<_, Vec<u8>>(0)?).map_err(to_sql_error)?, decode_sort(row.get(1)?, row.get(2)?).map_err(to_sql_error)?)))?.collect::<Result<Vec<_>, _>>()?;
         let initialized = connection.query_row("SELECT value FROM setting_marker WHERE key = 'favorites_initialized'", [], |row| row.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0;
+        let hide_notices_at_startup = connection.query_row("SELECT value FROM setting_marker WHERE key = 'hide_notices_at_startup'", [], |row| row.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0;
         let groups = connection.prepare("SELECT id, name, position FROM favorite_group ORDER BY position, id")?.query_map([], |row| Ok(FavoriteGroupRecord { id: row.get(0)?, name: row.get(1)?, position: row.get(2)? }))?.collect::<Result<Vec<_>, _>>()?;
         let items = connection.prepare("SELECT id, group_id, name, target, position FROM favorite_item ORDER BY group_id, position, id")?.query_map([], |row| Ok(FavoriteItemRecord { id: row.get(0)?, group_id: row.get(1)?, name: row.get(2)?, target: decode_location(&row.get::<_, Vec<u8>>(3)?).map_err(to_sql_error)?, position: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
         let favorites = FavoritesRecords { initialized, groups, items };
         favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
-        Ok(SettingsSnapshot { bindings, folder_sorts, favorites })
+        let snapshot = SettingsSnapshot { bindings, folder_sorts, favorites, hide_notices_at_startup };
+        let session = read_session(connection)?;
+        Ok(LoadedSettings { snapshot, session })
     }
     pub fn save(&mut self, snapshot: &SettingsSnapshot) -> Result<(), SettingsStorageError> {
         snapshot.favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
@@ -133,12 +139,36 @@ impl SettingsDatabase {
         tx.execute("DELETE FROM favorite_item", [])?;
         tx.execute("DELETE FROM favorite_group", [])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('favorites_initialized', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.favorites.initialized)])?;
+        tx.execute("INSERT INTO setting_marker(key, value) VALUES ('hide_notices_at_startup', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.hide_notices_at_startup)])?;
         for group in &snapshot.favorites.groups {
             tx.execute("INSERT INTO favorite_group(id, name, position) VALUES (?1, ?2, ?3)", params![group.id, group.name, group.position])?;
         }
         for item in &snapshot.favorites.items {
             tx.execute("INSERT INTO favorite_item(id, group_id, name, target, position) VALUES (?1, ?2, ?3, ?4, ?5)", params![item.id, item.group_id, item.name, encode_location(&item.target), item.position])?;
         }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn save_session(&mut self, session: &WorkspaceSnapshot) -> Result<(), SettingsStorageError> {
+        if !session.layout.valid() {
+            return Err(SettingsStorageError::InvalidData("window layout"));
+        }
+        let tx = self.connection.transaction()?;
+        tx.execute("DELETE FROM session_tab", [])?;
+        tx.execute("DELETE FROM session_browser", [])?;
+        tx.execute("DELETE FROM session_window", [])?;
+        for (number, browser) in [(0_i64, &session.left), (1, &session.right)] {
+            let active = browser.active_tab.ok_or(SettingsStorageError::InvalidData("active tab"))?;
+            if browser.tabs.is_empty() || browser.tabs.len() > 8 || active >= browser.tabs.len() {
+                return Err(SettingsStorageError::InvalidData("browser tabs"));
+            }
+            tx.execute("INSERT INTO session_browser(browser, active_position, active) VALUES (?1, ?2, ?3)", params![number, active as i64, i64::from(session.active_browser == if number == 0 { BrowserSide::Left } else { BrowserSide::Right })])?;
+            for (position, tab) in browser.tabs.iter().enumerate() {
+                tx.execute("INSERT INTO session_tab(browser, position, location) VALUES (?1, ?2, ?3)", params![number, position as i64, encode_location(&tab.location)])?;
+            }
+        }
+        let layout = session.layout;
+        tx.execute("INSERT INTO session_window(id, x, y, width, height, state, sidebar_splitter, browser_splitter) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![layout.frame.x, layout.frame.y, layout.frame.width, layout.frame.height, encode_window_state(layout.state), layout.sidebar_splitter, layout.browser_splitter])?;
         tx.commit()?;
         Ok(())
     }
@@ -176,6 +206,9 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
         // becomes unbound so CloseTab can take it; any other CloseWindow
         // choice is kept, and the ID keeps its close-window meaning.
         tx.execute("UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'CloseWindow' AND IFNULL(command, 0) = 1 AND IFNULL(shift, 0) = 0 AND IFNULL(option, 0) = 0 AND IFNULL(control, 0) = 0 AND key = 'W'", [])?;
+    }
+    if version < 4 {
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS session_browser(browser INTEGER PRIMARY KEY NOT NULL, active_position INTEGER NOT NULL, active INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS session_tab(browser INTEGER NOT NULL, position INTEGER NOT NULL, location BLOB NOT NULL, PRIMARY KEY(browser, position)); CREATE TABLE IF NOT EXISTS session_window(id INTEGER PRIMARY KEY NOT NULL CHECK(id = 1), x INTEGER NOT NULL, y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, state INTEGER NOT NULL, sidebar_splitter INTEGER NOT NULL, browser_splitter INTEGER NOT NULL);")?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     // Validate migrated records before committing the schema change. A
@@ -261,6 +294,61 @@ fn decode_location(bytes: &[u8]) -> Result<Location, SettingsStorageError> {
     Ok(Location::from_components(components))
 }
 
+/// Session corruption is deliberately non-fatal: settings and Favorites can
+/// still load, and the next valid session save replaces these rows.
+fn read_session(connection: &Connection) -> Result<SessionSnapshot, SettingsStorageError> {
+    let browser_rows = connection.prepare("SELECT browser, active_position, active FROM session_browser ORDER BY browser")?.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+    let tab_rows = connection.prepare("SELECT browser, position, location FROM session_tab ORDER BY browser, position")?.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, Vec<u8>>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+    let layout_rows = connection.prepare("SELECT x, y, width, height, state, sidebar_splitter, browser_splitter FROM session_window")?.query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?, row.get::<_, i32>(2)?, row.get::<_, i32>(3)?, row.get::<_, i64>(4)?, row.get::<_, i32>(5)?, row.get::<_, i32>(6)?)))?.collect::<Result<Vec<_>, _>>()?;
+    if browser_rows.is_empty() && tab_rows.is_empty() && layout_rows.is_empty() {
+        return Ok(SessionSnapshot::Absent);
+    }
+    let damaged = || Ok(SessionSnapshot::Damaged);
+    if browser_rows.len() != 2 || layout_rows.len() != 1 {
+        return damaged();
+    }
+    let layout_row = layout_rows[0];
+    let Some(state) = decode_window_state(layout_row.4) else { return damaged() };
+    let layout = WindowLayout { frame: WindowFrame { x: layout_row.0, y: layout_row.1, width: layout_row.2, height: layout_row.3 }, state, sidebar_splitter: layout_row.5, browser_splitter: layout_row.6 };
+    if !layout.valid() {
+        return damaged();
+    }
+    let mut browsers = Vec::new();
+    let mut active_browser = None;
+    for (expected, (number, active_position, active)) in browser_rows.into_iter().enumerate() {
+        if number != expected as i64 || !(0..=1).contains(&active) || (active == 1 && active_browser.replace(number).is_some()) {
+            return damaged();
+        }
+        let rows = tab_rows.iter().filter(|(browser, _, _)| *browser == number).collect::<Vec<_>>();
+        if rows.is_empty() || rows.len() > 8 || active_position < 0 || active_position as usize >= rows.len() || rows.iter().enumerate().any(|(position, (_, stored, _))| *stored != position as i64) {
+            return damaged();
+        }
+        let locations = rows.into_iter().map(|(_, _, bytes)| decode_location(bytes)).collect::<Result<Vec<_>, _>>();
+        let Ok(locations) = locations else { return damaged() };
+        browsers.push(BrowserSnapshot { tabs: locations.into_iter().map(|location| dual_pane_application::TabSnapshot { location }).collect(), active_tab: Some(active_position as usize) });
+    }
+    if tab_rows.iter().any(|(browser, _, _)| *browser != 0 && *browser != 1) {
+        return damaged();
+    }
+    let Some(active_browser) = active_browser else { return damaged() };
+    Ok(SessionSnapshot::Saved(WorkspaceSnapshot { left: browsers.remove(0), right: browsers.remove(0), active_browser: if active_browser == 0 { BrowserSide::Left } else { BrowserSide::Right }, layout }))
+}
+fn encode_window_state(state: WindowState) -> i64 {
+    match state {
+        WindowState::Normal => 0,
+        WindowState::Zoomed => 1,
+        WindowState::FullScreen => 2,
+    }
+}
+fn decode_window_state(value: i64) -> Option<WindowState> {
+    match value {
+        0 => Some(WindowState::Normal),
+        1 => Some(WindowState::Zoomed),
+        2 => Some(WindowState::FullScreen),
+        _ => None,
+    }
+}
+
 /// Moves a failed database and its SQLite sidecars aside, then creates fresh
 /// storage at `path`. `current` is closed first so SQLite releases the files.
 /// On failure no file stays moved, and no in-memory stand-in is returned, so a
@@ -315,18 +403,29 @@ pub enum SettingsJob {
         revision: u64,
         snapshot: SettingsSnapshot,
     },
+    SaveSession {
+        revision: u64,
+        session: WorkspaceSnapshot,
+    },
     /// Saves this snapshot without waiting for more changes, then stops.
     Quit {
         revision: u64,
         snapshot: SettingsSnapshot,
     },
+    /// Flushes independent settings and workspace snapshots before stopping.
+    QuitWithSession {
+        settings: Option<(u64, SettingsSnapshot)>,
+        session: Option<(u64, WorkspaceSnapshot)>,
+    },
     Reset,
 }
 pub enum SettingsResult {
-    Loaded(SettingsSnapshot),
+    Loaded(LoadedSettings),
     LoadFailed(SettingsStorageError),
     Saved { revision: u64 },
     SaveFailed { revision: u64, error: SettingsStorageError },
+    SessionSaved { revision: u64 },
+    SessionSaveFailed { revision: u64, error: SettingsStorageError },
     Reset { backup: Option<PathBuf> },
     ResetFailed(SettingsStorageError),
 }
@@ -360,9 +459,12 @@ impl SettingsWorker {
     /// the worker to stop. A worker that is still busy is left to finish
     /// during process teardown. Returns the results delivered while waiting.
     pub fn shutdown(self, final_save: Option<(u64, SettingsSnapshot)>, timeout: Duration) -> Vec<SettingsResult> {
+        self.shutdown_with_session(final_save, None, timeout)
+    }
+    pub fn shutdown_with_session(self, final_settings: Option<(u64, SettingsSnapshot)>, final_session: Option<(u64, WorkspaceSnapshot)>, timeout: Duration) -> Vec<SettingsResult> {
         let Self { jobs, results } = self;
-        if let Some((revision, snapshot)) = final_save {
-            jobs.send(SettingsJob::Quit { revision, snapshot }).ok();
+        if final_settings.is_some() || final_session.is_some() {
+            jobs.send(SettingsJob::QuitWithSession { settings: final_settings, session: final_session }).ok();
         }
         drop(jobs);
         let deadline = Instant::now() + timeout;
@@ -389,6 +491,9 @@ impl WorkerState {
     fn save(&mut self, revision: u64, snapshot: &SettingsSnapshot) -> SettingsResult {
         self.database().and_then(|database| database.save(snapshot)).map_or_else(|error| SettingsResult::SaveFailed { revision, error }, |()| SettingsResult::Saved { revision })
     }
+    fn save_session(&mut self, revision: u64, session: &WorkspaceSnapshot) -> SettingsResult {
+        self.database().and_then(|database| database.save_session(session)).map_or_else(|error| SettingsResult::SessionSaveFailed { revision, error }, |()| SettingsResult::SessionSaved { revision })
+    }
 }
 fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sender<SettingsResult>, wake: Box<dyn Fn() + Send>) {
     let send = |result| {
@@ -397,6 +502,7 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
     };
     while let Ok(job) = jobs.recv() {
         let mut latest = None;
+        let mut latest_session = None;
         let mut quitting = false;
         let mut next = Some(job);
         while let Some(job) = next.take() {
@@ -407,11 +513,24 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
                     if let Some((revision, snapshot)) = latest.take() {
                         send(state.save(revision, &snapshot));
                     }
-                    send(state.database().and_then(|database| database.load()).map_or_else(SettingsResult::LoadFailed, SettingsResult::Loaded));
+                    if let Some((revision, session)) = latest_session.take() {
+                        send(state.save_session(revision, &session));
+                    }
+                    send(state.database().and_then(|database| database.load_with_session()).map_or_else(SettingsResult::LoadFailed, SettingsResult::Loaded));
                 }
                 SettingsJob::Save { revision, snapshot } => latest = Some((revision, snapshot)),
+                SettingsJob::SaveSession { revision, session } => latest_session = Some((revision, session)),
                 SettingsJob::Quit { revision, snapshot } => {
                     latest = Some((revision, snapshot));
+                    quitting = true;
+                }
+                SettingsJob::QuitWithSession { settings, session } => {
+                    if let Some(settings) = settings {
+                        latest = Some(settings)
+                    }
+                    if let Some(session) = session {
+                        latest_session = Some(session)
+                    }
                     quitting = true;
                 }
                 SettingsJob::Reset => {
@@ -422,6 +541,7 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
                             // A confirmed reset supersedes unsaved replaceable state
                             // that was queued before it.
                             latest = None;
+                            latest_session = None;
                             send(SettingsResult::Reset { backup });
                         }
                         Err(error) => send(SettingsResult::ResetFailed(error)),
@@ -434,6 +554,9 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
         }
         if let Some((revision, snapshot)) = latest {
             send(state.save(revision, &snapshot));
+        }
+        if let Some((revision, session)) = latest_session {
+            send(state.save_session(revision, &session));
         }
         if quitting {
             return;
@@ -477,7 +600,7 @@ mod tests {
     fn favorites_round_trip_in_order() {
         let (_directory, path) = temp_database();
         let mut db = SettingsDatabase::open(&path).unwrap();
-        let snapshot = SettingsSnapshot { bindings: dual_pane_application::default_bindings(), folder_sorts: vec![], favorites: FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 1, name: "A".into(), position: 0 }, FavoriteGroupRecord { id: 2, name: "B".into(), position: 1 }], items: vec![FavoriteItemRecord { id: 4, group_id: 1, name: "item".into(), target: non_utf8_location(), position: 0 }] } };
+        let snapshot = SettingsSnapshot { bindings: dual_pane_application::default_bindings(), folder_sorts: vec![], favorites: FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 1, name: "A".into(), position: 0 }, FavoriteGroupRecord { id: 2, name: "B".into(), position: 1 }], items: vec![FavoriteItemRecord { id: 4, group_id: 1, name: "item".into(), target: non_utf8_location(), position: 0 }] }, ..SettingsSnapshot::default() };
         db.save(&snapshot).unwrap();
         assert_eq!(db.load().unwrap().favorites, snapshot.favorites);
     }
@@ -581,7 +704,7 @@ mod tests {
         assert!(worker.submit(SettingsJob::Save { revision: 3, snapshot: snapshot.clone() }));
         assert!(worker.submit(SettingsJob::Load));
         let results = worker.shutdown(None, Duration::from_secs(10));
-        assert!(matches!(results.as_slice(), [SettingsResult::Saved { revision: 3 }, SettingsResult::Loaded(loaded)] if loaded.folder_sorts == snapshot.folder_sorts));
+        assert!(matches!(results.as_slice(), [SettingsResult::Saved { revision: 3 }, SettingsResult::Loaded(loaded)] if loaded.snapshot.folder_sorts == snapshot.folder_sorts));
     }
     #[test]
     fn a_reset_discards_saves_queued_before_it() {
@@ -591,7 +714,7 @@ mod tests {
         assert!(worker.submit(SettingsJob::Reset));
         assert!(worker.submit(SettingsJob::Load));
         let results = worker.shutdown(None, Duration::from_secs(10));
-        assert!(matches!(results.as_slice(), [SettingsResult::Reset { .. }, SettingsResult::Loaded(loaded)] if loaded.folder_sorts.is_empty()));
+        assert!(matches!(results.as_slice(), [SettingsResult::Reset { .. }, SettingsResult::Loaded(loaded)] if loaded.snapshot.folder_sorts.is_empty()));
     }
     fn stored_sorts(path: &Path) -> Vec<(Location, SortSpec)> {
         SettingsDatabase::open(path).unwrap().load().unwrap().folder_sorts

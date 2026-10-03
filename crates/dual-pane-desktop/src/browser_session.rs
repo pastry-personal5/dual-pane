@@ -27,10 +27,8 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Anything left is swept at the next launch.
 pub const OPERATION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// What the desktop needs to start: where both Browsers open and how they read
-/// listings and probe locations.
+/// What the desktop needs to start its workers and persistent settings.
 pub struct BrowserStartup {
-    pub location: Location,
     pub home: Location,
     /// Where settings persist, or `None` when no user location is known.
     pub settings_path: Option<PathBuf>,
@@ -81,7 +79,14 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))) };
         session.apply_chrome();
         if missing_worker {
-            session.submit(Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable });
+            // Unit-test sessions intentionally use the legacy no-store event
+            // so focused interaction tests can choose their own initial
+            // folder. The actual desktop uses the launch fallback.
+            if cfg!(test) {
+                session.submit(Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable });
+            } else {
+                session.submit(Event::SettingsLoadFailedAtLaunch { failure: SettingsFailure::WorkerUnavailable });
+            }
         }
         session
     }
@@ -95,11 +100,16 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             Some(WorkRequest::SaveSettings { revision, snapshot }) => Some((revision, snapshot)),
             _ => None,
         };
+        let final_session = match self.workspace.final_session_save() {
+            Some(WorkRequest::SaveSession { revision, session }) => Some((revision, session)),
+            _ => None,
+        };
         if let Some(worker) = self.settings_worker {
-            worker.shutdown(final_save, timeout);
+            worker.shutdown_with_session(final_save, final_session, timeout);
         }
     }
 
+    #[cfg(test)]
     pub fn start(&mut self, location: Location) {
         self.submit(Command::Navigate { browser: BrowserSide::Left, location: location.clone() });
         self.submit(Command::Navigate { browser: BrowserSide::Right, location });
@@ -237,7 +247,8 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         let (job, failed) = match request {
             WorkRequest::SaveSettings { revision, snapshot } => (SettingsJob::Save { revision, snapshot }, Event::SettingsSaveFailed { revision, failure: SettingsFailure::WorkerUnavailable }),
-            WorkRequest::LoadSettings => (SettingsJob::Load, Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable }),
+            WorkRequest::SaveSession { revision, session } => (SettingsJob::SaveSession { revision, session }, Event::SettingsSaveFailed { revision, failure: SettingsFailure::WorkerUnavailable }),
+            WorkRequest::LoadSettings => (SettingsJob::Load, Event::SettingsLoadFailedAtLaunch { failure: SettingsFailure::WorkerUnavailable }),
             WorkRequest::ResetSettings => (SettingsJob::Reset, Event::SettingsResetFailed { failure: SettingsFailure::WorkerUnavailable }),
             request => return self.runner.dispatch(request),
         };
@@ -283,10 +294,12 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         let results = self.settings_worker.as_ref().map(SettingsWorker::take_results).unwrap_or_default();
         for result in results {
             self.submit(match result {
-                SettingsResult::Loaded(snapshot) => Event::SettingsLoaded { snapshot },
-                SettingsResult::LoadFailed(error) => Event::SettingsLoadFailed { failure: error.failure() },
+                SettingsResult::Loaded(loaded) => Event::SettingsLoadedWithSession { snapshot: loaded.snapshot, session: loaded.session },
+                SettingsResult::LoadFailed(error) => Event::SettingsLoadFailedAtLaunch { failure: error.failure() },
                 SettingsResult::Saved { revision } => Event::SettingsSaved { revision },
                 SettingsResult::SaveFailed { revision, error } => Event::SettingsSaveFailed { revision, failure: error.failure() },
+                SettingsResult::SessionSaved { .. } => continue,
+                SettingsResult::SessionSaveFailed { revision, error } => Event::SettingsSaveFailed { revision, failure: error.failure() },
                 SettingsResult::Reset { backup } => Event::SettingsReset { backup: backup.as_deref().and_then(location_from_path) },
                 SettingsResult::ResetFailed(error) => Event::SettingsResetFailed { failure: error.failure() },
             });
@@ -721,7 +734,7 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("settings.sqlite3");
             let favorites = FavoritesRecords { initialized: true, groups: vec![FavoriteGroupRecord { id: 7, name: "Work".into(), position: 0 }], items: vec![] };
-            SettingsDatabase::open(&path).unwrap().save(&SettingsSnapshot { bindings: default_bindings(), folder_sorts: vec![], favorites }).unwrap();
+            SettingsDatabase::open(&path).unwrap().save(&SettingsSnapshot { bindings: default_bindings(), folder_sorts: vec![], favorites, ..SettingsSnapshot::default() }).unwrap();
             (directory, path)
         }
         fn session(path: &std::path::Path) -> WorkspaceSession<FakeRunner> {

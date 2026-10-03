@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::{ActionBinding, FavoritesRecords, OperationFailure, OperationOutcome, OperationProgress, SettingsFailure};
-use dual_pane_domain::{BrowserSide, Location, OperationIntent, SortSpec, TabId};
+use dual_pane_domain::{BrowserSide, ListingErrorKind, Location, OperationIntent, SortSpec, TabId};
 
 /// One Browser Tab as its strip shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,4 +120,10 @@ pub enum NoticeKind {
     OpenFailed {
         item: Location,
     },
+    TabDiscarded {
+        location: Location,
+        reason: ListingErrorKind,
+    },
+    SessionNotRestored,
+    SettingsLoadTimedOut,
 }

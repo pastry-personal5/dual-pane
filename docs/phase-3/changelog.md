@@ -4,6 +4,10 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-03 — P3-M9 saved session integrity
+
+- **Owner decision:** a saved session with tabs but no window-layout row is damaged as a whole. It opens the Home fallback and records Session Not Restored; it does not restore the tabs at the default layout. A database with no session rows remains a valid no-session case.
+
 ## 2026-10-03 — P3-M9 plan review follow-up
 
 - Made restored-folder read priority deterministic: the saved active Browser's active tab, the other Browser's active tab, then the remaining tabs in Left-then-Right strip order.

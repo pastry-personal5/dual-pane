@@ -1,4 +1,4 @@
-use crate::{FavoriteEdit, FavoriteRejection, FavoritesRecords, Notice, OperationJob, SettingsFailure};
+use crate::{FavoriteEdit, FavoriteRejection, FavoritesRecords, Notice, OperationJob, SettingsFailure, WindowLayout};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, OperationCommand, OperationId, OperationRejection, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
@@ -50,6 +50,13 @@ pub enum Output {
     },
     /// Every operation was told to cancel; the application may exit.
     QuitAccepted,
+    /// Emitted once after the first settings answer or the protected timeout;
+    /// the desktop applies the supplied layout before revealing the window.
+    SessionRestored {
+        active_browser: BrowserSide,
+        layout: Option<WindowLayout>,
+    },
+    LayoutReset,
     ActiveBrowserChanged {
         browser: BrowserSide,
     },

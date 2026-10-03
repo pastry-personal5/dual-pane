@@ -188,6 +188,9 @@ fn notice_text(notice: &Notice) -> String {
             format!("{removed}Couldn’t remove temporary items left by an earlier session in {folders}.")
         }
         NoticeKind::OpenFailed { item } => format!("Couldn’t open “{}”.", location_text(item)),
+        NoticeKind::TabDiscarded { location, reason } => format!("Couldn’t restore “{}”: {reason:?}.", location_text(location)),
+        NoticeKind::SessionNotRestored => "The previous workspace could not be restored. Opened Home folders instead.".to_owned(),
+        NoticeKind::SettingsLoadTimedOut => "Settings took too long to load. This launch’s tabs and window layout will not be saved; the previous workspace is protected.".to_owned(),
     }
 }
 

@@ -312,6 +312,20 @@ pub struct WorkspaceSnapshot {
     pub left: BrowserSnapshot,
     pub right: BrowserSnapshot,
     pub active_browser: BrowserSide,
+    pub layout: WindowLayout,
+}
+/// The session portion of one atomic settings read.  Damaged session rows do
+/// not make otherwise valid user settings unusable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSnapshot {
+    Absent,
+    Saved(WorkspaceSnapshot),
+    Damaged,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedSettings {
+    pub snapshot: SettingsSnapshot,
+    pub session: SessionSnapshot,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BrowserSnapshot {
@@ -321,7 +335,34 @@ pub struct BrowserSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabSnapshot {
     pub location: Location,
-    pub filter: String,
+}
+
+/// Persisted Qt-free window information, expressed in logical points rather
+/// than Qt's opaque geometry and splitter byte arrays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowLayout {
+    pub frame: WindowFrame,
+    pub state: WindowState,
+    pub sidebar_splitter: i32,
+    pub browser_splitter: i32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowFrame {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowState {
+    Normal,
+    Zoomed,
+    FullScreen,
+}
+impl WindowLayout {
+    pub const fn valid(self) -> bool {
+        self.frame.width > 0 && self.frame.height > 0 && self.sidebar_splitter >= 0 && self.browser_splitter >= 0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -329,6 +370,7 @@ pub struct SettingsSnapshot {
     pub bindings: Vec<ActionBinding>,
     pub folder_sorts: Vec<(Location, SortSpec)>,
     pub favorites: FavoritesRecords,
+    pub hide_notices_at_startup: bool,
 }
 
 /// Application memory. It applies choices immediately and retains the latest
@@ -339,6 +381,7 @@ pub struct SettingsState {
     folder_sorts: HashMap<Location, SortSpec>,
     lru: VecDeque<Location>,
     favorites: FavoritesRecords,
+    hide_notices_at_startup: bool,
     revision: u64,
     saved_revision: u64,
 }
@@ -402,7 +445,7 @@ impl SettingsState {
         let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect::<Vec<_>>();
         bindings.sort_by_key(|binding| binding.action.as_str());
         let folder_sorts = self.lru.iter().filter_map(|location| self.folder_sorts.get(location).copied().map(|sort| (location.clone(), sort))).collect();
-        SettingsSnapshot { bindings, folder_sorts, favorites: self.favorites.clone() }
+        SettingsSnapshot { bindings, folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup }
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -426,7 +469,17 @@ impl SettingsState {
             self.lru.push_back(location);
         }
         self.favorites = snapshot.favorites;
+        self.hide_notices_at_startup = snapshot.hide_notices_at_startup;
         self.revision += 1;
+    }
+    pub fn hide_notices_at_startup(&self) -> bool {
+        self.hide_notices_at_startup
+    }
+    pub fn set_hide_notices_at_startup(&mut self, hide: bool) {
+        if self.hide_notices_at_startup != hide {
+            self.hide_notices_at_startup = hide;
+            self.revision += 1;
+        }
     }
     fn touch(&mut self, location: &Location) {
         self.lru.retain(|candidate| candidate != location);

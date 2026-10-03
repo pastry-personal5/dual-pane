@@ -17,6 +17,15 @@ impl BrowserTabs {
     pub fn new(initial: TabId) -> Self {
         Self { tabs: vec![initial], active: initial }
     }
+    /// Restores a persisted ordered strip.  Keeping this validation in the
+    /// domain means adapters cannot accidentally construct an empty Browser.
+    pub fn from_ordered(tabs: Vec<TabId>, active_index: usize) -> Option<Self> {
+        if tabs.is_empty() || tabs.len() > Self::LIMIT || active_index >= tabs.len() {
+            return None;
+        }
+        let active = tabs[active_index];
+        (!tabs.windows(2).any(|pair| pair[0] == pair[1])).then_some(Self { tabs, active })
+    }
     pub fn active(&self) -> TabId {
         self.active
     }

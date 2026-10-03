@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, BrowserChrome, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, ResolvedTarget, RowChange, SettingsFailure, SettingsState, SettingsStatus, TabSummary, WorkRequest, WorkspaceChrome, fresh_profile_favorites, fresh_profile_screenshots};
+use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
 use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
@@ -67,6 +67,10 @@ pub struct Workspace {
     pending_open: Option<(BrowserSide, TabId, RequestToken)>,
     /// Set once quitting was accepted; no new operation starts.
     quitting: bool,
+    layout: Option<WindowLayout>,
+    launch_completed: bool,
+    session_write_protected: bool,
+    session_revision: u64,
 }
 #[derive(Debug, Clone)]
 struct PendingSelection {
@@ -91,6 +95,13 @@ struct TabState {
     folder_items: Option<FolderItems>,
     pending: Option<PendingRead>,
     error: Option<ListingError>,
+    /// Latest requested folder, retained until it has been confirmed so a
+    /// failed first read remains labelled, refreshable, and saveable.
+    requested: Option<Location>,
+    /// True until the first restoration read reaches a terminal result. A
+    /// read caused by an invalidation keeps this mark; a person's navigation
+    /// deliberately clears it.
+    restoring: bool,
 }
 #[derive(Debug)]
 struct FolderItems {
@@ -104,6 +115,7 @@ struct PendingRead {
     history_target: Option<usize>,
     /// The shown Folder Items the read was asked to diff against.
     base: Option<Arc<[Entry]>>,
+    restoring: bool,
 }
 
 impl Default for Workspace {
@@ -118,13 +130,21 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0 }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
-        match input {
+        let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
+        let mut transition = match input {
             Input::Command(command) => self.command(command),
             Input::Event(event) => self.event(event),
+        };
+        if save_session {
+            self.session_revision = self.session_revision.wrapping_add(1);
+            if let Some(session) = self.session_snapshot() {
+                transition.work.push(WorkRequest::SaveSession { revision: self.session_revision, session });
+            }
         }
+        transition
     }
     fn command(&mut self, command: Command) -> Transition {
         match command {
@@ -154,6 +174,8 @@ impl Workspace {
             Command::MoveFavoriteItem { id, group_id, position } => self.favorites_edit(FavoriteEdit::Item(id), |workspace| workspace.move_favorite_item(id, group_id, position)),
             Command::DeleteFavoriteItem { id } => self.favorites_edit(FavoriteEdit::Item(id), |workspace| workspace.delete_favorite_item(id)),
             Command::ResetSettings => self.reset_settings(),
+            Command::SetHideNoticesAtStartup { hide } => self.set_hide_notices_at_startup(hide),
+            Command::UpdateWindowLayout { layout } => self.update_window_layout(layout),
             Command::GoBack { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, false)),
             Command::GoForward { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, true)),
             Command::Refresh { browser, tab } => self.on_active(browser, tab, |workspace| workspace.refresh_tab(browser, tab)),
@@ -203,8 +225,17 @@ impl Workspace {
                 Transition::default()
             }
             Event::SettingsSaveFailed { revision, failure } => self.settings_save_failed(revision, failure),
-            Event::SettingsLoaded { snapshot } => self.settings_loaded(snapshot),
-            Event::SettingsLoadFailed { failure } => self.settings_load_failed(failure),
+            // Compatibility event for embedders that do not have a session
+            // store. The desktop always uses the atomic session-bearing form.
+            Event::SettingsLoaded { snapshot } => {
+                self.launch_completed = true;
+                self.settings_loaded(snapshot, SessionSnapshot::Absent)
+            }
+            Event::SettingsLoadedWithSession { snapshot, session } => self.settings_loaded(snapshot, session),
+            Event::SettingsLoadFailed { failure } => self.settings_load_failed_legacy(failure),
+            Event::SettingsLoadFailedAtLaunch { failure } => self.settings_load_failed(failure),
+            Event::SettingsLoadTimedOut => self.settings_load_timed_out(),
+            Event::StartupPeriodElapsed => Transition::default(),
             Event::SettingsReset { backup } => self.settings_reset(backup),
             Event::SettingsResetFailed { failure } => self.settings_reset_failed(failure),
         }
@@ -470,6 +501,10 @@ impl Workspace {
     pub fn final_settings_save(&self) -> Option<WorkRequest> {
         self.settings.has_unsaved_changes().then(|| self.save_settings()).flatten()
     }
+    /// The newest independent session snapshot for the orderly-quit flush.
+    pub fn final_session_save(&self) -> Option<WorkRequest> {
+        self.session_snapshot().map(|session| WorkRequest::SaveSession { revision: self.session_revision, session })
+    }
     fn browser(&self, side: BrowserSide) -> &BrowserState {
         match side {
             BrowserSide::Left => &self.left,
@@ -574,6 +609,9 @@ impl Workspace {
         if self.tab(browser, tab).and_then(|t| t.pending.as_ref()).is_some_and(|p| p.location == location && p.history_target == history_target) {
             return Transition::default();
         }
+        if let Some(tab) = self.tab_mut(browser, tab) {
+            tab.restoring = false;
+        }
         self.start_read(browser, tab, location, history_target)
     }
     fn start_read(&mut self, browser: BrowserSide, tab: TabId, location: Location, history_target: Option<usize>) -> Transition {
@@ -586,7 +624,8 @@ impl Workspace {
         let previous = self.tab(browser, tab).and_then(|state| state.folder_items.as_ref()).filter(|items| items.location == location).map(|items| Arc::clone(&items.entries));
         let old = self.tab_mut(browser, tab).and_then(|state| {
             state.error = None;
-            state.pending.replace(PendingRead { token, location: location.clone(), history_target, base: previous.clone() })
+            state.requested = Some(location.clone());
+            state.pending.replace(PendingRead { token, location: location.clone(), history_target, base: previous.clone(), restoring: state.restoring })
         });
         let mut work = old.into_iter().map(|old| WorkRequest::Cancel { browser, tab, token: old.token }).collect::<Vec<_>>();
         work.push(WorkRequest::ReadDirectory { browser, tab, token, location: location.clone(), sort, previous });
@@ -611,7 +650,7 @@ impl Workspace {
         self.history_step(browser, forward).map_or_else(Transition::default, |(target, location)| self.start_read(browser, tab, location, Some(target)))
     }
     fn refresh_tab(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
-        let target = self.tab(browser, tab).and_then(|state| state.pending.as_ref().map(|pending| (pending.location.clone(), pending.history_target)).or_else(|| state.folder_items.as_ref().map(|items| (items.location.clone(), None))));
+        let target = self.tab(browser, tab).and_then(|state| state.pending.as_ref().map(|pending| (pending.location.clone(), pending.history_target)).or_else(|| state.folder_items.as_ref().map(|items| (items.location.clone(), None)).or_else(|| state.requested.as_ref().map(|location| (location.clone(), None)))));
         target.map_or_else(Transition::default, |(location, history_target)| self.start_read(browser, tab, location, history_target))
     }
     fn refresh_location(&mut self, location: &Location) -> Transition {
@@ -635,7 +674,7 @@ impl Workspace {
         transition.work.extend(self.save_settings());
         transition
     }
-    fn settings_loaded(&mut self, snapshot: crate::SettingsSnapshot) -> Transition {
+    fn settings_loaded(&mut self, snapshot: crate::SettingsSnapshot, session: SessionSnapshot) -> Transition {
         if self.settings_status != SettingsStatus::Loading {
             return Transition::default();
         }
@@ -656,9 +695,22 @@ impl Workspace {
         if self.screenshots_probe.is_none() {
             transition.work.extend(self.launch_probes());
         }
-        let tabs = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|side| self.browser(side).tabs.iter().map(move |tab| (side, tab.id))).collect::<Vec<_>>();
-        for (side, tab) in tabs {
-            transition.append(self.refresh_tab(side, tab));
+        if !self.launch_completed {
+            self.launch_completed = true;
+            match session {
+                SessionSnapshot::Saved(saved) => transition.append(self.restore_session(saved)),
+                SessionSnapshot::Damaged => {
+                    transition.append(self.fallback_home());
+                    transition.append(self.add_notice(NoticeKind::SessionNotRestored));
+                }
+                SessionSnapshot::Absent => transition.append(self.fallback_home()),
+            }
+            transition.outputs.push(Output::SessionRestored { active_browser: self.active_browser, layout: self.layout });
+        } else {
+            let tabs = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|side| self.browser(side).tabs.iter().map(move |tab| (side, tab.id))).collect::<Vec<_>>();
+            for (side, tab) in tabs {
+                transition.append(self.refresh_tab(side, tab));
+            }
         }
         transition
     }
@@ -701,7 +753,125 @@ impl Workspace {
         self.pending_sorts.clear();
         let mut transition = Transition::output(Output::SettingsLoadFailed { failure });
         transition.append(self.add_notice(NoticeKind::SettingsLoadFailed { failure }));
+        if !self.launch_completed {
+            self.launch_completed = true;
+            transition.append(self.fallback_home());
+            transition.outputs.push(Output::SessionRestored { active_browser: self.active_browser, layout: None });
+        }
         transition
+    }
+    fn settings_load_failed_legacy(&mut self, failure: SettingsFailure) -> Transition {
+        if self.settings_status != SettingsStatus::Loading {
+            return Transition::default();
+        }
+        self.settings_status = SettingsStatus::LoadFailed(failure);
+        if failure == SettingsFailure::WorkerUnavailable {
+            self.settings_worker = false
+        }
+        self.screenshots_probe = None;
+        self.pending_sorts.clear();
+        let mut transition = Transition::output(Output::SettingsLoadFailed { failure });
+        transition.append(self.add_notice(NoticeKind::SettingsLoadFailed { failure }));
+        transition
+    }
+    fn settings_load_timed_out(&mut self) -> Transition {
+        if self.launch_completed {
+            return Transition::default();
+        }
+        self.launch_completed = true;
+        self.session_write_protected = true;
+        let mut transition = self.fallback_home();
+        transition.append(self.add_notice(NoticeKind::SettingsLoadTimedOut));
+        transition.outputs.push(Output::SessionRestored { active_browser: self.active_browser, layout: None });
+        transition
+    }
+    fn fallback_home(&mut self) -> Transition {
+        let targets = [BrowserSide::Left, BrowserSide::Right]
+            .into_iter()
+            .filter_map(|side| {
+                let tab = self.active_tab(side);
+                self.tab(side, tab).is_some_and(|tab| tab.folder_items.is_none() && tab.pending.is_none()).then_some((side, tab))
+            })
+            .collect::<Vec<_>>();
+        targets.into_iter().fold(Transition::default(), |mut total, (side, tab)| {
+            total.append(self.start_read(side, tab, self.home.clone(), None));
+            total
+        })
+    }
+    fn restore_session(&mut self, snapshot: WorkspaceSnapshot) -> Transition {
+        if !snapshot.layout.valid() || !self.placeholder(BrowserSide::Left) || !self.placeholder(BrowserSide::Right) {
+            return self.fallback_home();
+        }
+        let Some(left) = self.restored_browser(&snapshot.left) else { return self.fallback_home() };
+        let Some(right) = self.restored_browser(&snapshot.right) else { return self.fallback_home() };
+        self.left = left;
+        self.right = right;
+        self.active_browser = snapshot.active_browser;
+        self.layout = Some(snapshot.layout);
+        let ordered = self.restore_read_order();
+        let mut transition = Transition { outputs: vec![Output::TabsChanged { browser: BrowserSide::Left, active_tab: self.left.order.active() }, Output::TabsChanged { browser: BrowserSide::Right, active_tab: self.right.order.active() }, Output::ActiveBrowserChanged { browser: self.active_browser }], work: vec![] };
+        for (side, tab) in ordered {
+            let location = self.tab(side, tab).and_then(TabState::requested_location).expect("restored tabs have locations");
+            transition.append(self.start_read(side, tab, location, None));
+        }
+        transition
+    }
+    fn placeholder(&self, side: BrowserSide) -> bool {
+        let state = self.browser(side);
+        state.tabs.len() == 1 && state.tabs[0].folder_items.is_none() && state.tabs[0].pending.is_none()
+    }
+    fn restored_browser(&mut self, saved: &BrowserSnapshot) -> Option<BrowserState> {
+        let active = saved.active_tab?;
+        let ids = (0..saved.tabs.len())
+            .map(|_| {
+                let id = TabId::new(self.next_tab);
+                self.next_tab += 1;
+                id
+            })
+            .collect::<Vec<_>>();
+        let order = BrowserTabs::from_ordered(ids.clone(), active)?;
+        let tabs = ids.into_iter().zip(saved.tabs.iter()).map(|(id, tab)| TabState::requested(id, tab.location.clone())).collect();
+        Some(BrowserState { order, tabs })
+    }
+    fn restore_read_order(&self) -> Vec<(BrowserSide, TabId)> {
+        let other = match self.active_browser {
+            BrowserSide::Left => BrowserSide::Right,
+            BrowserSide::Right => BrowserSide::Left,
+        };
+        let mut result = vec![(self.active_browser, self.active_tab(self.active_browser)), (other, self.active_tab(other))];
+        for side in [BrowserSide::Left, BrowserSide::Right] {
+            let already = result.clone();
+            result.extend(self.browser(side).order.tabs().iter().copied().filter(|tab| !already.contains(&(side, *tab))).map(|tab| (side, tab)));
+        }
+        result
+    }
+    fn set_hide_notices_at_startup(&mut self, hide: bool) -> Transition {
+        if self.settings_status != SettingsStatus::Loaded {
+            return Transition::default();
+        }
+        self.settings.set_hide_notices_at_startup(hide);
+        Transition { outputs: vec![], work: self.save_settings().into_iter().collect() }
+    }
+    fn update_window_layout(&mut self, layout: WindowLayout) -> Transition {
+        if !layout.valid() {
+            return Transition::default();
+        }
+        self.layout = Some(layout);
+        self.session_revision += 1;
+        Transition { outputs: vec![], work: self.session_snapshot().map(|session| WorkRequest::SaveSession { revision: self.session_revision, session }).into_iter().collect() }
+    }
+    pub fn session_snapshot(&self) -> Option<WorkspaceSnapshot> {
+        if self.settings_status != SettingsStatus::Loaded || !self.launch_completed || self.session_write_protected {
+            return None;
+        }
+        let layout = self.layout?;
+        Some(WorkspaceSnapshot { left: self.browser_snapshot(BrowserSide::Left)?, right: self.browser_snapshot(BrowserSide::Right)?, active_browser: self.active_browser, layout })
+    }
+    fn browser_snapshot(&self, side: BrowserSide) -> Option<BrowserSnapshot> {
+        let state = self.browser(side);
+        let tabs = state.order.tabs().iter().map(|id| self.tab(side, *id)?.requested_location().map(|location| TabSnapshot { location })).collect::<Option<Vec<_>>>()?;
+        let active_tab = state.order.tabs().iter().position(|id| *id == state.order.active());
+        Some(BrowserSnapshot { tabs, active_tab })
     }
     fn is_stale_save(&self, revision: u64) -> bool {
         self.stale_save_floor.is_some_and(|floor| revision <= floor)
@@ -735,7 +905,26 @@ impl Workspace {
             return Transition::default();
         }
         let mut transition = self.add_notice(NoticeKind::SettingsReset { backup });
+        transition.append(self.reset_workspace());
         transition.work.push(WorkRequest::LoadSettings);
+        transition
+    }
+    fn reset_workspace(&mut self) -> Transition {
+        let cancelled = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|browser| self.browser(browser).tabs.iter().filter_map(move |tab| tab.pending.as_ref().map(|pending| WorkRequest::Cancel { browser, tab: tab.id, token: pending.token }))).collect::<Vec<_>>();
+        let left = TabId::new(self.next_tab);
+        self.next_tab += 1;
+        let right = TabId::new(self.next_tab);
+        self.next_tab += 1;
+        self.left = BrowserState::new(left);
+        self.right = BrowserState::new(right);
+        self.active_browser = BrowserSide::Left;
+        self.pending_selection = None;
+        self.pending_open = None;
+        self.layout = None;
+        self.session_write_protected = false;
+        let mut transition = Transition { outputs: vec![Output::TabsChanged { browser: BrowserSide::Left, active_tab: left }, Output::TabsChanged { browser: BrowserSide::Right, active_tab: right }, Output::ActiveBrowserChanged { browser: BrowserSide::Left }, Output::LayoutReset], work: cancelled };
+        transition.append(self.start_read(BrowserSide::Left, left, self.home.clone(), None));
+        transition.append(self.start_read(BrowserSide::Right, right, self.home.clone(), None));
         transition
     }
     fn settings_reset_failed(&mut self, failure: SettingsFailure) -> Transition {
@@ -746,7 +935,7 @@ impl Workspace {
     /// Records a Notice. A storage failure that repeats the latest Notice is
     /// not added again, so repeated failing saves do not flood Notices.
     fn add_notice(&mut self, kind: NoticeKind) -> Transition {
-        let storage = matches!(kind, NoticeKind::SettingsLoadFailed { .. } | NoticeKind::SettingsSaveFailed { .. } | NoticeKind::SettingsResetFailed { .. });
+        let storage = matches!(kind, NoticeKind::SettingsLoadFailed { .. } | NoticeKind::SettingsSaveFailed { .. } | NoticeKind::SettingsResetFailed { .. } | NoticeKind::SettingsLoadTimedOut);
         if storage && self.notices.last().is_some_and(|last| last.kind == kind) {
             return Transition::default();
         }
@@ -1009,11 +1198,18 @@ impl Workspace {
         };
         state.folder_items = Some(FolderItems { location: pending.location.clone(), entries: Arc::clone(&entries) });
         state.error = None;
+        state.restoring = false;
         let visit = visit.state();
         Transition { outputs: vec![Output::FolderItemsLoaded { browser, tab, location: pending.location, scroll_hint: visit.scroll().cloned(), changes, entries: Arc::clone(&entries) }, Output::SelectionChanged { browser, tab, selection: visit.selection().clone(), row: visit.cursor_row(&entries) }], work: vec![] }
     }
     fn failed(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, kind: ListingErrorKind) -> Transition {
         let Some(pending) = self.take_pending(browser, tab, token) else { return Transition::default() };
+        if pending.restoring && is_unrestorable(kind) {
+            let location = pending.location;
+            let mut transition = self.close_tab(browser, tab);
+            transition.append(self.add_notice(NoticeKind::TabDiscarded { location, reason: kind }));
+            return transition;
+        }
         let error = ListingError::new(pending.location, kind);
         let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
         state.error = Some(error.clone());
@@ -1042,7 +1238,13 @@ impl BrowserState {
 }
 impl TabState {
     fn new(id: TabId) -> Self {
-        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None }
+        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: None, restoring: false }
+    }
+    fn requested(id: TabId, location: Location) -> Self {
+        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: Some(location), restoring: true }
+    }
+    fn requested_location(&self) -> Option<Location> {
+        self.folder_items.as_ref().map(|items| items.location.clone()).or_else(|| self.requested.clone())
     }
 }
 
@@ -1074,4 +1276,11 @@ fn changes_fit(changes: &[RowChange], old_len: usize, new_len: usize) -> bool {
         next = change.row.saturating_add(change.inserted);
     }
     len == new_len
+}
+
+/// Only a conclusive first restoration failure discards a saved tab. Queue
+/// pressure and worker trouble remain refreshable rather than destroying the
+/// person's workspace state.
+fn is_unrestorable(kind: ListingErrorKind) -> bool {
+    matches!(kind, ListingErrorKind::ItemMissing | ListingErrorKind::NotADirectory | ListingErrorKind::PermissionDenied | ListingErrorKind::PrivacyRestricted | ListingErrorKind::Unknown)
 }
