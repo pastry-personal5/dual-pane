@@ -52,7 +52,7 @@ Each rule lives in one active source: [product behavior](../product-behavior.md)
 | Running Operation Panel has focus | `Command+W` | Focused panel | No action; job and panel stay open | P3-M8 |
 | Completed Operation Panel has focus | `Command+W` | Focused panel | Close that panel | P3-M8 |
 | Saved active tab is missing | Restore session | Its Browser | Discard it and activate nearest surviving right tab, then left | P3-M9 |
-| No saved tabs survive | Restore session | Affected Browser | Create one tab at launch directory; report discarded tabs in Notices | P3-M9 |
+| No saved tabs survive | Restore session | Affected Browser | Create one clean Home tab ([changed in P3-M9 planning](changelog.md#2026-10-03--p3-m9-planning)); report discarded tabs in Notices | P3-M9 |
 | Routine notices are suppressed | Launch with routine and actionable storage notices | Notices auxiliary window | Suppress routine startup opening; actionable storage error opens Notices | P3-M9 |
 | Notices has focus | `Command+W` | Notices auxiliary window | Close Notices; Main Toolbar Notices Button can reopen it | P3-M6, P3-M9 |
 | Inactive tab's folder changes | Watch invalidation | That tab | Refresh in background; when active, retain last successful Folder Items with a status cue during refresh | P3-M5, P3-M6, P3-M10 |

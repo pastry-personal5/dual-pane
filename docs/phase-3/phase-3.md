@@ -8,7 +8,7 @@ Goal: Make each Browser a durable, independently tabbed workspace that can safel
 - Both Browsers support independent tab sets, active tabs, tab history, and tab-local browsing state.
 - One level of Favorite Groups and Favorite Items can be edited in the Sidebar and retains its hierarchy and order during the session and across relaunches.
 - Copy, move, rename, directory creation, Trash, permanent deletion, and default-application opening work with every safeguard in [product-behavior.md](../product-behavior.md#file-operation-safeguards).
-- Relaunch restores each Browser's tabs, active tab, locations, location-shared folder sort, and the active Browser; a tab whose saved location cannot be restored is discarded without preventing the remaining session from restoring. Text filtering is outside Phase 3.
+- Relaunch restores each Browser's tabs, active tab, locations, location-shared folder sort, the active Browser, and the workspace window's frame, zoomed or full-screen state, and splitter positions; a tab whose saved location cannot be restored is discarded without preventing the remaining session from restoring. Text filtering is outside Phase 3.
 - Open locations are watched; changed Folder Items refresh automatically and retain matching selection and cursor state.
 - Directory loading, watching, persistence, and file operations keep the interface responsive as required by [architecture.md](../architecture.md#51-threading-and-responsiveness).
 
@@ -66,7 +66,8 @@ Plan: [overview](milestone-08-overview.md), [architecture](milestone-08-architec
 ### P3-M9: Persist and restore the workspace
 
 Status: Planned
-Goal: Persist coalesced workspace-session snapshots and restore valid saved Browser tabs, fallback tabs, and Notices preferences at launch.
+Goal: Persist coalesced workspace-session snapshots and restore valid saved Browser tabs, fallback tabs, the window layout, and Notices preferences at launch.
+Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architecture.md)
 
 ### P3-M10: Watch open locations
 

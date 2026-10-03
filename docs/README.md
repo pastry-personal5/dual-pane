@@ -31,6 +31,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-3/milestone-07-architecture.md](phase-3/milestone-07-architecture.md) | P3-M7 operation state, request, decision, and verification boundaries. |
 | [phase-3/milestone-08-overview.md](phase-3/milestone-08-overview.md) | P3-M8 recorded decisions and executable checklist for native file operations, Operation Panels, Notices, refresh, and file opening. |
 | [phase-3/milestone-08-architecture.md](phase-3/milestone-08-architecture.md) | P3-M8 P3-M7 contract extensions, native gateway, safety journal, presentation, and verification approach. |
+| [phase-3/milestone-09-overview.md](phase-3/milestone-09-overview.md) | P3-M9 decisions and executable checklist for session saving, restoration, Waiting timeout, and startup Notices. |
+| [phase-3/milestone-09-architecture.md](phase-3/milestone-09-architecture.md) | P3-M9 launch sequence, timeout protection, restoration and discard rules, storage, and verification approach. |
 | [phase-3/changelog.md](phase-3/changelog.md) | Phase 3 decisions and plan changes. |
 | [phase-3/open-items.md](phase-3/open-items.md) | Unresolved Phase 3 design and product questions, deferred verification, and the milestone or phase that must settle each. |
 | [archive/phases/phase-2/phase-2.md](archive/phases/phase-2/phase-2.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |

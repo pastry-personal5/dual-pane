@@ -17,8 +17,8 @@ Every product-facing value at this boundary is Qt-free: settings, defaults, acti
 | Shortcut overrides | Application action catalogue and settings state | Settings database | P3-M2 records and validates; a later shortcut editor exposes changes. |
 | Per-folder sort specification | Domain `SortSpec`; application location-indexed memory | Settings database | P3-M2 remembers and stores; P3-M5/P3-M6 sort and display it. |
 | Favorite Groups and Favorite Items | P3-M2 persistence records; P3-M5 domain hierarchy and application Favorites state | Ordered settings database tables | P3-M2 defines and tests storage; P3-M5 adds editing rules; P3-M6 delivers the Sidebar. |
-| Global sort/filter defaults | Application defaults | Settings database only if made user-configurable | P3-M4 decides the interaction; P3-M5 models tab-local filter state. |
-| Open tab order, active tab/Browser, current locations, and tab-local state | Application workspace snapshot | Settings database session tables | P3-M9 saves and restores; back/forward history stays in memory for the current session. |
+| Global sort default | Application default | Settings database only if made user-configurable | P3-M4 decided the interaction; text filtering is outside Phase 3. |
+| Open tab order, active tab/Browser, current locations, and window layout | Application workspace snapshot | Settings database session tables | P3-M9 saves and restores; back/forward history stays in memory for the current session. See the [P3-M9 plan](milestone-09-overview.md). |
 | Operation recovery records | Runtime safety journal | Separate runtime-owned durable record | File-operation milestones; never mixed with settings transactions. P3-M8 stores it in its own SQLite file, which Reset Settings never touches. |
 
 ## Folder sort memory
@@ -49,7 +49,7 @@ The [product behavior](../product-behavior.md#favorites) owns the exact initial 
 
 ## Workspace-session handoff
 
-P3-M9 will introduce and snapshot both Browsers' open tabs in display order, active tab per Browser, each tab's current location and tab-local filter state, and the active Browser. It will resolve a tab's sort from the location-keyed folder-sort memory. Back/forward history remains available while the app runs but is not serialized or restored. All session rows are replaced in one coalesced transaction, so a failed write leaves the previous committed snapshot intact. If a saved current location cannot be restored, discard that tab and restore the others; if a Browser has no valid saved tabs, create its startup tab to preserve the at-least-one-tab invariant. The Favorites tables are never cleared by a session replacement.
+P3-M9 will introduce and snapshot both Browsers' open tabs in display order, active tab per Browser, each tab's current location, the active Browser, and the window layout. Text filtering was removed from the Phase 3 contract, so no filter state is stored. It will resolve a tab's sort from the location-keyed folder-sort memory. Back/forward history remains available while the app runs but is not serialized or restored. All session rows are replaced in one coalesced transaction, so a failed write leaves the previous committed snapshot intact. If a saved current location cannot be restored, discard that tab and restore the others; if a Browser has no valid saved tabs, create a clean Home tab to preserve the at-least-one-tab invariant. The Favorites tables are never cleared by a session replacement.
 
 ## Storage and lifecycle
 

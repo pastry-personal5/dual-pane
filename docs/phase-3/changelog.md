@@ -4,6 +4,26 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-03 — P3-M9 planning
+
+- Planned P3-M9 as one milestone with an ordered checklist ([overview](milestone-09-overview.md), [architecture](milestone-09-architecture.md)).
+- **Plan review:** distinguished malformed session rows from SQLite read failures, so a transient storage fault cannot trigger a writable Home fallback; made Reset an ordered barrier for both save kinds; required a final flush when only the session changed; specified an initial save after valid load or damaged-session fallback; and made startup signal ordering and late-load behavior testable. Corrected the P3-M2 and P3-M4 handoffs that still named stored filter state.
+- **Owner decisions** from the planning questions and a follow-up interview, recorded in the [included product scope](../product-behavior.md#included-product-scope), the [session recovery policy](../product-behavior.md#session-recovery), and [ux-gui](../ux-gui.md#notices-and-restoration-feedback):
+  - **Discard rule:** a restored tab is discarded when its first read finds the location missing, not a folder, or unreadable for permission, privacy, or unknown reasons, as the Favorites launch probe does. Reader failures, a full read queue, and cancelled reads never discard, and a read that never answers keeps the tab loading.
+  - **Restore display:** saved tabs appear at once and leave the strip when their read fails, with the active tab moving to the nearest surviving tab on the right, then the left. Each discarded tab gets its own Notice.
+  - **Fallback:** every fallback opens a clean Home tab, including when no session exists. The launch working directory, `/` for a Finder or Dock launch, is no longer used at startup, which replaces the 2.0.0 launch behavior.
+  - **Damaged session:** invalid session rows drop the whole session with a routine Notice; settings, Favorites, and saving keep working.
+  - **Startup Notices:** a startup period that ends when launch work has answered, or about five seconds after the window appears. With the box unchecked, the first startup notice opens Notices without focus. With it checked, only notices that offer an action open it, so temporaries-sweep failures are recorded silently; this narrows the P3-M8 rule for that case. Notices about the person's own actions keep their usual rules.
+  - **Focus:** keyboard focus follows the restored active Browser.
+  - **Window layout:** relaunch also restores the window's frame, its zoomed or full-screen state, and the Sidebar Splitter and Browser Divider positions. A frame that no longer fits moves onto a connected display. This widens the product scope and a [Phase 3 exit criterion](phase-3.md#exit-criteria).
+  - **Reset Settings:** a successful reset also closes every tab, leaving each Browser one clean Home tab, makes the Left Browser active, and returns the window and splitters to their defaults.
+- **Follow-up owner decisions:**
+  - An invalid saved layout row damages the whole session.
+  - A successful Reset Settings leaves full screen or zoom and centers the default size on the current display.
+  - A slow settings load shows a separate animated Waiting Window. After ten seconds it opens Home tabs at the default layout and reports a storage timeout. A later load supplies settings and Favorites but never replaces the visible workspace or saves this launch's session changes; the old session remains available on the next launch unless the person deliberately resets settings.
+- **Architecture choices:** schema version 4 session tables in the settings database, written by a separately coalesced session save in its own transaction. The layout is stored as typed values in logical points rather than Qt's opaque geometry bytes, and fitting it to displays is a Qt-free function. The plan treats a missing layout row beside saved tabs as damaged, pending owner confirmation; the first layout report gates the initial save so every written session has its row. Only a read the person asks for ends a tab's restoration; the workspace's own re-reads, such as after an invalidation, keep its discard rule. A tab that never confirmed a location keeps its requested one for its label, the session, and Refresh.
+- **Filter compatibility:** schemas 1–3 have no session or filter table, so nothing stored needs migration. The unused `TabSnapshot.filter` field is removed, closing the P3-M4 and P3-M5 handoff.
+
 ## 2026-10-02 — P3-M8 human check
 
 - The deferred native [human check](milestone-08-overview.md#human-check) passed. The twelve items that waited for it are now checked, so every P3-M8 checklist item is checked and the milestone meets its definition of done without the exception recorded below. The open item that tracked the check is resolved and removed. `make check` passed.

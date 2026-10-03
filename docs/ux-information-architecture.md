@@ -46,6 +46,7 @@ The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider
   - Operation Panel Strip below both Browsers, containing docked Operation Panels
 - Floating Operation Panels, each with Operation Progress Indicator, Cancel Operation Button, and any Operation Decision Card for its job
 - Notices auxiliary window with Notice entries and Notices Startup Checkbox
+- Transient Waiting Window while the workspace session loads
 - Permanent Delete Confirmation Window
 
 The Favorites hierarchy has one level: Favorites Groups contains Favorite Groups, and each group contains ordered Favorite Items. Groups do not nest. The Sidebar and Browser Tabs Strip above describe planned containment; the [GUI rules](ux-gui.md#planned-phase-3-gui-decisions) define their interactions.

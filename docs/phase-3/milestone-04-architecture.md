@@ -22,7 +22,7 @@ The agreed interactions should describe commands, events, state, and output at t
 | P3-M6 | Browser Tabs Strip, Sidebar, sort and summary controls; focus order and accessibility; command enablement; loading and error states. Add planned action IDs without reusing existing persisted IDs, and reconcile `CloseWindow`/`CloseTab` bindings with the new `Command+W` focus behavior. |
 | P3-M7 | Selection-to-intent mapping, frozen source/destination context, operation availability, decision and cancellation lifecycle, and the exact permitted responses for each policy case. |
 | P3-M8 | Operation command entry points, independent Operation Panels and Operation Decision Cards, open-file behavior, Notices summaries, terminal feedback, and affected-listing refresh. |
-| P3-M9 | Startup and fallback sequence, valid-tab restoration, active Browser/tab choice, Notices startup preference and session-only history, and visible settings/session errors. Keep earlier stored filter fields readable during migration without restoring a Phase 3 filter. |
+| P3-M9 | Startup and fallback sequence, valid-tab restoration, active Browser/tab choice, window layout, Notices startup preference and session-only history, and visible settings/session errors. Schemas 1–3 have no stored filter field to migrate; see the [P3-M9 plan](milestone-09-overview.md). |
 | P3-M10 | Watch invalidation and refresh feedback, visible/hidden tab behavior, precedence over stale reads, and retained selection/cursor after a completed listing. |
 
 ## Boundaries to preserve

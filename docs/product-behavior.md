@@ -11,7 +11,7 @@ This document is the active source of truth for committed product behavior, safe
 - One level of Favorite Groups containing Favorite Items in the Sidebar. People can create, rename, reorder, move, and delete them; their hierarchy and order remain in memory and across relaunches.
 - Copy and move between Browsers; rename; create directory; move to Trash; and permanent deletion.
 - Opening a regular file or a macOS package, such as an application bundle, with its default application.
-- Restoring each Browser's open tabs, their order, active tab, locations, and active Browser when the application relaunches. Folder sort choices are restored from location-shared memory; text filtering is outside Phase 3 behavior and session state.
+- Restoring each Browser's open tabs, their order, active tab, locations, and active Browser, and the workspace window's frame, zoomed or full-screen state, and Sidebar Splitter and Browser Divider positions, when the application relaunches. Folder sort choices are restored from location-shared memory; text filtering is outside Phase 3 behavior and session state.
 - Watching open tab locations and automatically refreshing Folder Items, including inactive tabs, while preserving matching selection and cursor state.
 
 ## Favorites
@@ -39,9 +39,17 @@ Favorite Group names and Favorite Item Aliases reject empty or whitespace-only t
 
 ## Session recovery
 
-If a saved tab location cannot be restored, Dual Pane discards that tab and restores the rest of the session normally. If the saved active tab is discarded, the nearest surviving tab on its right becomes active, then the nearest on its left. If a Browser has no restorable tab, it receives one clean tab at the launch directory. Back/forward history is kept during the session but is not restored after relaunch.
+If a saved tab location cannot be restored, Dual Pane discards that tab and restores the rest of the session normally. A location cannot be restored when the tab's first read at relaunch finds it missing, not a folder, or unreadable because of permissions, a privacy restriction, or another error. This includes temporary unavailability, such as a disconnected volume. A reader failure, a full read queue, or a cancelled read says nothing about the location and never discards a tab; that tab keeps its folder and error, and Refresh retries it. If the saved active tab is discarded, the nearest surviving tab on its right becomes active, then the nearest on its left. If a Browser has no restorable tab, or no saved session exists, it receives one clean Home tab at the user's home directory. Back/forward history is kept during the session but is not restored after relaunch.
 
-Notices holds nonblocking messages for the current session, including discarded tabs, storage errors, and operation summaries. At startup it opens only when messages exist. The default-unchecked “Don’t show notices at startup” preference persists across relaunches and suppresses routine startup notices; actionable storage errors still open Notices. Notice history is not restored.
+If readable saved session data, including the window layout, is damaged, each Browser opens one clean Home tab and Notices reports that the previous session could not be restored. Settings and Favorites stay usable and saveable, and the next session save replaces the damaged session. A storage read failure that prevents checking the session follows the settings-load failure behavior and does not overwrite the saved data.
+
+If settings loading has not answered after ten seconds, a Waiting Window closes and the workspace opens at its default layout with one Home tab per Browser. Notices reports the timeout and that this launch's tabs and layout will not be saved. A later successful load supplies settings and Favorites but leaves the visible workspace alone; the prior saved session and layout remain available for the next launch. A later failure keeps the in-memory defaults and storage writes disabled. A deliberate successful Reset Settings starts a fresh saved session.
+
+A restored tab whose folder does not answer, such as one on an unresponsive volume, keeps loading and is never discarded for being slow. Each discarded tab gets its own Notice. A saved window frame that no longer fits the connected displays moves fully onto the display it overlaps most, or the main display, and shrinks only if it must.
+
+A successful Reset Settings also resets the workspace: every tab closes, each Browser receives one clean Home tab, the Left Browser becomes active, and the window leaves full screen or zoom and returns to its default size centered on the current display, with its splitters at their default positions. The confirmation says so beforehand, and a failed reset changes none of it.
+
+Notices holds nonblocking messages for the current session, including discarded tabs, storage errors, and operation summaries. At startup it opens only when messages exist. The default-unchecked “Don’t show notices at startup” preference persists across relaunches and suppresses routine startup notices. With it checked, only startup notices that offer an action, such as Reset Settings or Try Again, still open Notices; discarded tabs, a damaged session, removed Favorite Items, and temporaries-sweep reports, including sweep failures, are recorded without opening it. Notices about the person's own actions, such as an opening failure, follow their usual rules. Notice history is not restored.
 
 The [Favorites policy](#favorites) governs unavailable Favorite Items independently of tab recovery.
 
