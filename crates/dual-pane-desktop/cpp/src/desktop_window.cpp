@@ -556,6 +556,17 @@ class FolderItemsList final : public QTreeView {
         else if (key == Qt::Key_Right || key == Qt::Key_Return || key == Qt::Key_Enter)
             model_->activateSelected();
     }
+    void keyReleaseEvent(QKeyEvent *event) override {
+        if (event->key() != Qt::Key_Space) {
+            QTreeView::keyReleaseEvent(event);
+            return;
+        }
+        event->accept();
+        const auto release = quick_look_gesture_.released(quick_look_gesture_.generation());
+        stop_quick_look_timer();
+        if (release == QuickLookGesture::Release::Dismiss)
+            quick_look_->dismiss();
+    }
     void resizeEvent(QResizeEvent *event) override {
         QTreeView::resizeEvent(event);
         update_columns();
@@ -568,11 +579,8 @@ class FolderItemsList final : public QTreeView {
             return;
         const auto index = model_->index(cursor, 0);
         const QuickLookItem item{index.data(native_path_role).toByteArray(), index.data(native_directory_role).toBool()};
-        QElapsedTimer elapsed;
-        elapsed.start();
         if (quick_look_gesture_.press(item, true, false) && quick_look_gesture_.held()) {
             const auto generation = quick_look_gesture_.generation();
-            const auto remaining = qMax<qint64>(0, quick_look_hold_milliseconds - elapsed.elapsed());
             auto *timer = new QTimer(this);
             timer->setSingleShot(true);
             timer->setTimerType(Qt::PreciseTimer);
@@ -580,10 +588,10 @@ class FolderItemsList final : public QTreeView {
                 if (quick_look_timer_ == timer)
                     quick_look_timer_ = nullptr;
                 timer->deleteLater();
-                maximize_held_preview(generation);
+                (void)quick_look_gesture_.hold_elapsed(generation);
             });
             quick_look_timer_ = timer;
-            timer->start(static_cast<int>(remaining));
+            timer->start(quick_look_hold_milliseconds);
         }
     }
     void stop_quick_look_timer() {
@@ -592,11 +600,6 @@ class FolderItemsList final : public QTreeView {
             quick_look_timer_->deleteLater();
             quick_look_timer_ = nullptr;
         }
-    }
-    void maximize_held_preview(std::uint64_t generation) {
-        // A missing screen deliberately retains the ordinary system panel;
-        // release still dismisses the held gesture.
-        (void)quick_look_gesture_.timer_expired(generation);
     }
     auto eventFilter(QObject *watched, QEvent *event) -> bool override {
         if ((watched == verticalScrollBar() || watched == horizontalScrollBar()) && event->type() == QEvent::MouseButtonPress) {

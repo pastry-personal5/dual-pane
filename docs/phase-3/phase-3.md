@@ -73,7 +73,7 @@ Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architec
 ### P3-M11: Native Quick Look
 
 Status: Active
-Goal: Preview the Folder Pane cursor item through macOS Quick Look, including a held-Space maximized preview.
+Goal: Preview the Folder Pane cursor item through a held-Space macOS Quick Look gesture at the system panel's normal size.
 Plan: [overview](milestone-11-overview.md), [architecture](milestone-11-architecture.md)
 Notes: This milestone deliberately runs before P3-M10.
 

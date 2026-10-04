@@ -24,8 +24,9 @@ class QuickLookPreviewService {
     auto operator=(const QuickLookPreviewService &) -> QuickLookPreviewService & = delete;
     QuickLookPreviewService(QuickLookPreviewService &&) = delete;
     auto operator=(QuickLookPreviewService &&) -> QuickLookPreviewService & = delete;
-    [[nodiscard]] virtual auto present(const QuickLookItem &item, std::function<void()> released, std::function<void()> interrupted) -> bool = 0;
-    [[nodiscard]] virtual auto maximize() -> bool = 0;
+    /// Opens the panel at its normal size, or at the screen's usable frame
+    /// before the system performs its native opening animation.
+    [[nodiscard]] virtual auto present(const QuickLookItem &item, bool enlarged, std::function<void()> released, std::function<void()> interrupted) -> bool = 0;
     virtual void dismiss() = 0;
 };
 
@@ -40,10 +41,7 @@ class QuickLookPreviewController final : public QuickLookPreviewService {
     QuickLookPreviewController(QuickLookPreviewController &&) = delete;
     auto operator=(QuickLookPreviewController &&) -> QuickLookPreviewController & = delete;
 
-    [[nodiscard]] auto present(const QuickLookItem &item, std::function<void()> released, std::function<void()> interrupted) -> bool override;
-    /// Returns false when the standard panel has no current screen.  It stays
-    /// presented so the matching key release can still dismiss it.
-    [[nodiscard]] auto maximize() -> bool override;
+    [[nodiscard]] auto present(const QuickLookItem &item, bool enlarged, std::function<void()> released, std::function<void()> interrupted) -> bool override;
     void dismiss() override;
 
   private:
@@ -61,8 +59,9 @@ class QuickLookGesture final {
     };
 
     QuickLookGesture(QuickLookPreviewService *service, std::function<void()> failure, std::function<void(Release)> released = {}, std::function<void()> interrupted = {});
+    /// Captures a valid Space-down target without opening the system panel.
     [[nodiscard]] auto press(const QuickLookItem &item, bool plain_space, bool auto_repeat) -> bool;
-    [[nodiscard]] auto timer_expired(std::uint64_t generation) -> bool;
+    [[nodiscard]] auto hold_elapsed(std::uint64_t generation) -> bool;
     [[nodiscard]] auto released(std::uint64_t generation) -> Release;
     void interrupted(std::uint64_t generation);
     [[nodiscard]] auto generation() const -> std::uint64_t;
@@ -75,9 +74,10 @@ class QuickLookGesture final {
     std::function<void(Release)> released_;
     std::function<void()> interrupted_;
     std::uint64_t generation_ = 0;
+    QuickLookItem item_;
     bool active_ = false;
     bool held_ = false;
-    bool timer_expired_ = false;
+    bool hold_elapsed_ = false;
 };
 
 /// Exercises the fakeable gesture seam without a real Quick Look provider.

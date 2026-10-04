@@ -4,6 +4,10 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-04 — P3-M11 tap and hold preview lifecycle
+
+- **Owner decision (revised):** P3-M11 captures the cursor on Space press but opens normal Quick Look only when its matching release arrives before 512 ms. Holding Space through the threshold opens the panel already sized to the largest usable frame on its current screen; the frame is set before the system's native opening animation, avoiding a post-open resize. Releasing the held key dismisses it.
+
 ## 2026-10-04 — P3-M11 native PNG failure diagnosis
 
 - A disposable native PNG reproduction found the workspace was key and its first-responder chain included the controller, but `QLPreviewPanel.currentController` was nil while the panel was hidden. The panel acquired the controller and data source when shown. Ownership is now verified after presentation, fixing the false "couldn't open" failure.
