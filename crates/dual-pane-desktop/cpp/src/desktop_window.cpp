@@ -129,7 +129,7 @@ constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_ne
 // Shortcut scope codes of the workspace bridge.
 constexpr int scope_folder_items_list = 0, scope_application = 2;
 constexpr int status_reason_milliseconds = 3000;
-constexpr int quick_look_hold_milliseconds = 512;
+constexpr int quick_look_hold_milliseconds = 256;
 constexpr auto window_color = "#1B1D21", surface_color = "#23262B", text_color = "#ECEFF3", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#1E4668", divider_hover_border_color = "#737A84", error_color = "#E5737A";
 
 // `toolbarState` flags from the Folder Items model.
@@ -562,10 +562,18 @@ class FolderItemsList final : public QTreeView {
             return;
         }
         event->accept();
-        const auto release = quick_look_gesture_.released(quick_look_gesture_.generation());
-        stop_quick_look_timer();
+        const auto release = quick_look_gesture_.released(quick_look_gesture_.generation(), event->isAutoRepeat());
+        if (release != QuickLookGesture::Release::Ignored)
+            stop_quick_look_timer();
         if (release == QuickLookGesture::Release::Dismiss)
             quick_look_->dismiss();
+    }
+    void focusOutEvent(QFocusEvent *event) override {
+        if (quick_look_timer_ != nullptr && quick_look_gesture_.held()) {
+            quick_look_gesture_.interrupted(quick_look_gesture_.generation());
+            stop_quick_look_timer();
+        }
+        QTreeView::focusOutEvent(event);
     }
     void resizeEvent(QResizeEvent *event) override {
         QTreeView::resizeEvent(event);

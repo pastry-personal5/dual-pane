@@ -10,8 +10,14 @@
 // Objective-C blocks and the surrounding desktop code use native and Qt
 // spellings that clang-tidy's C++ style checks cannot rewrite usefully.
 // NOLINTBEGIN(modernize-redundant-void-arg,readability-braces-around-statements,modernize-use-trailing-return-type,readability-trailing-comma)
-@interface DualPaneQuickLookController : NSResponder <QLPreviewPanelDataSource>
+@interface DualPaneQuickLookController : NSResponder <QLPreviewPanelDataSource, QLPreviewPanelDelegate>
 @property(nonatomic, strong) NSURL *item;
+@property(nonatomic) NSRect desiredFrame;
+@property(nonatomic) BOOL enlarge;
+@property(nonatomic) BOOL stagedOpening;
+@property(nonatomic) CGFloat previousAlpha;
+@property(nonatomic) NSWindowAnimationBehavior previousAnimationBehavior;
+@property(nonatomic, weak) id previousPanelDelegate;
 @property(nonatomic, copy) void (^released)(void);
 @property(nonatomic, copy) void (^interrupted)(void);
 @property(nonatomic, copy) void (^ended)(void);
@@ -20,6 +26,7 @@
 @property(nonatomic, weak) NSResponder *previousResponder;
 @property(nonatomic, strong) id keyObserver;
 @property(nonatomic, strong) id deactivateObserver;
+@property(nonatomic, strong) id resizeObserver;
 @property(nonatomic, strong) id releaseMonitor;
 @property(nonatomic) BOOL held;
 @end
@@ -35,19 +42,61 @@
     return YES;
 }
 - (void)beginPreviewPanelControl:(QLPreviewPanel *)panel {
+    if (panel.delegate != self)
+        self.previousPanelDelegate = panel.delegate;
     panel.dataSource = self;
+    panel.delegate = self;
+    if (self.enlarge) {
+        if (!self.stagedOpening) {
+            self.previousAlpha = panel.alphaValue;
+            self.previousAnimationBehavior = panel.animationBehavior;
+            self.stagedOpening = YES;
+        }
+        // A controlled, transparent panel can finish Quick Look's own layout
+        // without ever exposing its content-sized intermediate frame.
+        panel.animationBehavior = NSWindowAnimationBehaviorNone;
+        panel.alphaValue = 0;
+        [panel setFrame:self.desiredFrame display:NO animate:NO];
+    }
 }
 - (void)endPreviewPanelControl:(QLPreviewPanel *)panel {
+    if (self.stagedOpening) {
+        panel.alphaValue = self.previousAlpha;
+        panel.animationBehavior = self.previousAnimationBehavior;
+        self.stagedOpening = NO;
+    }
+    if (panel.delegate == self)
+        panel.delegate = self.previousPanelDelegate;
+    self.previousPanelDelegate = nil;
     if (panel.dataSource == self)
         panel.dataSource = nil;
     if (self.ended != nil)
         self.ended();
+}
+- (NSRect)previewPanel:(QLPreviewPanel *)panel sourceFrameOnScreenForPreviewItem:(id<QLPreviewItem>)item {
+    // Quick Look supplies its native fade when there is no on-screen source
+    // rectangle. This avoids inventing a zoom path for an arbitrary row.
+    return NSZeroRect;
 }
 @end
 
 namespace dual_pane_desktop {
 
 constexpr unsigned short space_key_code = 49;
+constexpr NSTimeInterval quick_look_reveal_seconds = 0.16;
+
+auto usable_frame(NSScreen *screen) -> NSRect {
+    if (screen == nil)
+        return NSZeroRect;
+    const NSRect frame = screen.visibleFrame;
+    if (!std::isfinite(frame.origin.x) || !std::isfinite(frame.origin.y) || !std::isfinite(frame.size.width) || !std::isfinite(frame.size.height) || frame.size.width <= 0 || frame.size.height <= 0)
+        return NSZeroRect;
+    return frame;
+}
+
+auto frame_matches(NSRect actual, NSRect desired) -> bool {
+    return std::abs(actual.origin.x - desired.origin.x) < 1 && std::abs(actual.origin.y - desired.origin.y) < 1 && std::abs(actual.size.width - desired.size.width) < 1 && std::abs(actual.size.height - desired.size.height) < 1;
+}
 
 class QuickLookPreviewController::Implementation final {
   public:
@@ -96,22 +145,16 @@ class QuickLookPreviewController::Implementation final {
                 dismiss();
                 return false;
             }
+            // A hidden shared panel can still name the screen of its last
+            // preview. The workspace's current screen is the target here.
+            NSScreen *screen = window.screen;
+            if (screen == nil)
+                screen = panel.screen;
+            if (screen == nil)
+                screen = NSScreen.mainScreen;
+            controller_.desiredFrame = enlarged ? usable_frame(screen) : NSZeroRect;
+            controller_.enlarge = enlarged && !NSIsEmptyRect(controller_.desiredFrame);
             [panel updateController];
-            if (enlarged) {
-                // Set the usable frame before the system shows the panel. The
-                // following native show operation supplies the natural macOS
-                // opening animation instead of a visually surprising resize.
-                NSScreen *screen = panel.screen;
-                if (screen == nil)
-                    screen = window.screen;
-                if (screen == nil)
-                    screen = NSScreen.mainScreen;
-                if (screen != nil) {
-                    const NSRect frame = screen.visibleFrame;
-                    if (std::isfinite(frame.origin.x) && std::isfinite(frame.origin.y) && std::isfinite(frame.size.width) && std::isfinite(frame.size.height) && frame.size.width > 0 && frame.size.height > 0)
-                        [panel setFrame:frame display:NO animate:NO];
-                }
-            }
             // A hidden panel may leave currentController nil until becoming
             // key. Check acquisition only after presentation has triggered
             // beginPreviewPanelControl: and installed our data source.
@@ -120,6 +163,35 @@ class QuickLookPreviewController::Implementation final {
             if (panel.currentController != controller_ || panel.dataSource != controller_) {
                 dismiss();
                 return false;
+            }
+            if (controller_.enlarge) {
+                // A provider may size the panel again after it starts loading.
+                // Keep the user's held preview at the full usable frame.
+                controller_.resizeObserver = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidResizeNotification
+                                                                                               object:panel
+                                                                                                queue:nil
+                                                                                           usingBlock:^(NSNotification *) {
+                                                                                             enforce_frame(panel);
+                                                                                           }];
+                enforce_frame(panel);
+                if (!controller_.stagedOpening || !frame_matches(panel.frame, controller_.desiredFrame)) {
+                    dismiss();
+                    return false;
+                }
+                // The first nontransparent frame is already the final size.
+                // A brief AppKit opacity transition avoids a large zoom;
+                // Reduce Motion skips it altogether.
+                if (NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) {
+                    panel.alphaValue = controller_.previousAlpha;
+                } else {
+                    const CGFloat alpha = controller_.previousAlpha;
+                    [NSAnimationContext
+                        runAnimationGroup:^(NSAnimationContext *context) {
+                          context.duration = quick_look_reveal_seconds;
+                          [[panel animator] setAlphaValue:alpha];
+                        }
+                        completionHandler:nil];
+                }
             }
             return YES;
         }
@@ -135,11 +207,23 @@ class QuickLookPreviewController::Implementation final {
                 QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
                 if (panel != nil && panel.currentController == controller_ && panel.dataSource == controller_)
                     [panel orderOut:nil];
+                // The panel's delegate is unowned. Clear our pointer even if
+                // ordering it out did not synchronously end panel control.
+                if (panel != nil && panel.delegate == controller_)
+                    panel.delegate = controller_.previousPanelDelegate;
+                controller_.previousPanelDelegate = nil;
+                if (panel != nil && controller_.stagedOpening) {
+                    panel.alphaValue = controller_.previousAlpha;
+                    panel.animationBehavior = controller_.previousAnimationBehavior;
+                    controller_.stagedOpening = NO;
+                }
             }
             if (controller_.responderAnchor != nil && controller_.responderAnchor.nextResponder == controller_)
                 controller_.responderAnchor.nextResponder = controller_.previousResponder;
             controller_.responderAnchor = nil;
             controller_.item = nil;
+            controller_.enlarge = NO;
+            controller_.desiredFrame = NSZeroRect;
             controller_.released = nil;
             controller_.interrupted = nil;
             controller_.ended = nil;
@@ -147,6 +231,14 @@ class QuickLookPreviewController::Implementation final {
     }
 
   private:
+    void enforce_frame(QLPreviewPanel *panel) {
+        if (!presented_ || !controller_.held || !controller_.enlarge || correcting_frame_ || panel.currentController != controller_ || panel.dataSource != controller_ || frame_matches(panel.frame, controller_.desiredFrame))
+            return;
+        correcting_frame_ = true;
+        // Correct a provider's frame change without a second expansion.
+        [panel setFrame:controller_.desiredFrame display:YES animate:NO];
+        correcting_frame_ = false;
+    }
     void install_monitors() {
         __weak DualPaneQuickLookController *weak = controller_;
         controller_.releaseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyUp
@@ -189,8 +281,11 @@ class QuickLookPreviewController::Implementation final {
             [center removeObserver:controller_.deactivateObserver];
         if (controller_.keyObserver != nil)
             [center removeObserver:controller_.keyObserver];
+        if (controller_.resizeObserver != nil)
+            [center removeObserver:controller_.resizeObserver];
         controller_.deactivateObserver = nil;
         controller_.keyObserver = nil;
+        controller_.resizeObserver = nil;
     }
     void interrupt() {
         if (!presented_)
@@ -212,6 +307,7 @@ class QuickLookPreviewController::Implementation final {
     QWidget *widget_;
     DualPaneQuickLookController *controller_;
     bool presented_ = false;
+    bool correcting_frame_ = false;
 };
 
 QuickLookPreviewController::QuickLookPreviewController(QWidget *workspace_widget) : implementation_(std::make_unique<Implementation>(workspace_widget)) {}
@@ -251,8 +347,8 @@ auto QuickLookGesture::hold_elapsed(std::uint64_t generation) -> bool {
     return false;
 }
 
-auto QuickLookGesture::released(std::uint64_t generation) -> Release {
-    if (!held_ || generation != generation_)
+auto QuickLookGesture::released(std::uint64_t generation, bool auto_repeat) -> Release {
+    if (auto_repeat || !held_ || generation != generation_)
         return Release::Ignored;
     held_ = false;
     if (!hold_elapsed_) {
@@ -327,6 +423,8 @@ auto quick_look_seam_tests() -> bool { // NOLINT(readability-function-cognitive-
     const auto first = gesture.generation();
     // A repeated initial press cannot replace the active preview's callbacks.
     if (gesture.press({QByteArray("/tmp/other"), false}, true, false) || preview.present_calls != 0)
+        return false;
+    if (gesture.released(first, true) != QuickLookGesture::Release::Ignored || !gesture.held() || preview.present_calls != 0)
         return false;
     if (gesture.released(first) != QuickLookGesture::Release::Retained || preview.present_calls != 1 || preview.last_item.path != exact_path || preview.last_item.directory || preview.last_enlarged || !gesture.active() || gesture.held())
         return false;

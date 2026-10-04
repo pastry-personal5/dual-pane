@@ -21,6 +21,7 @@ The current development build adds Phase 3 workspace features that are not in a 
 - Multiple Items can be selected with Command-click, Shift-click, Shift-arrow, and `Command+A`.
 - A Notices window reports settings and Favorites problems and offers a confirmed Reset Settings.
 - Workspace sessions restore tabs, active Browsers, and window layout; a delayed settings load shows an accessible Waiting Window and protects the prior session after its timeout.
+- Space previews the Folder Items cursor with macOS Quick Look; a tap opens its normal panel, while a 256 ms hold opens a panel at the largest usable screen frame with a short, motion-aware native transition.
 - File operations, delivered by milestone P3-M8, are in the development build:
   - Copy and Move to the other Browser, Rename, New Folder, Move to Trash, and Delete Permanently, from the Folder Items Context Menu or their shortcuts.
   - Each operation runs off the GUI thread, never overwrites without a choice, and reports its progress and decisions in an Operation Panel and its result in Notices.

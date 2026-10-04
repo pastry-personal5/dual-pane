@@ -4,6 +4,23 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-04 — P3-M11 first-frame reveal and 256 ms hold
+
+- **Owner decision:** The held-Space threshold is 256 ms. The first visible Quick Look frame must already use the largest usable frame on the workspace screen.
+- **Motion heuristic:** stage the controlled panel transparently while Quick Look finishes layout, then use a brief AppKit opacity reveal. Reduce Motion reveals it immediately. This avoids exposing a normal-sized panel followed by a large resize; the prior panel opacity and animation behavior are restored when control ends. The reopened native human check remains pending.
+
+## 2026-10-04 — P3-M11 held preview size follow-up
+
+- The reopened milestone now requests a visible full usable frame after the hold timer. The controller applies the workspace screen's `visibleFrame` when Quick Look grants panel control, requests Quick Look's native fade, and keeps the frame at that size if Quick Look or a provider resizes the held panel. Repeat-generated Space releases no longer end the hold before the timer. A fresh native visual and frame check remains in the completion checklist.
+
+## 2026-10-04 — P3-M11 reopened
+
+- The owner reopened P3-M11 for follow-up work. Its earlier automated and human acceptance evidence remains recorded; the milestone is Active until any follow-up acceptance work is complete.
+
+## 2026-10-04 — P3-M11 Done
+
+- The owner completed and passed the required native macOS human check. Every P3-M11 checklist item is now checked, and the prior `make check` gate remains passing.
+
 ## 2026-10-04 — P3-M11 tap and hold preview lifecycle
 
 - **Owner decision (revised):** P3-M11 captures the cursor on Space press but opens normal Quick Look only when its matching release arrives before 512 ms. Holding Space through the threshold opens the panel already sized to the largest usable frame on its current screen; the frame is set before the system's native opening animation, avoiding a post-open resize. Releasing the held key dismisses it.

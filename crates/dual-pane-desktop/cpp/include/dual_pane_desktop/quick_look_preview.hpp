@@ -24,8 +24,8 @@ class QuickLookPreviewService {
     auto operator=(const QuickLookPreviewService &) -> QuickLookPreviewService & = delete;
     QuickLookPreviewService(QuickLookPreviewService &&) = delete;
     auto operator=(QuickLookPreviewService &&) -> QuickLookPreviewService & = delete;
-    /// Opens the panel at its normal size, or at the screen's usable frame
-    /// before the system performs its native opening animation.
+    /// Opens at the normal size, or stages a held preview at the usable frame
+    /// before its first visible frame and reveals it with AppKit animation.
     [[nodiscard]] virtual auto present(const QuickLookItem &item, bool enlarged, std::function<void()> released, std::function<void()> interrupted) -> bool = 0;
     virtual void dismiss() = 0;
 };
@@ -62,7 +62,7 @@ class QuickLookGesture final {
     /// Captures a valid Space-down target without opening the system panel.
     [[nodiscard]] auto press(const QuickLookItem &item, bool plain_space, bool auto_repeat) -> bool;
     [[nodiscard]] auto hold_elapsed(std::uint64_t generation) -> bool;
-    [[nodiscard]] auto released(std::uint64_t generation) -> Release;
+    [[nodiscard]] auto released(std::uint64_t generation, bool auto_repeat = false) -> Release;
     void interrupted(std::uint64_t generation);
     [[nodiscard]] auto generation() const -> std::uint64_t;
     [[nodiscard]] auto active() const -> bool;
