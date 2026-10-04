@@ -126,6 +126,10 @@ pub mod ffi {
         fn startup_period_elapsed(self: Pin<&mut WorkspaceBridge>);
         #[cxx_name = "settingsLoadTimedOut"]
         fn settings_load_timed_out(self: Pin<&mut WorkspaceBridge>);
+        /// Pauses watcher-driven listing work while the application is not
+        /// foreground-active; native subscriptions remain registered.
+        #[cxx_name = "setApplicationActive"]
+        fn set_application_active(self: Pin<&mut WorkspaceBridge>, active: bool);
         /// Reports the workspace's current logical-point layout after a
         /// settled native layout change.
         #[cxx_name = "updateWindowLayout"]
@@ -372,6 +376,10 @@ impl ffi::WorkspaceBridge {
     }
     fn settings_load_timed_out(mut self: Pin<&mut Self>) {
         with_session(|session| session.submit(dual_pane_application::Event::SettingsLoadTimedOut));
+        self.as_mut().session_changed();
+    }
+    fn set_application_active(mut self: Pin<&mut Self>, active: bool) {
+        with_session(|session| session.submit(dual_pane_application::Event::ApplicationActivityChanged { active }));
         self.as_mut().session_changed();
     }
     fn update_window_layout(mut self: Pin<&mut Self>, origin: i64, width: i32, height: i32, state: i32, sidebar_splitter: i32, browser_splitter: i32) {

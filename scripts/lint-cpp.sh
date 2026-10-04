@@ -53,7 +53,7 @@ fi
 # compiler invocation in the build allows; give clang-tidy the same Qt Core header directory.
 qt_core_headers="$qt_libraries/QtCore.framework/Headers"
 
-for source in crates/dual-pane-desktop/cpp/include/dual_pane_desktop/desktop_window.hpp crates/dual-pane-desktop/cpp/include/dual_pane_desktop/settings_glyph.hpp crates/dual-pane-desktop/cpp/include/dual_pane_desktop/native_shell.hpp crates/dual-pane-desktop/cpp/include/dual_pane_desktop/quick_look_preview.hpp crates/dual-pane-desktop/cpp/src/desktop_window.cpp crates/dual-pane-desktop/cpp/src/native_shell.cpp; do
+for source in crates/dual-pane-desktop/cpp/include/dual_pane_desktop/desktop_window.hpp crates/dual-pane-desktop/cpp/include/dual_pane_desktop/settings_glyph.hpp crates/dual-pane-desktop/cpp/include/dual_pane_desktop/native_shell.hpp crates/dual-pane-desktop/cpp/include/dual_pane_desktop/quick_look_preview.hpp crates/dual-pane-desktop/cpp/include/dual_pane_desktop/location_watcher.hpp crates/dual-pane-desktop/cpp/src/desktop_window.cpp crates/dual-pane-desktop/cpp/src/native_shell.cpp crates/dual-pane-desktop/cpp/src/location_watcher.cpp; do
     "$clang_tidy" --config-file="$repository_root/.clang-tidy" --warnings-as-errors='*' "$source" -- -std=c++17 -isysroot "$sdk_path" -I"$repository_root/crates/dual-pane-desktop/cpp/include" -isystem "$generated_headers" -isystem "$qt_headers" -isystem "$qt_core_headers" -F "$qt_libraries" -iframework "$qt_libraries"
 done
 

@@ -72,13 +72,13 @@ Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architec
 
 ### P3-M11: Native Quick Look
 
-Status: Active
+Status: Done
 Goal: Preview the Folder Pane cursor item through a tap-or-held-Space macOS Quick Look gesture.
 Plan: [overview](milestone-11-overview.md), [architecture](milestone-11-architecture.md)
-Notes: This milestone deliberately runs before P3-M10 and is active again for follow-up work. Its prior automated gate and native human check passed.
+Notes: This milestone deliberately runs before P3-M10. Its automated gate and native human checks passed, including the reopened first-frame and transition follow-up.
 
 ### P3-M10: Watch open locations
 
-Status: Planned
+Status: Done
 Goal: Watch open tab locations, including inactive tabs, coalesce invalidations, and refresh listings without losing matching selection or cursor state.
 Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architecture.md)

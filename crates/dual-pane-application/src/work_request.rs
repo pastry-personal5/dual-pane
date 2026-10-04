@@ -17,14 +17,66 @@ use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, Tab
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRequest {
     Operation(OperationEffect),
-    ReadDirectory { browser: BrowserSide, tab: TabId, token: RequestToken, location: Location, sort: SortSpec, previous: Option<Arc<[Entry]>> },
-    Cancel { browser: BrowserSide, tab: TabId, token: RequestToken },
-    SaveSettings { revision: u64, snapshot: SettingsSnapshot },
-    SaveSession { revision: u64, session: WorkspaceSnapshot },
-    ProbeScreenshotsFolder { location: Location },
-    ProbeFavoriteTarget { item_id: i64, target: Location },
+    /// Starts one shared subscription for a byte-exact open location. The
+    /// generation rejects callbacks from a subscription that was replaced.
+    WatchLocation {
+        location: Location,
+        generation: u64,
+    },
+    UnwatchLocation {
+        location: Location,
+        generation: u64,
+    },
+    /// Pauses periodic checks while native subscriptions remain installed.
+    SetWatchActivity {
+        active: bool,
+    },
+    /// Names the locations shown by the two active tabs so degraded checks
+    /// can use the visible interval while inactive tabs stay sparse.
+    UpdateWatchVisibility {
+        visible: Vec<Location>,
+    },
+    /// Feeds periodic-check backoff without making the driver authoritative
+    /// for the listing or its error.
+    WatchReadCompleted {
+        location: Location,
+        succeeded: bool,
+    },
+    ReadDirectory {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+        location: Location,
+        sort: SortSpec,
+        previous: Option<Arc<[Entry]>>,
+    },
+    Cancel {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+    },
+    SaveSettings {
+        revision: u64,
+        snapshot: SettingsSnapshot,
+    },
+    SaveSession {
+        revision: u64,
+        session: WorkspaceSnapshot,
+    },
+    ProbeScreenshotsFolder {
+        location: Location,
+    },
+    ProbeFavoriteTarget {
+        item_id: i64,
+        target: Location,
+    },
     LoadSettings,
     ResetSettings,
-    ResolveItem { browser: BrowserSide, tab: TabId, token: RequestToken, item: Location },
+    ResolveItem {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+        item: Location,
+    },
     ReopenJournal,
 }

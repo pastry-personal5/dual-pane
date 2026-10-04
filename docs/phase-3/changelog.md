@@ -4,6 +4,14 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-04 — P3-M10 Done
+
+- The owner passed the native macOS watcher check for active and inactive tab changes, folder loss and return, foreground reconciliation, degraded monitoring feedback, and selection/cursor retention. The automated gate also passed, so every P3-M10 checklist item is complete.
+
+## 2026-10-04 — P3-M11 follow-up Done and P3-M10 active
+
+- The owner completed and passed the reopened native Quick Look check: the held preview's first visible frame used the current display's full usable frame, later provider resizing did not shrink it, and the transition was comfortable. Every P3-M11 checklist item is complete, P3-M11 is Done, and P3-M10 is now Active.
+
 ## 2026-10-04 — P3-M10 planning
 
 - Added the [overview](milestone-10-overview.md) and [architecture plan](milestone-10-architecture.md) for watching open locations. P3-M11 remains the active prerequisite; P3-M10 remains Planned with every completion item unchecked.

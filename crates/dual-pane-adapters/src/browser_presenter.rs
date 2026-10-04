@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{BrowserChrome, Output, RowChange};
+use dual_pane_application::{BrowserChrome, MonitoringStatus, Output, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
@@ -38,6 +38,7 @@ pub struct BrowserViewModel {
     /// A refused file command's reason, shown until its token expires.
     status_message: Option<String>,
     status_token: u64,
+    monitoring: Option<MonitoringStatus>,
     missing_folder: bool,
     editor: Option<EditorRequest>,
     editor_revision: u64,
@@ -62,7 +63,7 @@ pub struct BrowserViewModel {
 
 impl Default for BrowserViewModel {
     fn default() -> Self {
-        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
+        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
     }
 }
 
@@ -389,6 +390,20 @@ impl BrowserViewModel {
         self.status_text = self.status_message.clone().unwrap_or_else(|| self.base_status.clone());
     }
 
+    fn refresh_base_status(&mut self) {
+        self.base_status = if self.loading {
+            "Loading…".to_owned()
+        } else if let Some(error) = &self.error {
+            error.clone()
+        } else {
+            match self.monitoring {
+                Some(MonitoringStatus::Periodic) => "Checking for changes periodically".to_owned(),
+                Some(MonitoringStatus::Unavailable) => "Automatic refresh unavailable — Command+R to Refresh".to_owned(),
+                Some(MonitoringStatus::Native) | None => self.location_text.clone(),
+            }
+        };
+    }
+
     fn refresh_summary(&mut self) {
         if self.location.is_none() {
             self.summary = Summary::default();
@@ -487,6 +502,9 @@ impl BrowserPresenter {
             self.view.tabs_revision = self.view.tabs_revision.wrapping_add(1);
         }
         self.view.toolbar = Toolbar { can_open_tab: chrome.can_open_tab, can_go_back: chrome.can_go_back, can_go_forward: chrome.can_go_forward, can_go_up: chrome.can_go_up, can_refresh: chrome.can_refresh, sort: chrome.sort };
+        self.view.monitoring = chrome.monitoring;
+        self.view.refresh_base_status();
+        self.view.refresh_status();
         self.chrome = Some(chrome.clone());
     }
 
@@ -588,6 +606,7 @@ impl BrowserPresenter {
             }
             _ => {}
         }
+        view.refresh_base_status();
         view.refresh_status();
     }
 }

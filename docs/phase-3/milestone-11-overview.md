@@ -1,6 +1,6 @@
 # P3-M11: Native Quick Look
 
-Status: Active
+Status: Done
 
 This milestone adds macOS Quick Look to the Folder Pane without making Dual Pane a viewer. A Space tap previews the cursor item after key-up in the normal sized system panel; holding it for 256 ms opens it at the largest usable screen frame until release. [Architecture](milestone-11-architecture.md) describes the desktop-only approach; this checklist defines completion.
 
@@ -33,7 +33,7 @@ Out of scope: a built-in viewer; multi-item previews; previewing a selection rat
 - [x] Automated desktop seam tests cover target extraction, modifier and repeat filtering, deferred normal and enlarged presentation, early release, timer expiry, release, interruption, controller ownership, and Status Bar failure feedback without calling a real Quick Look service. File-system fixtures, if needed, stay in temporary directories.
 - [x] A human macOS check covers regular files, folders, packages, links, an unpreviewable item, normal-panel sizing and controls after a tap, held large-panel opening with the menu bar and Dock visible, held-release dismissal, and application-switch interruption.
 - [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass; acceptance evidence is recorded here before the milestone is marked Done.
-- [ ] Reopened follow-up: after 256 ms, a held preview's first visible frame is the current display's full usable frame, including when Quick Look changes its frame during opening. A brief AppKit opacity reveal is used when motion is allowed, and Reduce Motion reveals the sized panel immediately. Verify the first frame, later provider resizing, and comfort of the transition on macOS; rerun the full gate.
+- [x] Reopened follow-up: after 256 ms, a held preview's first visible frame is the current display's full usable frame, including when Quick Look changes its frame during opening. A brief AppKit opacity reveal is used when motion is allowed, and Reduce Motion reveals the sized panel immediately. Verify the first frame, later provider resizing, and comfort of the transition on macOS; rerun the full gate.
 
 ## Acceptance evidence
 
@@ -49,5 +49,6 @@ Automated evidence, 2026-10-04:
 - Human macOS check, 2026-10-04: Passed for regular files, folders, packages, links, and an unpreviewable item; normal-panel controls after a tap; held large-panel opening with the menu bar and Dock visible; held-release dismissal; and application-switch interruption.
 - Reopened follow-up, 2026-10-04: the native adapter now applies the workspace screen's usable frame when Quick Look grants control and maintains it across subsequent panel resize notifications during the hold. Its transition delegate requests Quick Look's native fade. Auto-repeat Space releases leave the timer running, and loss of list focus cancels a pending hold. The focused gesture seam, `make check`, and the direct Cargo format, Clippy, and test commands pass; the updated native size and motion still require a human check.
 - First-frame follow-up, 2026-10-04: `quick_look_hold_milliseconds` is 256; the held panel is made transparent and set to the workspace screen's usable frame during control handoff, then frame-checked before a 160 ms AppKit opacity reveal (or immediate reveal under Reduce Motion). The gesture seam test, `make check`, `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass. The first visible frame and transition comfort still require a new human macOS check.
+- Owner native follow-up, 2026-10-04: Passed. The held preview's first visible frame used the current display's full usable frame, stayed full-sized through later provider resizing, and the transition was comfortable. P3-M11 is Done.
 
-The prior automated gate and human macOS check passed. P3-M11 is active again for follow-up work; any new acceptance requirements must be recorded before it is marked Done again.
+The automated gate and both native human checks passed. Every checklist item is complete and P3-M11 is Done.

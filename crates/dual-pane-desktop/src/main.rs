@@ -2,6 +2,7 @@ mod browser_session;
 mod folder_items;
 mod folder_items_list_model;
 mod location_probe;
+mod location_watcher;
 mod native_calls;
 mod native_location;
 mod native_shell;

@@ -7,6 +7,14 @@ use std::sync::Arc;
 use crate::{ActionBinding, FavoritesRecords, OperationFailure, OperationOutcome, OperationProgress, SettingsFailure};
 use dual_pane_domain::{BrowserSide, ListingErrorKind, Location, OperationIntent, SortSpec, TabId};
 
+/// How reliably one open location is being observed for external changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonitoringStatus {
+    Native,
+    Periodic,
+    Unavailable,
+}
+
 /// One Browser Tab as its strip shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabSummary {
@@ -32,6 +40,9 @@ pub struct BrowserChrome {
     /// The active tab's confirmed location and its effective sort.
     pub location: Option<Location>,
     pub sort: Option<SortSpec>,
+    /// Monitoring for the active tab's shown or requested location. `None`
+    /// means setup has not answered yet.
+    pub monitoring: Option<MonitoringStatus>,
 }
 
 /// Workspace-wide state outside the Browsers.

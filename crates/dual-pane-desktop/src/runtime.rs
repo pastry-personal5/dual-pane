@@ -11,6 +11,7 @@ use dual_pane_application::{Event, FavoriteProbeOutcome, ResolvedTarget, RowChan
 use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, OperationId, RequestToken, SortSpec, TabId};
 
 use crate::location_probe::resolve_item;
+use crate::location_watcher::WatcherHandle;
 use crate::operation_lane::{OperationLane, Publisher, Services};
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
@@ -51,6 +52,7 @@ pub struct Runtime {
     /// The file-operation lane, once attached; without it operations fail
     /// closed.
     operations: Option<OperationLane>,
+    watcher: WatcherHandle,
 }
 
 #[derive(Clone)]
@@ -224,7 +226,9 @@ impl Runtime {
         let (probes, probe_jobs) = mpsc::sync_channel(PENDING_PROBE_CAPACITY);
         let probe_delivery = delivery.clone();
         thread::Builder::new().name(PROBE_THREAD_NAME.to_owned()).spawn(move || run_probes(probe_jobs, probe, probe_delivery))?;
-        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None })
+        let watcher_delivery = delivery.clone();
+        let watcher = WatcherHandle::start(Arc::new(move |event| deliver_event(&watcher_delivery, event))).unwrap_or_else(|_| WatcherHandle::unavailable());
+        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
     }
 
     /// Starts the file-operation lane, which reports through this runtime.
@@ -283,6 +287,29 @@ impl WorkRunner for Runtime {
                     dual_pane_application::OperationEffect::Release { .. } => return None,
                 };
                 Some(Event::OperationExecutorUnavailable { id, generation })
+            }
+            WorkRequest::WatchLocation { location, generation } => {
+                if self.watcher.watch(location.clone(), generation) {
+                    None
+                } else {
+                    Some(Event::WatcherReady { location, generation, status: dual_pane_application::MonitoringStatus::Unavailable })
+                }
+            }
+            WorkRequest::UnwatchLocation { location, generation } => {
+                self.watcher.unwatch(&location, generation);
+                None
+            }
+            WorkRequest::SetWatchActivity { active } => {
+                self.watcher.set_active(active);
+                None
+            }
+            WorkRequest::UpdateWatchVisibility { visible } => {
+                self.watcher.set_visible(visible);
+                None
+            }
+            WorkRequest::WatchReadCompleted { location, succeeded } => {
+                self.watcher.read_completed(location, succeeded);
+                None
             }
             WorkRequest::ReadDirectory { browser, tab, token, location, sort, previous } => {
                 if self.outstanding.values().filter(|(owner, _, _)| *owner == browser).count() >= self.read_capacity {
@@ -490,7 +517,7 @@ fn wake(delivery: &Delivery) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
+        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
@@ -549,6 +576,15 @@ mod tests {
         let id = OperationId::new(7);
         let intent = OperationIntent::new(OperationKind::MoveToTrash, location("source"), vec![OperationTarget { name: EntryName::new("item").unwrap(), kind: dual_pane_domain::EntryKind::File }], None).unwrap();
         assert_eq!(runner.dispatch(WorkRequest::Operation(OperationEffect::Scan { id, generation: 3, intent, skipped: Arc::from([]) })), Some(Event::OperationExecutorUnavailable { id, generation: 3 }));
+    }
+
+    #[test]
+    fn unavailable_watcher_reports_degraded_status_without_blocking_reads() {
+        let (mut runner, _) = runtime(source_factory(|_, _| Some(Ok(Arc::from([])))));
+        runner.watcher = WatcherHandle::unavailable();
+        let folder = location("folder");
+        assert_eq!(runner.dispatch(WorkRequest::WatchLocation { location: folder.clone(), generation: 9 }), Some(Event::WatcherReady { location: folder, generation: 9, status: dual_pane_application::MonitoringStatus::Unavailable }));
+        assert_eq!(runner.dispatch(read(0, "folder")), None);
     }
     #[test]
     fn an_attached_lane_runs_operation_requests_and_delivers_their_events() {
@@ -1005,7 +1041,7 @@ mod tests {
         let (_event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
         let delivery = Delivery { events: mpsc::channel().0, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
-        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None };
+        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
 
         assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());

@@ -1,6 +1,6 @@
 # P3-M10 architecture
 
-Status: Planned
+Status: Done
 
 The application owns which open locations need watching and whether an invalidation should start a read. A desktop watcher observes native changes or runs bounded fallback checks, then reports facts through the existing serialized event boundary. The [overview checklist](milestone-10-overview.md#completion-checklist) is the executable definition of done.
 

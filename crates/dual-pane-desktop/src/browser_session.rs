@@ -427,7 +427,7 @@ mod tests {
         let older = RequestToken::first().next().next();
         session.submit(Command::Navigate { browser: BrowserSide::Left, location: path("missing") });
         let missing = older.next();
-        assert_eq!(session.runner.dispatched[3], WorkRequest::Cancel { browser: BrowserSide::Left, tab: TabId::new(0), token: older });
+        assert!(session.runner.dispatched.contains(&WorkRequest::Cancel { browser: BrowserSide::Left, tab: TabId::new(0), token: older }));
         session.submit(Event::FolderItemsCancelled { browser: BrowserSide::Left, tab: TabId::new(0), token: older });
         session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: older, entries: Arc::from(vec![entry("late")]), changes: None });
         session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: TabId::new(1), token: missing, entries: Arc::from(vec![entry("wrong")]), changes: None });
@@ -467,7 +467,8 @@ mod tests {
     fn start_dispatches_distinct_reads_for_both_browsers() {
         let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(Location::root());
-        assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), location: Location::root(), sort: SortSpec::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), location: Location::root(), sort: SortSpec::default(), previous: None }]);
+        let reads = session.runner.dispatched.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).cloned().collect::<Vec<_>>();
+        assert_eq!(reads, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), location: Location::root(), sort: SortSpec::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), location: Location::root(), sort: SortSpec::default(), previous: None }]);
     }
 
     #[test]
@@ -533,7 +534,8 @@ mod tests {
         session.submit_ui(BrowserSide::Right, UiEvent::SelectRow { row: 0 });
         session.submit_ui(BrowserSide::Right, UiEvent::ActivateSelection);
 
-        assert_eq!(session.runner.dispatched, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first().next().next(), location: Location::root(), sort: SortSpec::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next().next().next(), location: location.join(&folder), sort: SortSpec::default(), previous: None }]);
+        let reads = session.runner.dispatched.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).cloned().collect::<Vec<_>>();
+        assert_eq!(reads, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first().next().next(), location: Location::root(), sort: SortSpec::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next().next().next(), location: location.join(&folder), sort: SortSpec::default(), previous: None }]);
     }
 
     #[test]
@@ -644,7 +646,7 @@ mod tests {
         session.submit(Command::CloseTab { browser: BrowserSide::Left, tab: old });
         let new = session.workspace.active_tab(BrowserSide::Left);
         assert_ne!(old, new);
-        assert!(matches!(session.runner.dispatched.last(), Some(WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, location, .. }) if *tab == new && *location == home));
+        assert!(session.runner.dispatched.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, location, .. } if *tab == new && *location == home)));
     }
 
     /// Completes the latest read `browser` requested with `names` as folders.

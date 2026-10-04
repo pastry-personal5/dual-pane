@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, FavoritesEvent, FolderItemsColumn, GroupMotion, InputController, SelectionMovement, UiEvent, WorkspacePresenter, favorite_rejection_text};
-use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, Input, SettingsFailure, SettingsSnapshot, WorkRequest, Workspace};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryMetadata, EntryName, Location, ScrollAnchor, SortDirection, SortField, SortSpec};
+use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, SettingsFailure, SettingsSnapshot, WorkRequest, Workspace};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryMetadata, EntryName, ListingErrorKind, Location, ScrollAnchor, SortDirection, SortField, SortSpec};
 use jiff::tz::TimeZone;
 
 const NOW: i64 = 1_790_000_000;
@@ -108,6 +108,42 @@ fn rows_show_six_columns_in_the_specified_formats() {
 }
 
 #[test]
+fn monitoring_feedback_yields_to_loading_and_listing_errors() {
+    let mut session = Session::new();
+    let folder = path(&["watched"]);
+    session.show(BrowserSide::Left, folder.clone(), vec![file("a", None, None)]);
+    let generation = session
+        .work
+        .iter()
+        .find_map(|work| match work {
+            WorkRequest::WatchLocation { location, generation } if *location == folder => Some(*generation),
+            _ => None,
+        })
+        .unwrap();
+    session.submit(Event::WatcherStatusChanged { location: folder.clone(), generation, status: MonitoringStatus::Periodic });
+    assert_eq!(session.left.view().status_text(), "Checking for changes periodically");
+
+    session.submit(Event::WatchedLocationInvalidated { location: folder.clone(), generation });
+    assert_eq!(session.left.view().status_text(), "Loading…");
+    let (tab, token) = session
+        .work
+        .iter()
+        .rev()
+        .find_map(|work| match work {
+            WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, token, location, .. } if *location == folder => Some((*tab, *token)),
+            _ => None,
+        })
+        .unwrap();
+    session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: ListingErrorKind::ItemMissing });
+    session.submit(Event::WatcherStatusChanged { location: folder.clone(), generation, status: MonitoringStatus::Unavailable });
+    assert_eq!(session.left.view().status_text(), "“/watched” no longer exists.");
+
+    session.submit(Event::WatchedLocationInvalidated { location: folder, generation });
+    session.deliver(BrowserSide::Left, vec![file("a", None, None)]);
+    assert_eq!(session.left.view().status_text(), "Automatic refresh unavailable — Command+R to Refresh");
+}
+
+#[test]
 fn native_preview_paths_preserve_name_bytes_and_directory_kind() {
     let mut session = Session::new();
     let location = Location::from_components([name("work"), EntryName::new(b"raw\xFF".to_vec()).unwrap()]);
@@ -151,7 +187,7 @@ fn the_summary_counts_and_totals_the_selection_or_else_the_folder() {
 
     // A failed read keeps the last successful listing and its summary.
     session.submit(Command::Navigate { browser: BrowserSide::Left, location: path(&["missing"]) });
-    let (tab, token) = match session.work.last() {
+    let (tab, token) = match session.work.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) {
         Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
         other => panic!("{other:?}"),
     };
@@ -272,7 +308,7 @@ fn sidebar_groups_follow_their_positions_and_route_stable_ids() {
     assert_eq!(names(&session)[1].1, ["Docs"]);
     session.work.clear();
     session.favorites(FavoritesEvent::OpenItem { id: 11 });
-    assert!(matches!(session.work.as_slice(), [WorkRequest::ReadDirectory { browser: BrowserSide::Left, location, .. }] if *location == path(&["notes"])));
+    assert!(session.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { browser: BrowserSide::Left, location, .. } if *location == path(&["notes"]))));
 }
 
 #[test]
@@ -379,7 +415,7 @@ fn a_missing_folder_keeps_its_rows_under_the_overlay_until_a_refresh_succeeds() 
     let mut session = Session::new();
     session.show(BrowserSide::Left, path(&["work"]), vec![file("a", None, None)]);
     session.ui(BrowserSide::Left, UiEvent::Refresh);
-    let (tab, token) = match session.work.last() {
+    let (tab, token) = match session.work.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) {
         Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
         _ => panic!("a refresh"),
     };
@@ -388,7 +424,7 @@ fn a_missing_folder_keeps_its_rows_under_the_overlay_until_a_refresh_succeeds() 
     assert!(view.missing_folder());
     assert_eq!((view.row_count(), view.location_text()), (1, "/work"), "the last rows and path stay");
     session.submit(Command::Navigate { browser: BrowserSide::Left, location: path(&["elsewhere"]) });
-    let (tab, token) = match session.work.last() {
+    let (tab, token) = match session.work.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) {
         Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
         _ => panic!("a read"),
     };
@@ -406,5 +442,5 @@ fn a_package_row_can_show_its_contents() {
     session.show(BrowserSide::Left, path(&["apps"]), vec![package, folder("plain")]);
     assert!(session.left.view().is_package(0) && !session.left.view().is_package(1));
     session.ui(BrowserSide::Left, UiEvent::ShowPackageContents { row: 0 });
-    assert!(matches!(session.work.last(), Some(WorkRequest::ReadDirectory { location, .. }) if *location == path(&["apps", "Tool.app"])));
+    assert!(session.work.iter().rev().any(|work| matches!(work, WorkRequest::ReadDirectory { location, .. } if *location == path(&["apps", "Tool.app"]))));
 }

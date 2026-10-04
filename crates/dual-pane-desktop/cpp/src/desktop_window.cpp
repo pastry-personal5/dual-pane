@@ -2785,6 +2785,17 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     });
     QObject::connect(&startup_period_timer, &QTimer::timeout, &window, [&bridge] { bridge.startupPeriodElapsed(); });
     QObject::connect(&bridge, &WorkspaceBridge::layoutRevisionChanged, &window, [&bridge, &window, &standard_layout, split, browsers, waiting, &waiting_delay, &settings_load_timeout, &workspace_revealed, &startup_period_timer, report_layout] {
+        const bool saved_layout = bridge.getSavedLayoutAvailable();
+        const auto apply_saved_splitters = [&bridge, &standard_layout, split] {
+            // The window must have been shown and laid out before these
+            // pixel sizes are meaningful. Applying them while the workspace
+            // is hidden lets QSplitter redistribute the sizes again during
+            // the following show/maximize/full-screen transition.
+            if (standard_layout.width() > 0)
+                standard_layout.setSizes({bridge.getSavedSidebarSplitter(), qMax(0, standard_layout.width() - bridge.getSavedSidebarSplitter())});
+            if (split->width() > 0)
+                split->setSizes({bridge.getSavedBrowserSplitter(), qMax(0, split->width() - bridge.getSavedBrowserSplitter())});
+        };
         if (!bridge.getSavedLayoutAvailable()) {
             window.showNormal();
             window.resize(initial_window_width, initial_window_height);
@@ -2794,14 +2805,13 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
             const QRect frame = fit_saved_frame(QRect(bridge.getSavedLayoutX(), bridge.getSavedLayoutY(), bridge.getSavedLayoutWidth(), bridge.getSavedLayoutHeight()));
             window.move(frame.topLeft());
             window.resize(frame.size());
-            standard_layout.setSizes({bridge.getSavedSidebarSplitter(), qMax(0, window.width() - bridge.getSavedSidebarSplitter())});
-            split->setSizes({bridge.getSavedBrowserSplitter(), qMax(0, split->width() - bridge.getSavedBrowserSplitter())});
             if (bridge.getSavedLayoutState() == 1)
                 window.showMaximized();
             else if (bridge.getSavedLayoutState() == 2)
                 window.showFullScreen();
             else
                 window.showNormal();
+            apply_saved_splitters();
         }
         if (!workspace_revealed) {
             workspace_revealed = true;
@@ -2809,7 +2819,15 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
             settings_load_timeout.stop();
             waiting->close();
             browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->view()->focusList();
-            QTimer::singleShot(0, &window, report_layout);
+            // A hidden QMainWindow can still have stale child geometry after
+            // resize/showState changes. Reapply once on the next event-loop
+            // turn, when both nested splitters have their final width, then
+            // persist the actual positions rather than the pre-layout ones.
+            QTimer::singleShot(0, &window, [apply_saved_splitters, report_layout, saved_layout] {
+                if (saved_layout)
+                    apply_saved_splitters();
+                report_layout();
+            });
             startup_period_timer.start(5000);
         }
     });
@@ -2868,6 +2886,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
             if (inside(now, browsers.at(browser)))
                 models.at(browser)->activateBrowser();
     });
+    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &window, [&bridge](Qt::ApplicationState state) { bridge.setApplicationActive(state == Qt::ApplicationActive); });
 
     {
         auto &state = scheduler_state();
@@ -2875,6 +2894,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         state.scheduler = &scheduler;
     }
     bridge.start(std::move(startup));
+    bridge.setApplicationActive(QApplication::applicationState() == Qt::ApplicationActive);
     waiting_delay.start(150);
     settings_load_timeout.start(10000);
     shortcuts.rebind();

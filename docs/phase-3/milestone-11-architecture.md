@@ -1,6 +1,6 @@
 # P3-M11 architecture: Native Quick Look
 
-Status: Active
+Status: Done
 
 P3-M11 is a macOS desktop concern. It reads the byte-exact path of the Folder Items cursor, asks the system Quick Look Panel to preview one URL, and manages a short held-key lifecycle. It adds no durable workspace state.
 

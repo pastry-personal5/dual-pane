@@ -395,7 +395,7 @@ mod tests {
             let mut fixture = Self { ws: Workspace::new(), presenter: OperationsPresenter::with_ticks(Arc::new(move || *ticks.lock().unwrap())), clock, work: Vec::new() };
             for (browser, location, rows) in [(BrowserSide::Left, path(&["from"]), entries), (BrowserSide::Right, path(&["to"]), &[][..])] {
                 let read = fixture.ws.handle(Command::Navigate { browser, location }.into());
-                let Some(WorkRequest::ReadDirectory { tab, token, .. }) = read.work.into_iter().next() else { panic!() };
+                let Some(WorkRequest::ReadDirectory { tab, token, .. }) = read.work.into_iter().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) else { panic!() };
                 fixture.ws.handle(Event::FolderItemsLoaded { browser, tab, token, entries: rows.iter().map(|text| Entry::new(name(text), EntryKind::File)).collect(), changes: None }.into());
             }
             fixture

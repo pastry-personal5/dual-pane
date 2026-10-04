@@ -12,7 +12,7 @@ fn entry(value: &str) -> Entry {
     Entry::new(name(value), EntryKind::File)
 }
 fn request(work: &[WorkRequest]) -> (TabId, dual_pane_domain::RequestToken) {
-    match work.last() {
+    match work.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) {
         Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
         _ => panic!("read"),
     }
@@ -457,7 +457,7 @@ fn repeated_back_and_forward_while_loading_keep_moving() {
         let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location(folder) }.into()).work);
         load(&mut workspace, BrowserSide::Left, tab, token, vec![]);
     }
-    let read_location = |work: &[WorkRequest]| match work.last() {
+    let read_location = |work: &[WorkRequest]| match work.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) {
         Some(WorkRequest::ReadDirectory { location, .. }) => location.clone(),
         _ => panic!("read"),
     };
@@ -500,7 +500,7 @@ fn reordering_a_tab_to_its_current_position_reports_nothing() {
 }
 
 fn read_previous(work: &[WorkRequest]) -> Option<Arc<[Entry]>> {
-    match work.last() {
+    match work.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) {
         Some(WorkRequest::ReadDirectory { previous, .. }) => previous.clone(),
         _ => panic!("read"),
     }

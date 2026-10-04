@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, PlannedItem, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, StepResult, WindowLayout};
+use crate::{ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, MonitoringStatus, PlannedItem, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, StepResult, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,6 +276,26 @@ pub enum Event {
     },
     LocationInvalidated {
         location: Location,
+    },
+    /// A generation-tagged native or periodic subscription became usable.
+    WatcherReady {
+        location: Location,
+        generation: u64,
+        status: MonitoringStatus,
+    },
+    WatcherStatusChanged {
+        location: Location,
+        generation: u64,
+        status: MonitoringStatus,
+    },
+    WatchedLocationInvalidated {
+        location: Location,
+        generation: u64,
+    },
+    /// Whether the application is foreground-active. Native subscriptions
+    /// stay registered while inactive, but watcher-driven reads pause.
+    ApplicationActivityChanged {
+        active: bool,
     },
     FolderItemsLoaded {
         browser: BrowserSide,

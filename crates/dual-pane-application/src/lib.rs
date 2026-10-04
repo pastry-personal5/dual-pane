@@ -15,7 +15,7 @@ mod workspace;
 pub use input::{Command, Event, Input, ResolvedTarget};
 pub use operations::{ByteProgress, CleanupResult, FinalizeResult, NameProblem, OperationEffect, OperationErrorKind, OperationFailure, OperationJob, OperationOutcome, OperationProgress, OperationStatus, PendingDecision, PlannedItem, ScanFailure, ScanSkip, StepResult};
 pub use output::{Output, RowChange, listing_changes};
-pub use projection::{BrowserChrome, FavoriteEdit, FavoriteRejection, Notice, NoticeKind, TabSummary, WorkspaceChrome};
+pub use projection::{BrowserChrome, FavoriteEdit, FavoriteRejection, MonitoringStatus, Notice, NoticeKind, TabSummary, WorkspaceChrome};
 pub use settings::{ActionBinding, ActionId, BrowserSnapshot, FOLDER_SORT_LIMIT, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, SettingsState, SettingsStatus, Shortcut, ShortcutScope, TabSnapshot, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot, default_bindings, default_shortcut, fresh_profile_favorites, fresh_profile_screenshots, validate_bindings};
 pub use work_request::WorkRequest;
 pub use workspace::{Transition, Workspace};
