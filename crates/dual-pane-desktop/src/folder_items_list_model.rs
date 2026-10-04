@@ -4,7 +4,7 @@
 use std::pin::Pin;
 
 use cxx_qt::CxxQtType;
-use cxx_qt_lib::{QList, QModelIndex, QString, QVariant};
+use cxx_qt_lib::{QByteArray, QList, QModelIndex, QString, QVariant};
 use dual_pane_adapters::{BrowserViewModel, EditorOutcome, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent};
 use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection, SortField, SortSpec, TabId};
 
@@ -235,6 +235,10 @@ const TEXT_ALIGNMENT_ROLE: i32 = 7;
 const PATH_ROLE: i32 = 0x0100;
 /// `Qt::UserRole + 1`: Relative Date age as millionths of strip position.
 const RELATIVE_AGE_ROLE: i32 = 0x0101;
+/// `Qt::UserRole + 2`: the Item's byte-exact native path for Quick Look.
+const NATIVE_PATH_ROLE: i32 = 0x0102;
+/// `Qt::UserRole + 3`: whether that native path names a directory.
+const NATIVE_DIRECTORY_ROLE: i32 = 0x0103;
 /// `Qt::AlignRight | Qt::AlignVCenter`.
 const ALIGN_RIGHT: i32 = 0x0002 | 0x0080;
 
@@ -310,6 +314,8 @@ impl ffi::FolderItemsListModel {
             TOOL_TIP_ROLE if column == FolderItemsColumn::Name => shown.cell_text(row, column).map_or_else(QVariant::default, |text| QVariant::from(&QString::from(text.as_str()))),
             PATH_ROLE => shown.row_path(row).map_or_else(QVariant::default, |path| QVariant::from(&QString::from(path.as_str()))),
             RELATIVE_AGE_ROLE if column == FolderItemsColumn::RelativeDate => shown.relative_age_position(row).map_or_else(QVariant::default, |position| QVariant::from(&((position * 1_000_000.0).round() as i32))),
+            NATIVE_PATH_ROLE => shown.row_native_path(row).map_or_else(QVariant::default, |(path, _)| QVariant::from(&QByteArray::from(path.as_slice()))),
+            NATIVE_DIRECTORY_ROLE => shown.row_native_path(row).map_or_else(QVariant::default, |(_, directory)| QVariant::from(&directory)),
             TEXT_ALIGNMENT_ROLE if column == FolderItemsColumn::Size => QVariant::from(&ALIGN_RIGHT),
             _ => QVariant::default(),
         }

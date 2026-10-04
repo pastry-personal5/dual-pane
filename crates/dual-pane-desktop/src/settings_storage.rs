@@ -567,7 +567,7 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dual_pane_application::SettingsState;
+    use dual_pane_application::{SettingsState, TabSnapshot};
     use tempfile::{TempDir, tempdir};
     /// A database path inside a temporary directory that lives as long as the
     /// returned guard.
@@ -595,6 +595,31 @@ mod tests {
         assert_eq!(loaded.folder_sorts, snapshot.folder_sorts);
         assert!(loaded.favorites.initialized);
         assert!(loaded.favorites.groups.is_empty());
+    }
+    #[test]
+    fn session_round_trips_tab_order_active_tabs_and_each_window_state() {
+        let (_directory, path) = temp_database();
+        let mut db = SettingsDatabase::open(&path).unwrap();
+        let left_first = non_utf8_location();
+        let left_second = Location::root().join(&EntryName::new("left-second").unwrap());
+        let right = Location::root().join(&EntryName::new("right").unwrap());
+        for state in [WindowState::Normal, WindowState::Zoomed, WindowState::FullScreen] {
+            let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: left_first.clone() }, TabSnapshot { location: left_second.clone() }], active_tab: Some(1) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: right.clone() }], active_tab: Some(0) }, active_browser: BrowserSide::Right, layout: WindowLayout { frame: WindowFrame { x: -42, y: 17, width: 1200, height: 800 }, state, sidebar_splitter: 280, browser_splitter: 610 } };
+            db.save_session(&session).unwrap();
+            assert_eq!(db.load_with_session().unwrap().session, SessionSnapshot::Saved(session));
+        }
+    }
+    #[test]
+    fn damaged_session_rows_do_not_block_settings_or_a_replacement_session_save() {
+        let (_directory, path) = temp_database();
+        let mut db = SettingsDatabase::open(&path).unwrap();
+        db.connection.execute("INSERT INTO session_window(id, x, y, width, height, state, sidebar_splitter, browser_splitter) VALUES (1, 0, 0, 800, 600, 0, 200, 400)", []).unwrap();
+        assert_eq!(db.load_with_session().unwrap().session, SessionSnapshot::Damaged);
+
+        let location = Location::root().join(&EntryName::new("restored").unwrap());
+        let replacement = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout: WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 } };
+        db.save_session(&replacement).unwrap();
+        assert_eq!(db.load_with_session().unwrap().session, SessionSnapshot::Saved(replacement));
     }
     #[test]
     fn favorites_round_trip_in_order() {
@@ -643,6 +668,16 @@ mod tests {
         drop(connection);
         let db = SettingsDatabase::open(&path).unwrap();
         assert_eq!(db.load().unwrap().bindings.len(), ActionId::ALL.len());
+    }
+    #[test]
+    fn version_three_migration_starts_with_no_session_and_default_startup_notice_preference() {
+        let (_directory, path) = legacy_database(3, "");
+        let database = SettingsDatabase::open(&path).unwrap();
+        let loaded = database.load_with_session().unwrap();
+        assert_eq!(loaded.session, SessionSnapshot::Absent);
+        assert!(!loaded.snapshot.hide_notices_at_startup);
+        let version: i64 = database.connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
     }
     #[test]
     fn newer_schema_and_failed_open_are_reported_without_reset() {
@@ -762,6 +797,16 @@ mod tests {
         let results = worker.shutdown(Some((9, snapshot.clone())), Duration::from_secs(10));
         assert!(results.iter().any(|result| matches!(result, SettingsResult::Saved { revision: 9 })));
         assert_eq!(stored_sorts(&path), snapshot.folder_sorts);
+    }
+    #[test]
+    fn shutdown_flushes_a_session_when_no_settings_snapshot_is_dirty() {
+        let (_directory, path) = temp_database();
+        let worker = SettingsWorker::start(path.clone()).unwrap();
+        let location = Location::root().join(&EntryName::new("saved").unwrap());
+        let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout: WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 } };
+        let results = worker.shutdown_with_session(None, Some((12, session.clone())), Duration::from_secs(10));
+        assert!(results.iter().any(|result| matches!(result, SettingsResult::SessionSaved { revision: 12 })));
+        assert_eq!(SettingsDatabase::open(&path).unwrap().load_with_session().unwrap().session, SessionSnapshot::Saved(session));
     }
     /// The action catalogue before schema version 3 added the tab actions.
     const LEGACY_ACTIONS: [&str; 13] = ["FocusOtherBrowser", "NavigateParent", "CloseWindow", "QuitApplication", "NewFolder", "SortByNameAscending", "SortByNameDescending", "SortByTypeAscending", "SortByTypeDescending", "SortByDateAscending", "SortByDateDescending", "SortBySizeAscending", "SortBySizeDescending"];

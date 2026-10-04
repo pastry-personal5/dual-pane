@@ -6,11 +6,12 @@ This document is the active source of truth for committed product behavior, safe
 
 ## Included product scope
 
-- One workspace window with two side-by-side Browsers, independent current locations, and one active Browser. Notices and operation UI may use auxiliary windows; there is no second workspace window.
+- One workspace window with two side-by-side Browsers, independent current locations, and one active Browser. Notices, operation UI, and the system Quick Look Panel may use auxiliary windows; there is no second workspace window.
 - Tabs in each Browser, including tab history and an active tab.
 - One level of Favorite Groups containing Favorite Items in the Sidebar. People can create, rename, reorder, move, and delete them; their hierarchy and order remain in memory and across relaunches.
 - Copy and move between Browsers; rename; create directory; move to Trash; and permanent deletion.
 - Opening a regular file or a macOS package, such as an application bundle, with its default application.
+- Previewing a Folder Pane item with native macOS Quick Look.
 - Restoring each Browser's open tabs, their order, active tab, locations, and active Browser, and the workspace window's frame, zoomed or full-screen state, and Sidebar Splitter and Browser Divider positions, when the application relaunches. Folder sort choices are restored from location-shared memory; text filtering is outside Phase 3 behavior and session state.
 - Watching open tab locations and automatically refreshing Folder Items, including inactive tabs, while preserving matching selection and cursor state.
 
@@ -55,6 +56,6 @@ The [Favorites policy](#favorites) governs unavailable Favorite Items independen
 
 ## Out of scope
 
-- Built-in viewer or Quick Look UI.
+- Built-in viewer.
 - Archive browsing.
 - Remote file systems, including SFTP and SMB.

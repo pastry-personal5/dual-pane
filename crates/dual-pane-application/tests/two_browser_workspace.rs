@@ -184,7 +184,7 @@ fn launch_probes_every_stored_item_and_only_unavailable_removes_the_matching_tar
     assert_eq!(workspace.favorites().items.len(), 3);
     assert!(workspace.handle(Event::FavoriteTargetProbed { item_id: 5, target: location("kept"), outcome: FavoriteProbeOutcome::Available }.into()).outputs.is_empty());
     let failed = workspace.handle(Event::FavoriteTargetProbed { item_id: 6, target: location("unreadable"), outcome: FavoriteProbeOutcome::Failed }.into());
-    assert!(matches!(failed.outputs.as_slice(), [Output::NoticeAdded { notice: Notice { kind: NoticeKind::FavoriteProbeFailed { name, .. }, offers_reset: false, .. }, open: false }] if name == "Unreadable"));
+    assert!(matches!(failed.outputs.as_slice(), [Output::NoticeAdded { notice: Notice { kind: NoticeKind::FavoriteProbeFailed { name, .. }, offers_reset: false, .. }, open: true }] if name == "Unreadable"));
     assert_eq!(workspace.favorites().items.len(), 3);
 
     // A probe answers once; only the first answer for an Item counts.
@@ -192,7 +192,7 @@ fn launch_probes_every_stored_item_and_only_unavailable_removes_the_matching_tar
     let removed = workspace.handle(Event::FavoriteTargetProbed { item_id: 4, target: old.clone(), outcome: FavoriteProbeOutcome::Unavailable }.into());
     assert!(workspace.favorites().items.is_empty());
     assert!(removed.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
-    assert!(removed.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice: Notice { kind: NoticeKind::FavoriteRemoved { name, target }, .. }, open: false } if name == "Old" && *target == old)));
+    assert!(removed.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice: Notice { kind: NoticeKind::FavoriteRemoved { name, target }, .. }, open: true } if name == "Old" && *target == old)));
     assert_eq!(workspace.handle(Event::FavoriteTargetProbed { item_id: 4, target: old, outcome: FavoriteProbeOutcome::Unavailable }.into()), Default::default());
 }
 
@@ -590,4 +590,46 @@ fn restoration_discards_only_conclusive_first_read_failures() {
     let discarded = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token: retry_token, kind: dual_pane_domain::ListingErrorKind::PermissionDenied }.into());
     assert!(discarded.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if matches!(notice.kind, NoticeKind::TabDiscarded { ref location, reason: dual_pane_domain::ListingErrorKind::PermissionDenied } if *location == left))));
     assert!(discarded.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { browser: BrowserSide::Left, location: folder, .. } if *folder == location("home"))));
+}
+
+#[test]
+fn restoration_dispatches_active_tabs_before_remaining_tabs_in_strip_order() {
+    let location = |name| location(name);
+    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 };
+    let saved = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("left-first") }, TabSnapshot { location: location("left-active") }], active_tab: Some(1) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("right-active") }, TabSnapshot { location: location("right-second") }], active_tab: Some(0) }, active_browser: BrowserSide::Right, layout };
+    let mut workspace = Workspace::with_home(location("home"));
+    let restored = workspace.handle(Event::SettingsLoadedWithSession { snapshot: SettingsSnapshot::default(), session: SessionSnapshot::Saved(saved) }.into());
+    let order = restored
+        .work
+        .iter()
+        .filter_map(|work| match work {
+            WorkRequest::ReadDirectory { location, .. } => Some(location.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec![location("right-active"), location("left-active"), location("left-first"), location("right-second")]);
+}
+
+#[test]
+fn a_late_settings_answer_after_timeout_never_restores_or_saves_the_prior_session() {
+    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 };
+    let saved = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("saved-left") }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("saved-right") }], active_tab: Some(0) }, active_browser: BrowserSide::Right, layout };
+    let mut workspace = Workspace::with_home(location("home"));
+    let timed_out = workspace.handle(Event::SettingsLoadTimedOut.into());
+    assert!(timed_out.outputs.iter().any(|output| matches!(output, Output::SessionRestored { layout: None, .. })));
+    let late = workspace.handle(Event::SettingsLoadedWithSession { snapshot: SettingsSnapshot::default(), session: SessionSnapshot::Saved(saved) }.into());
+    assert!(!late.outputs.iter().any(|output| matches!(output, Output::SessionRestored { .. })));
+    assert_eq!(workspace.active_browser(), BrowserSide::Left);
+    assert_eq!(workspace.location(BrowserSide::Left), None, "the Home fallback is still loading");
+    assert!(workspace.final_session_save().is_none());
+}
+
+#[test]
+fn first_settings_answer_saves_a_layout_reported_while_loading() {
+    let layout = WindowLayout { frame: WindowFrame { x: 40, y: 50, width: 900, height: 700 }, state: WindowState::Normal, sidebar_splitter: 240, browser_splitter: 430 };
+    let mut workspace = Workspace::with_home(location("home"));
+    assert!(workspace.handle(Command::UpdateWindowLayout { layout }.into()).work.is_empty());
+
+    let loaded = workspace.handle(Event::SettingsLoadedWithSession { snapshot: SettingsSnapshot::default(), session: SessionSnapshot::Absent }.into());
+    assert!(matches!(loaded.work.as_slice(), work if work.iter().any(|request| matches!(request, WorkRequest::SaveSession { session, .. } if session.layout == layout))));
 }

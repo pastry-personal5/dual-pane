@@ -43,6 +43,10 @@ pub struct WorkspaceChrome {
     pub favorites_ready: bool,
     /// The effective shortcut of every catalogued action.
     pub bindings: Vec<ActionBinding>,
+    /// The persisted choice that suppresses routine launch Notices.
+    pub hide_notices_at_startup: bool,
+    /// False while the initial settings read could still replace the choice.
+    pub notices_startup_ready: bool,
     /// Current-session Notices, oldest first.
     pub notices: Arc<[Notice]>,
 }

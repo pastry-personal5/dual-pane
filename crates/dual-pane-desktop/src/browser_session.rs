@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, EditorOutcome, FavoritesEvent, InputController, OperationsPresenter, OperationsViewModel, UNREPRESENTABLE_NAME_TEXT, UiEvent, WorkspacePresenter, WorkspaceViewModel, name_rejection_text};
-use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteRejection, Input, Output, SettingsFailure, WorkRequest, Workspace};
+use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteRejection, Input, Output, SettingsFailure, WindowLayout, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection};
 
 use crate::native_location::{location_from_path, path_from_location};
@@ -58,6 +58,9 @@ pub struct WorkspaceSession<R = Runtime> {
     buffered_events: VecDeque<dual_pane_application::Event>,
     runner_more_pending: bool,
     opener: Opener,
+    /// The latest native layout request emitted by the application. A nested
+    /// option distinguishes no new output from a request for default layout.
+    layout_request: Option<Option<WindowLayout>>,
 }
 
 impl<R: WorkRunner> WorkspaceSession<R> {
@@ -76,7 +79,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             worker.submit(SettingsJob::Load);
         }
         let missing_worker = settings_worker.is_none();
-        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))) };
+        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), layout_request: None };
         session.apply_chrome();
         if missing_worker {
             // Unit-test sessions intentionally use the legacy no-store event
@@ -136,6 +139,11 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         while let Some(input) = inputs.pop_front() {
             let transition = self.workspace.handle(input);
             for output in &transition.outputs {
+                match output {
+                    Output::SessionRestored { layout, .. } => self.layout_request = Some(*layout),
+                    Output::LayoutReset => self.layout_request = Some(None),
+                    _ => {}
+                }
                 // Opening is a GUI-thread request; a refusal returns as an event.
                 if let Output::OpenItem { item } = output
                     && !(self.opener)(item)
@@ -168,6 +176,11 @@ impl<R: WorkRunner> WorkspaceSession<R> {
 
     pub fn operations_view(&self) -> &OperationsViewModel {
         self.operations.view()
+    }
+
+    /// Returns one pending layout request for the native shell.
+    pub fn take_layout_request(&mut self) -> Option<Option<WindowLayout>> {
+        self.layout_request.take()
     }
 
     /// How long until the Operation Panels next need a tick.
@@ -570,10 +583,10 @@ mod tests {
         let file = |name: &str| Entry::new(EntryName::new(name).unwrap(), EntryKind::File);
         session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![file("opens.txt"), file("refused.txt")]), changes: None });
         session.submit_ui(BrowserSide::Left, UiEvent::ActivateRow { row: 0 });
-        assert_eq!(session.workspace_view().open_requests(), 0);
+        assert_eq!(session.workspace_view().open_requests(), 1, "the startup storage failure opens Notices while the default preference permits it");
         session.submit_ui(BrowserSide::Left, UiEvent::ActivateRow { row: 1 });
         assert_eq!(*opened.lock().unwrap(), vec![path("items").join(&EntryName::new("opens.txt").unwrap()), path("items").join(&EntryName::new("refused.txt").unwrap())]);
-        assert_eq!(session.workspace_view().open_requests(), 1, "a refused open shows Notices");
+        assert_eq!(session.workspace_view().open_requests(), 2, "a refused open keeps its normal Notices behavior after the startup failure");
         assert!(session.workspace_view().notices().iter().any(|notice| notice.text == "Couldn’t open “/items/refused.txt”."));
     }
 
@@ -811,7 +824,7 @@ mod tests {
             let notices = session.workspace_view().notices();
             assert_eq!(notices.len(), 1);
             assert!(!notices[0].offers_reset, "with no settings worker there is nothing to reset");
-            assert_eq!(session.workspace_view().open_requests(), 0);
+            assert_eq!(session.workspace_view().open_requests(), 1, "the startup storage failure opens Notices while the default preference permits it");
         }
 
         /// A stored database damaged so that loading it fails as corrupt.

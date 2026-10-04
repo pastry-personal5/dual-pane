@@ -4,6 +4,31 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-04 — P3-M11 native PNG failure diagnosis
+
+- A disposable native PNG reproduction found the workspace was key and its first-responder chain included the controller, but `QLPreviewPanel.currentController` was nil while the panel was hidden. The panel acquired the controller and data source when shown. Ownership is now verified after presentation, fixing the false "couldn't open" failure.
+- The native preview path is passed as bytes, with an explicit directory flag, so a lossy display string cannot target the wrong file. The 512 ms hold timer counts panel-presentation time from the initial key press. The facade also verifies ownership before changing or dismissing the shared panel.
+- The controller remains inserted after the workspace window's current first responder, avoiding assumptions about Qt's native-view chain. The remaining native human check is outstanding.
+
+## 2026-10-04 — P3-M11 automated implementation
+
+- Added the desktop-only Objective-C++ Quick Look facade, dynamically linked through `QuickLookUI.framework`. Plain Space samples only the current Folder Items cursor path; the 512 ms lifecycle uses the panel screen's visible frame, a local AppKit key-up monitor, and safe responder-chain teardown.
+- The new `QuickLookGesture` seam is driven by a fake panel service in the desktop test suite. It covers filtering, cursor handoff, retained standard panels, maximization fallback, held dismissal, interruption, controller refusal, and the transient Status Bar failure callback. The native human check remains outstanding.
+
+## 2026-10-04 — P3-M11 hold threshold
+
+- **Owner decision:** P3-M11's held-Space threshold is 512 ms, replacing the initial 128 ms plan. A release before 512 ms leaves the standard Quick Look Panel open; a hold through 512 ms maximizes it and release dismisses it.
+
+## 2026-10-04 — P3-M11 planning
+
+- Added P3-M11 before P3-M10 at the owner's direction. It delivers native macOS Quick Look for the Folder Pane cursor item, and is deliberately a desktop-only feature with no workspace state, persistence, or watcher work.
+- **Owner decisions:** plain Space previews the cursor irrespective of selection; files, folders, packages, and links are eligible; a release before 128 ms leaves the standard Quick Look Panel open; holding for 128 ms maximizes it to the visible display frame; releasing the held key dismisses it. System Quick Look controls own focus, modified Space is ignored, presentation failure uses the Browser Status Bar, and interruption dismisses the held panel.
+- The owner approved dynamically linking Apple's `QuickLookUI.framework` through an Objective-C++ desktop adapter. The milestone plan uses a responder-chain controller and a native local key-up monitor, because the panel takes focus before the original Space key is released.
+
+## 2026-10-04 — P3-M9 Done
+
+- The owner completed the deferred native human check and reported PASS. Every P3-M9 checklist item is checked; `make check` passed, including the required Rust and C++ format, lint, and test gates.
+
 ## 2026-10-03 — P3-M9 saved session integrity
 
 - **Owner decision:** a saved session with tabs but no window-layout row is damaged as a whole. It opens the Home fallback and records Session Not Restored; it does not restore the tabs at the default layout. A database with no session rows remains a valid no-session case.

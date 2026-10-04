@@ -11,10 +11,13 @@ fn main() {
             .file("src/operations_bridge.rs")
             .cpp_file("cpp/src/desktop_window.cpp")
             .cpp_file("cpp/src/native_shell.cpp")
+            .cpp_file("cpp/src/quick_look_preview.mm")
             .qt_module("Widgets")
             .cc_builder(|builder| {
                 builder.include("cpp/include");
+                builder.flag_if_supported("-fobjc-arc");
             })
             .build();
     }
+    println!("cargo:rustc-link-lib=framework=QuickLookUI");
 }

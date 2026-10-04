@@ -2,9 +2,11 @@
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
 #include "dual-pane-desktop/src/operations_bridge.cxxqt.h"
 #include "dual-pane-desktop/src/workspace_bridge.cxxqt.h"
+#include "dual_pane_desktop/quick_look_preview.hpp"
 #include "dual_pane_desktop/settings_glyph.hpp"
 
 #include <QtCore/QCache>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
@@ -15,6 +17,7 @@
 #include <QtCore/QPersistentModelIndex>
 #include <QtCore/QPointer>
 #include <QtCore/QSet>
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QStorageInfo>
 #include <QtCore/QString>
 #include <QtCore/QThread>
@@ -28,6 +31,7 @@
 #include <QtGui/QDrag>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QFontDatabase>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
@@ -36,6 +40,7 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPen>
 #include <QtGui/QPixmap>
+#include <QtGui/QScreen>
 #include <QtGui/QShortcut>
 #include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QAbstractItemView>
@@ -81,6 +86,29 @@
 namespace dual_pane_desktop {
 namespace {
 constexpr int initial_window_width = 1100, initial_window_height = 680;
+
+/// Moves a saved logical-point frame fully onto the display it overlaps most,
+/// shrinking only when that display cannot contain it.
+auto fit_saved_frame(QRect frame) -> QRect {
+    QScreen *screen = QGuiApplication::primaryScreen();
+    qint64 best_overlap = 0;
+    for (QScreen *candidate : QGuiApplication::screens()) {
+        const QRect overlap = frame.intersected(candidate->availableGeometry());
+        const qint64 area = static_cast<qint64>(overlap.width()) * overlap.height();
+        if (area > best_overlap) {
+            best_overlap = area;
+            screen = candidate;
+        }
+    }
+    if (screen == nullptr)
+        return frame;
+    const QRect available = screen->availableGeometry();
+    frame.setWidth(qMin(frame.width(), available.width()));
+    frame.setHeight(qMin(frame.height(), available.height()));
+    frame.moveLeft(qBound(available.left(), frame.left(), available.right() - frame.width() + 1));
+    frame.moveTop(qBound(available.top(), frame.top(), available.bottom() - frame.height() + 1));
+    return frame;
+}
 constexpr int splitter_width = 3;
 constexpr int narrow_browser_width = 280;
 constexpr int column_count = 6;
@@ -88,6 +116,8 @@ constexpr int icon_column_width = 18;
 constexpr int relative_date_column_width = 44;
 constexpr int type_column_width = 44;
 constexpr int path_role = Qt::UserRole;
+constexpr int native_path_role = Qt::UserRole + 2;
+constexpr int native_directory_role = Qt::UserRole + 3;
 constexpr int relative_age_role = Qt::UserRole + 1;
 constexpr int max_pending_icons = 128;
 constexpr int icon_cache_size = 1024;
@@ -99,6 +129,7 @@ constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_ne
 // Shortcut scope codes of the workspace bridge.
 constexpr int scope_folder_items_list = 0, scope_application = 2;
 constexpr int status_reason_milliseconds = 3000;
+constexpr int quick_look_hold_milliseconds = 512;
 constexpr auto window_color = "#1B1D21", surface_color = "#23262B", text_color = "#ECEFF3", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#1E4668", divider_hover_border_color = "#737A84", error_color = "#E5737A";
 
 // `toolbarState` flags from the Folder Items model.
@@ -406,7 +437,12 @@ constexpr std::array<int, column_count - 1> hide_order = {5, 4, 3, 2, 0};
 
 class FolderItemsList final : public QTreeView {
   public:
-    FolderItemsList(FolderItemsListModel *model, IconLoader *loader) : model_(model), icons_(new ItemIconDelegate(loader, this)) {
+    FolderItemsList(FolderItemsListModel *model, IconLoader *loader) : model_(model), icons_(new ItemIconDelegate(loader, this)), quick_look_(std::make_unique<QuickLookPreviewController>(this)), quick_look_gesture_(quick_look_.get(), [this] {
+                                                                                                                                                                                                                 if (quick_look_failure_handler_)
+                                                                                                                                                                                                                     quick_look_failure_handler_(); }, [this](QuickLookGesture::Release release) {
+                                                                                                                                                                                                                 stop_quick_look_timer();
+                                                                                                                                                                                                                 if (release == QuickLookGesture::Release::Dismiss)
+                                                                                                                                                                                                                     quick_look_->dismiss(); }, [this] { stop_quick_look_timer(); }) {
         setModel(model_);
         setItemDelegate(icons_);
         auto folder_font = font();
@@ -449,6 +485,7 @@ class FolderItemsList final : public QTreeView {
     /// Shows the Folder Items Context Menu at a global point for `row`, or
     /// for empty space when `row` is -1.
     void setMenuHandler(std::function<void(const QPoint &, int)> handler) { menu_handler_ = std::move(handler); }
+    void setQuickLookFailureHandler(std::function<void()> handler) { quick_look_failure_handler_ = std::move(handler); }
 
     /// Moves keyboard focus here, which activates this Browser.
     void focusList() {
@@ -497,6 +534,11 @@ class FolderItemsList final : public QTreeView {
         event->accept();
         const auto modifiers = user_modifiers(event->modifiers());
         const auto key = event->key();
+        if (key == Qt::Key_Space) {
+            if (modifiers == Qt::NoModifier && !event->isAutoRepeat())
+                start_quick_look();
+            return;
+        }
         if (modifiers == Qt::ControlModifier && key == Qt::Key_A) {
             model_->selectAll();
             return;
@@ -520,6 +562,42 @@ class FolderItemsList final : public QTreeView {
     }
 
   private:
+    void start_quick_look() {
+        const int cursor = model_->getCursorRow();
+        if (cursor < 0)
+            return;
+        const auto index = model_->index(cursor, 0);
+        const QuickLookItem item{index.data(native_path_role).toByteArray(), index.data(native_directory_role).toBool()};
+        QElapsedTimer elapsed;
+        elapsed.start();
+        if (quick_look_gesture_.press(item, true, false) && quick_look_gesture_.held()) {
+            const auto generation = quick_look_gesture_.generation();
+            const auto remaining = qMax<qint64>(0, quick_look_hold_milliseconds - elapsed.elapsed());
+            auto *timer = new QTimer(this);
+            timer->setSingleShot(true);
+            timer->setTimerType(Qt::PreciseTimer);
+            connect(timer, &QTimer::timeout, this, [this, timer, generation] {
+                if (quick_look_timer_ == timer)
+                    quick_look_timer_ = nullptr;
+                timer->deleteLater();
+                maximize_held_preview(generation);
+            });
+            quick_look_timer_ = timer;
+            timer->start(static_cast<int>(remaining));
+        }
+    }
+    void stop_quick_look_timer() {
+        if (quick_look_timer_ != nullptr) {
+            quick_look_timer_->stop();
+            quick_look_timer_->deleteLater();
+            quick_look_timer_ = nullptr;
+        }
+    }
+    void maximize_held_preview(std::uint64_t generation) {
+        // A missing screen deliberately retains the ordinary system panel;
+        // release still dismisses the held gesture.
+        (void)quick_look_gesture_.timer_expired(generation);
+    }
     auto eventFilter(QObject *watched, QEvent *event) -> bool override {
         if ((watched == verticalScrollBar() || watched == horizontalScrollBar()) && event->type() == QEvent::MouseButtonPress) {
             const auto *mouse_event = dynamic_cast<QMouseEvent *>(event);
@@ -588,6 +666,10 @@ class FolderItemsList final : public QTreeView {
     ItemIconDelegate *icons_;
     std::function<void(const std::array<bool, column_count> &)> columns_handler_;
     std::function<void(const QPoint &, int)> menu_handler_;
+    std::function<void()> quick_look_failure_handler_;
+    std::unique_ptr<QuickLookPreviewController> quick_look_;
+    QuickLookGesture quick_look_gesture_;
+    QPointer<QTimer> quick_look_timer_;
     bool restoring_ = false;
 };
 
@@ -969,7 +1051,17 @@ class FolderPane final : public QFrame {
         QObject::connect(model, &FolderItemsListModel::summaryCountTextChanged, this, [summary_count, model] { summary_count->setText(model->getSummaryCountText()); });
         QObject::connect(model, &FolderItemsListModel::summarySelectedTextChanged, this, [summary_selected, model] { summary_selected->setText(model->getSummarySelectedText()); });
         QObject::connect(model, &FolderItemsListModel::summarySizeTextChanged, this, [summary_size, model] { summary_size->setText(model->getSummarySizeText()); });
-        QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, [status, model] { status->setText(model->getStatusText()); });
+        auto *quick_look_failure_timer = new QTimer(this);
+        quick_look_failure_timer->setSingleShot(true);
+        QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, [status, model, quick_look_failure_timer] {
+            if (!quick_look_failure_timer->isActive())
+                status->setText(model->getStatusText());
+        });
+        QObject::connect(quick_look_failure_timer, &QTimer::timeout, this, [status, model] { status->setText(model->getStatusText()); });
+        view_->setQuickLookFailureHandler([status, quick_look_failure_timer] {
+            status->setText(QStringLiteral("Quick Look couldn’t open this item."));
+            quick_look_failure_timer->start(status_reason_milliseconds);
+        });
         const auto update_toolbar = [back, forward, up, model] {
             const int state = model->getToolbarState();
             back->setEnabled(has_flag(state, toolbar_back));
@@ -2145,9 +2237,21 @@ class DeleteConfirmations final : public QObject {
 class WorkspaceWindow final : public QMainWindow {
   public:
     void setCloseHandler(std::function<void(QCloseEvent *)> handler) { close_ = std::move(handler); }
+    void setBeforeCloseHandler(std::function<void()> handler) { before_close_ = std::move(handler); }
+    /// The enclosing desktop code debounces these notifications before it
+    /// reports a layout snapshot to Rust.
+    void setLayoutChangeHandler(std::function<void()> handler) { layout_changed_ = std::move(handler); }
 
   protected:
+    bool event(QEvent *event) override {
+        const auto type = event->type();
+        if (layout_changed_ && (type == QEvent::Move || type == QEvent::Resize || type == QEvent::WindowStateChange))
+            layout_changed_();
+        return QMainWindow::event(event);
+    }
     void closeEvent(QCloseEvent *event) override {
+        if (before_close_)
+            before_close_();
         if (close_)
             close_(event);
         else
@@ -2156,13 +2260,47 @@ class WorkspaceWindow final : public QMainWindow {
 
   private:
     std::function<void(QCloseEvent *)> close_;
+    std::function<void()> before_close_;
+    std::function<void()> layout_changed_;
+};
+
+/// A deliberately small, non-progress-bearing launch surface. The workspace
+/// stays hidden until the settings result decides which layout to show.
+class WaitingWindow final : public QWidget {
+  public:
+    explicit WaitingWindow(WorkspaceWindow *workspace) : QWidget(nullptr, Qt::Tool), workspace_(workspace) {
+        setObjectName(QStringLiteral("waitingWindow"));
+        setWindowTitle(QStringLiteral("Dual Pane"));
+        setAccessibleName(QStringLiteral("Loading Workspace"));
+        setWindowModality(Qt::ApplicationModal);
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(32, 28, 32, 28);
+        auto *title = new QLabel(QStringLiteral("Loading workspace"), this);
+        title->setAccessibleName(QStringLiteral("Loading workspace"));
+        QFont font = title->font();
+        font.setPointSize(font.pointSize() + 2);
+        font.setBold(true);
+        title->setFont(font);
+        auto *status = new QLabel(QStringLiteral("Preparing your saved workspace…"), this);
+        status->setAccessibleName(QStringLiteral("Loading workspace status"));
+        auto *quit = new QPushButton(QStringLiteral("Quit"), this);
+        QObject::connect(quit, &QPushButton::clicked, this, [this] { workspace_->close(); });
+        layout->addWidget(title);
+        layout->addWidget(status);
+        layout->addSpacing(12);
+        layout->addWidget(quit, 0, Qt::AlignRight);
+        resize(340, 160);
+    }
+
+  private:
+    WorkspaceWindow *workspace_;
 };
 
 /// The auxiliary Notices window. It never blocks browsing; storage errors
 /// offer Reset Settings behind an explicit confirmation.
 class NoticesWindow final : public QWidget {
   public:
-    NoticesWindow(WorkspaceBridge *bridge, QWidget *owner) : QWidget(owner, Qt::Window), bridge_(bridge), list_(new QWidget()) {
+    NoticesWindow(WorkspaceBridge *bridge, QWidget *owner) : QWidget(owner, Qt::Window), bridge_(bridge), list_(new QWidget()), startup_checkbox_(new QCheckBox(QStringLiteral("Don’t show notices at startup"), this)) {
         setObjectName(QStringLiteral("notices"));
         setWindowTitle(QStringLiteral("Notices"));
         setAccessibleName(QStringLiteral("Notices"));
@@ -2174,6 +2312,17 @@ class NoticesWindow final : public QWidget {
         new QVBoxLayout(list_);
         scroll->setWidget(list_);
         layout->addWidget(scroll);
+        startup_checkbox_->setObjectName(QStringLiteral("noticesStartupCheckbox"));
+        startup_checkbox_->setAccessibleName(QStringLiteral("Notices Startup Checkbox"));
+        startup_checkbox_->setEnabled(bridge_->getNoticesStartupReady());
+        startup_checkbox_->setChecked(bridge_->getHideNoticesAtStartup());
+        QObject::connect(startup_checkbox_, &QCheckBox::toggled, this, [this](bool checked) { bridge_->changeHideNoticesAtStartup(checked); });
+        QObject::connect(bridge_, &WorkspaceBridge::hideNoticesAtStartupChanged, this, [this] {
+            QSignalBlocker block(startup_checkbox_);
+            startup_checkbox_->setChecked(bridge_->getHideNoticesAtStartup());
+        });
+        QObject::connect(bridge_, &WorkspaceBridge::noticesStartupReadyChanged, this, [this] { startup_checkbox_->setEnabled(bridge_->getNoticesStartupReady()); });
+        layout->addWidget(startup_checkbox_);
         auto *close = new QShortcut(QKeySequence::Close, this);
         close->setContext(Qt::WindowShortcut);
         QObject::connect(close, &QShortcut::activated, this, &QWidget::close);
@@ -2215,7 +2364,7 @@ class NoticesWindow final : public QWidget {
     }
     void confirm_reset() {
         auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Reset Settings"), QStringLiteral("Reset Dual Pane’s settings?"), QMessageBox::NoButton, this);
-        box->setInformativeText(QStringLiteral("Your settings and Favorites, including changes made in this session, will be replaced with defaults. The current settings database is kept as a backup."));
+        box->setInformativeText(QStringLiteral("Your settings and Favorites, including changes made in this session, will be replaced with defaults. Open tabs will close and the workspace layout will return to its defaults. The current settings database is kept as a backup."));
         auto *reset = box->addButton(QStringLiteral("Reset"), QMessageBox::DestructiveRole);
         auto *cancel = box->addButton(QMessageBox::Cancel);
         box->setDefaultButton(cancel);
@@ -2231,6 +2380,7 @@ class NoticesWindow final : public QWidget {
 
     WorkspaceBridge *bridge_;
     QWidget *list_;
+    QCheckBox *startup_checkbox_;
 };
 
 class MainToolbar final : public QWidget {
@@ -2485,6 +2635,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     char *argv[] = {name, nullptr};
     QApplication app(argc, argv);
     WorkspaceWindow window;
+    auto *waiting = new WaitingWindow(&window);
     FolderItemsListModel left_model, right_model;
     right_model.setRightBrowser();
     WorkspaceBridge bridge;
@@ -2583,6 +2734,74 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     window.setWindowTitle(QStringLiteral("Dual Pane"));
     window.resize(initial_window_width, initial_window_height);
     window.setStyleSheet(style_sheet());
+    QTimer layout_report;
+    layout_report.setSingleShot(true);
+    QTimer startup_period_timer;
+    startup_period_timer.setSingleShot(true);
+    QTimer waiting_delay;
+    waiting_delay.setSingleShot(true);
+    QTimer settings_load_timeout;
+    settings_load_timeout.setSingleShot(true);
+    const auto report_layout = [&bridge, &window, &standard_layout, split] {
+        const auto normal = (window.isMaximized() || window.isFullScreen()) ? window.normalGeometry() : window.geometry();
+        int state = 0;
+        if (window.isFullScreen())
+            state = 2;
+        else if (window.isMaximized())
+            state = 1;
+        const auto sidebar_sizes = standard_layout.sizes();
+        const auto browser_sizes = split->sizes();
+        const auto packed_origin = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(normal.x())) << static_cast<unsigned>(32)) | static_cast<std::uint64_t>(static_cast<std::uint32_t>(normal.y()));
+        const auto origin = static_cast<qint64>(packed_origin);
+        bridge.updateWindowLayout(origin, normal.width(), normal.height(), state, sidebar_sizes.value(0), browser_sizes.value(0));
+    };
+    window.setBeforeCloseHandler(report_layout);
+    QObject::connect(&layout_report, &QTimer::timeout, &window, report_layout);
+    window.setLayoutChangeHandler([&layout_report] { layout_report.start(120); });
+    QObject::connect(&standard_layout, &QSplitter::splitterMoved, &window, [&layout_report](int, int) { layout_report.start(120); });
+    QObject::connect(split, &QSplitter::splitterMoved, &window, [&layout_report](int, int) { layout_report.start(120); });
+    bool workspace_revealed = false;
+    QObject::connect(&waiting_delay, &QTimer::timeout, &window, [&window, waiting, &workspace_revealed] {
+        if (!workspace_revealed) {
+            const auto available = window.screen()->availableGeometry();
+            waiting->move(available.center() - waiting->rect().center());
+            waiting->show();
+        }
+    });
+    QObject::connect(&settings_load_timeout, &QTimer::timeout, &window, [&bridge, &workspace_revealed] {
+        if (!workspace_revealed)
+            bridge.settingsLoadTimedOut();
+    });
+    QObject::connect(&startup_period_timer, &QTimer::timeout, &window, [&bridge] { bridge.startupPeriodElapsed(); });
+    QObject::connect(&bridge, &WorkspaceBridge::layoutRevisionChanged, &window, [&bridge, &window, &standard_layout, split, browsers, waiting, &waiting_delay, &settings_load_timeout, &workspace_revealed, &startup_period_timer, report_layout] {
+        if (!bridge.getSavedLayoutAvailable()) {
+            window.showNormal();
+            window.resize(initial_window_width, initial_window_height);
+            const auto available = window.screen()->availableGeometry();
+            window.move(available.center() - window.rect().center());
+        } else {
+            const QRect frame = fit_saved_frame(QRect(bridge.getSavedLayoutX(), bridge.getSavedLayoutY(), bridge.getSavedLayoutWidth(), bridge.getSavedLayoutHeight()));
+            window.move(frame.topLeft());
+            window.resize(frame.size());
+            standard_layout.setSizes({bridge.getSavedSidebarSplitter(), qMax(0, window.width() - bridge.getSavedSidebarSplitter())});
+            split->setSizes({bridge.getSavedBrowserSplitter(), qMax(0, split->width() - bridge.getSavedBrowserSplitter())});
+            if (bridge.getSavedLayoutState() == 1)
+                window.showMaximized();
+            else if (bridge.getSavedLayoutState() == 2)
+                window.showFullScreen();
+            else
+                window.showNormal();
+        }
+        if (!workspace_revealed) {
+            workspace_revealed = true;
+            waiting_delay.stop();
+            settings_load_timeout.stop();
+            waiting->close();
+            browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->view()->focusList();
+            QTimer::singleShot(0, &window, report_layout);
+            startup_period_timer.start(5000);
+        }
+    });
     BrowserHighlightController browser_highlighter(&window, {left_browser->folder(), right_browser->folder()}, {left_browser->view(), right_browser->view()});
     QObject::connect(&bridge, &WorkspaceBridge::activeBrowserChanged, &window, [&bridge, &browser_highlighter] { browser_highlighter.activate(bridge.getActiveBrowser()); });
     QObject::connect(&bridge, &WorkspaceBridge::startupFailureChanged, &window, [&bridge, browsers] {
@@ -2645,6 +2864,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         state.scheduler = &scheduler;
     }
     bridge.start(std::move(startup));
+    waiting_delay.start(150);
+    settings_load_timeout.start(10000);
     shortcuts.rebind();
     // The root volume's name labels root tabs; reading it may touch the
     // disk, so it happens off the GUI thread.
@@ -2653,8 +2874,6 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         QMetaObject::invokeMethod(&bridge, [&bridge, name] { bridge.setRootVolumeName(name); }, Qt::QueuedConnection);
     }));
     volume_reader->start(QThread::LowPriority);
-    window.show();
-    left_browser->view()->setFocus(Qt::OtherFocusReason);
     const auto result = QApplication::exec();
     // The lambdas above capture stack objects that are destroyed in reverse
     // order below; focus changes during that teardown must not reach them.

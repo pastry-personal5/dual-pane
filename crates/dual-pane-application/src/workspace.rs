@@ -71,6 +71,9 @@ pub struct Workspace {
     launch_completed: bool,
     session_write_protected: bool,
     session_revision: u64,
+    startup_period: bool,
+    startup_notices_opened: bool,
+    startup_notice_pending: bool,
 }
 #[derive(Debug, Clone)]
 struct PendingSelection {
@@ -130,7 +133,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0 }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
@@ -144,6 +147,7 @@ impl Workspace {
                 transition.work.push(WorkRequest::SaveSession { revision: self.session_revision, session });
             }
         }
+        transition.append(self.flush_startup_notice_open());
         transition
     }
     fn command(&mut self, command: Command) -> Transition {
@@ -235,7 +239,10 @@ impl Workspace {
             Event::SettingsLoadFailed { failure } => self.settings_load_failed_legacy(failure),
             Event::SettingsLoadFailedAtLaunch { failure } => self.settings_load_failed(failure),
             Event::SettingsLoadTimedOut => self.settings_load_timed_out(),
-            Event::StartupPeriodElapsed => Transition::default(),
+            Event::StartupPeriodElapsed => {
+                self.startup_period = false;
+                Transition::default()
+            }
             Event::SettingsReset { backup } => self.settings_reset(backup),
             Event::SettingsResetFailed { failure } => self.settings_reset_failed(failure),
         }
@@ -391,6 +398,7 @@ impl Workspace {
         {
             transition.append(self.operation_finished(id, &before, outcome));
         }
+        transition.append(self.flush_startup_notice_open());
         transition
     }
     fn operation_output(&self, id: OperationId, effects: Vec<OperationEffect>) -> Transition {
@@ -494,7 +502,7 @@ impl Workspace {
     }
     /// Workspace-wide presentation state.
     pub fn workspace_chrome(&self) -> WorkspaceChrome {
-        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), notices: Arc::clone(&self.notices) }
+        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, notices: Arc::clone(&self.notices) }
     }
     /// The save to flush before the application exits, if loaded settings
     /// have changed since the last confirmed save.
@@ -706,6 +714,15 @@ impl Workspace {
                 SessionSnapshot::Absent => transition.append(self.fallback_home()),
             }
             transition.outputs.push(Output::SessionRestored { active_browser: self.active_browser, layout: self.layout });
+            // Presentation can report its initial layout while settings are
+            // still loading. The completed launch makes that already-known
+            // layout eligible for the first independent session save.
+            if self.layout.is_some() {
+                self.session_revision = self.session_revision.wrapping_add(1);
+                if let Some(session) = self.session_snapshot() {
+                    transition.work.push(WorkRequest::SaveSession { revision: self.session_revision, session });
+                }
+            }
         } else {
             let tabs = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|side| self.browser(side).tabs.iter().map(move |tab| (side, tab.id))).collect::<Vec<_>>();
             for (side, tab) in tabs {
@@ -939,21 +956,43 @@ impl Workspace {
         if storage && self.notices.last().is_some_and(|last| last.kind == kind) {
             return Transition::default();
         }
-        let offers_reset = storage && self.settings_worker;
+        let offers_reset = storage && self.settings_worker && !matches!(kind, NoticeKind::SettingsLoadTimedOut);
         let notice = Notice { id: self.next_notice_id, kind, offers_reset };
         self.next_notice_id += 1;
         let skip = (self.notices.len() + 1).saturating_sub(NOTICE_LIMIT);
         self.notices = self.notices.iter().skip(skip).cloned().chain([notice.clone()]).collect();
         // Failures the person can act on, or should review, open Notices; a
         // success is only recorded.
-        let open = offers_reset
+        let mut open = offers_reset
             || match &notice.kind {
                 NoticeKind::SettingsReset { .. } | NoticeKind::JournalUnavailable | NoticeKind::OpenFailed { .. } => true,
                 NoticeKind::OperationFinished { outcome, .. } => matches!(outcome, OperationOutcome::Partial | OperationOutcome::Failed | OperationOutcome::CleanupUncertain),
                 NoticeKind::TemporariesSwept { failed, .. } => !failed.is_empty(),
                 _ => false,
             };
+        if self.startup_period && is_startup_notice(&notice.kind) {
+            let actionable = offers_reset || matches!(notice.kind, NoticeKind::JournalUnavailable);
+            if self.settings_status == SettingsStatus::Loading && !matches!(notice.kind, NoticeKind::SettingsLoadTimedOut) {
+                self.startup_notice_pending |= !self.startup_notices_opened;
+                open = false;
+            } else {
+                open = if self.settings.hide_notices_at_startup() { actionable } else { !self.startup_notices_opened };
+            }
+            self.startup_notices_opened |= open;
+            if open {
+                self.startup_notice_pending = false;
+            }
+        }
         Transition::output(Output::NoticeAdded { notice, open })
+    }
+    fn flush_startup_notice_open(&mut self) -> Transition {
+        if self.settings_status != SettingsStatus::Loading && self.startup_notice_pending && !self.settings.hide_notices_at_startup() && !self.startup_notices_opened {
+            self.startup_notice_pending = false;
+            self.startup_notices_opened = true;
+            Transition::output(Output::OpenNotices)
+        } else {
+            Transition::default()
+        }
     }
     /// Applies one Favorites edit, reporting why it changed nothing.
     fn favorites_edit(&mut self, edit: FavoriteEdit, apply: impl FnOnce(&mut Self) -> Result<FavoritesRecords, FavoriteRejection>) -> Transition {
@@ -1283,4 +1322,8 @@ fn changes_fit(changes: &[RowChange], old_len: usize, new_len: usize) -> bool {
 /// person's workspace state.
 fn is_unrestorable(kind: ListingErrorKind) -> bool {
     matches!(kind, ListingErrorKind::ItemMissing | ListingErrorKind::NotADirectory | ListingErrorKind::PermissionDenied | ListingErrorKind::PrivacyRestricted | ListingErrorKind::Unknown)
+}
+
+fn is_startup_notice(kind: &NoticeKind) -> bool {
+    matches!(kind, NoticeKind::SettingsLoadFailed { .. } | NoticeKind::SettingsLoadTimedOut | NoticeKind::SessionNotRestored | NoticeKind::TabDiscarded { .. } | NoticeKind::JournalUnavailable | NoticeKind::TemporariesSwept { .. } | NoticeKind::FavoriteRemoved { .. } | NoticeKind::FavoriteProbeFailed { .. })
 }

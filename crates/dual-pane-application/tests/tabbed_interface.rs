@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, NoticeKind, Output, SettingsFailure, SettingsSnapshot, SettingsStatus, Transition, WorkRequest, Workspace};
+use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, NoticeKind, Output, SettingsFailure, SettingsSnapshot, SettingsStatus, Transition, WindowFrame, WindowLayout, WindowState, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, Location, RequestToken, SortDirection, SortField, SortSpec, TabId};
 
 fn name(value: &str) -> EntryName {
@@ -224,6 +224,10 @@ fn a_confirmed_reset_reloads_fresh_settings_and_ignores_older_saves() {
     let done = workspace.handle(Event::SettingsReset { backup: Some(backup.clone()) }.into());
     assert!(done.work.iter().any(|work| matches!(work, WorkRequest::LoadSettings)));
     assert_eq!(done.work.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).count(), 2);
+    assert!(done.outputs.iter().any(|output| matches!(output, Output::LayoutReset)));
+    assert_eq!(workspace.active_browser(), BrowserSide::Left);
+    assert_eq!(workspace.tabs(BrowserSide::Left).len(), 1);
+    assert_eq!(workspace.tabs(BrowserSide::Right).len(), 1);
     assert!(done.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, open: true } if notice.kind == NoticeKind::SettingsReset { backup: Some(backup.clone()) })));
     let reloaded = workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
     assert!(reloaded.work.iter().any(|work| matches!(work, WorkRequest::ProbeScreenshotsFolder { .. })), "a fresh database is seeded again");
@@ -262,8 +266,47 @@ fn a_failed_reset_keeps_the_error_visible_and_restores_the_previous_state() {
 fn without_a_settings_worker_nothing_offers_or_performs_a_reset() {
     let mut workspace = Workspace::new();
     let failed = workspace.handle(Event::SettingsLoadFailed { failure: SettingsFailure::WorkerUnavailable }.into());
-    assert!(failed.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, open: false } if !notice.offers_reset)));
+    assert!(failed.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, open: true } if !notice.offers_reset)));
     assert_eq!(workspace.handle(Command::ResetSettings.into()), Transition::default());
+}
+
+#[test]
+fn notices_startup_preference_waits_for_the_first_settings_answer_and_saves_promptly() {
+    let mut workspace = Workspace::new();
+    assert!(!workspace.workspace_chrome().notices_startup_ready);
+    assert_eq!(workspace.handle(Command::SetHideNoticesAtStartup { hide: true }.into()), Transition::default());
+
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot { hide_notices_at_startup: true, ..SettingsSnapshot::default() } }.into());
+    let chrome = workspace.workspace_chrome();
+    assert!(chrome.notices_startup_ready);
+    assert!(chrome.hide_notices_at_startup);
+
+    let changed = workspace.handle(Command::SetHideNoticesAtStartup { hide: false }.into());
+    assert!(matches!(changed.work.as_slice(), [WorkRequest::SaveSettings { snapshot, .. }] if !snapshot.hide_notices_at_startup));
+}
+
+#[test]
+fn a_startup_notice_waits_for_the_preference_before_opening_notices() {
+    let mut workspace = Workspace::new();
+    let notice = workspace.handle(Event::JournalStatus { available: false }.into());
+    assert!(matches!(notice.outputs.as_slice(), [Output::NoticeAdded { open: false, .. }]));
+
+    let loaded = workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    assert!(loaded.outputs.iter().any(|output| matches!(output, Output::OpenNotices)));
+}
+
+#[test]
+fn session_snapshot_keeps_requested_locations_for_unconfirmed_tabs() {
+    let mut workspace = Workspace::new();
+    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 900, height: 700 }, state: WindowState::Normal, sidebar_splitter: 220, browser_splitter: 440 };
+    workspace.handle(Command::UpdateWindowLayout { layout }.into());
+    workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("left-pending") }.into());
+    workspace.handle(Command::Navigate { browser: BrowserSide::Right, location: location("right-pending") }.into());
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    let snapshot = workspace.session_snapshot().expect("reported layout and both requested folders");
+    assert_eq!(snapshot.left.tabs[0].location, location("left-pending"));
+    assert_eq!(snapshot.right.tabs[0].location, location("right-pending"));
+    assert_eq!(snapshot.layout, layout);
 }
 
 #[test]

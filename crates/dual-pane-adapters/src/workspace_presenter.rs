@@ -17,12 +17,14 @@ pub struct WorkspaceViewModel {
     notices: Vec<NoticeViewModel>,
     notices_revision: u64,
     open_requests: u64,
+    hide_notices_at_startup: bool,
+    notices_startup_ready: bool,
     last_rejection: Option<(FavoriteEdit, FavoriteRejection)>,
 }
 
 impl Default for WorkspaceViewModel {
     fn default() -> Self {
-        Self { active_browser: BrowserSide::Left, groups: Vec::new(), favorites_ready: false, favorites_revision: 0, bindings: Vec::new(), bindings_revision: 0, notices: Vec::new(), notices_revision: 0, open_requests: 0, last_rejection: None }
+        Self { active_browser: BrowserSide::Left, groups: Vec::new(), favorites_ready: false, favorites_revision: 0, bindings: Vec::new(), bindings_revision: 0, notices: Vec::new(), notices_revision: 0, open_requests: 0, hide_notices_at_startup: false, notices_startup_ready: false, last_rejection: None }
     }
 }
 
@@ -84,6 +86,12 @@ impl WorkspaceViewModel {
     pub fn open_requests(&self) -> u64 {
         self.open_requests
     }
+    pub fn hide_notices_at_startup(&self) -> bool {
+        self.hide_notices_at_startup
+    }
+    pub fn notices_startup_ready(&self) -> bool {
+        self.notices_startup_ready
+    }
     /// The most recent rejected Favorites edit.
     pub fn last_rejection(&self) -> Option<(FavoriteEdit, FavoriteRejection)> {
         self.last_rejection
@@ -115,7 +123,7 @@ impl WorkspacePresenter {
 
     pub fn apply(&mut self, output: &Output) {
         match output {
-            Output::NoticeAdded { open: true, .. } => self.view.open_requests = self.view.open_requests.wrapping_add(1),
+            Output::NoticeAdded { open: true, .. } | Output::OpenNotices => self.view.open_requests = self.view.open_requests.wrapping_add(1),
             Output::FavoriteEditRejected { edit, reason } => self.view.last_rejection = Some((*edit, *reason)),
             Output::FavoritesChanged { .. } => self.view.last_rejection = None,
             _ => {}
@@ -143,6 +151,8 @@ impl WorkspacePresenter {
             self.view.bindings.clone_from(&chrome.bindings);
             self.view.bindings_revision = self.view.bindings_revision.wrapping_add(1);
         }
+        self.view.hide_notices_at_startup = chrome.hide_notices_at_startup;
+        self.view.notices_startup_ready = chrome.notices_startup_ready;
         if previous.is_none_or(|previous| !std::sync::Arc::ptr_eq(&previous.notices, &chrome.notices)) {
             self.view.notices = chrome.notices.iter().map(|notice| NoticeViewModel { id: notice.id, text: notice_text(notice), offers_reset: notice.offers_reset, offers_journal_retry: notice.kind == NoticeKind::JournalUnavailable }).collect();
             self.view.notices_revision = self.view.notices_revision.wrapping_add(1);
@@ -210,7 +220,7 @@ mod tests {
     fn texts(kinds: Vec<NoticeKind>) -> Vec<NoticeViewModel> {
         let notices = kinds.into_iter().enumerate().map(|(id, kind)| Notice { id: id as u64, kind, offers_reset: false }).collect::<Arc<[_]>>();
         let mut presenter = WorkspacePresenter::new();
-        presenter.apply_chrome(&WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![], notices });
+        presenter.apply_chrome(&WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![], hide_notices_at_startup: false, notices_startup_ready: true, notices });
         presenter.view().notices().to_vec()
     }
 

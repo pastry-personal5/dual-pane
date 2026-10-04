@@ -49,7 +49,7 @@ The [product behavior](../product-behavior.md#favorites) owns the exact initial 
 
 ## Workspace-session handoff
 
-P3-M9 will introduce and snapshot both Browsers' open tabs in display order, active tab per Browser, each tab's current location, the active Browser, and the window layout. Text filtering was removed from the Phase 3 contract, so no filter state is stored. It will resolve a tab's sort from the location-keyed folder-sort memory. Back/forward history remains available while the app runs but is not serialized or restored. All session rows are replaced in one coalesced transaction, so a failed write leaves the previous committed snapshot intact. If a saved current location cannot be restored, discard that tab and restore the others; if a Browser has no valid saved tabs, create a clean Home tab to preserve the at-least-one-tab invariant. The Favorites tables are never cleared by a session replacement.
+P3-M9 persists and snapshots both Browsers' open tabs in display order, active tab per Browser, each tab's current location, the active Browser, and the window layout. Text filtering was removed from the Phase 3 contract, so no filter state is stored. It resolves a tab's sort from the location-keyed folder-sort memory. Back/forward history remains available while the app runs but is not serialized or restored. All session rows are replaced in one coalesced transaction, so a failed write leaves the previous committed snapshot intact. If a saved current location cannot be restored, discard that tab and restore the others; if a Browser has no valid saved tabs, create a clean Home tab to preserve the at-least-one-tab invariant. The Favorites tables are never cleared by a session replacement.
 
 ## Storage and lifecycle
 

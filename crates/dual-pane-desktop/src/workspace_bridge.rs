@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, favorite_rejection_text, reader_start_failure_status};
-use dual_pane_application::{Key, Shortcut, ShortcutScope};
+use dual_pane_application::{Key, Shortcut, ShortcutScope, WindowFrame, WindowLayout, WindowState};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
@@ -34,6 +34,9 @@ pub mod ffi {
         include!("dual_pane_desktop/desktop_window.hpp");
         fn run_desktop(startup: Box<BrowserStartup>) -> i32;
         fn schedule_gui_drain();
+        include!("dual_pane_desktop/quick_look_preview.hpp");
+        #[allow(dead_code)] // Called by the desktop-only Rust seam test below.
+        fn quick_look_seam_tests() -> bool;
     }
     unsafe extern "RustQt" {
         #[qobject]
@@ -43,6 +46,17 @@ pub mod ffi {
         #[qproperty(i32, favorites_revision, cxx_name = "favoritesRevision", READ, NOTIFY)]
         #[qproperty(i32, notices_revision, cxx_name = "noticesRevision", READ, NOTIFY)]
         #[qproperty(i32, notices_open_requests, cxx_name = "noticesOpenRequests", READ, NOTIFY)]
+        #[qproperty(bool, hide_notices_at_startup, cxx_name = "hideNoticesAtStartup", READ, NOTIFY)]
+        #[qproperty(bool, notices_startup_ready, cxx_name = "noticesStartupReady", READ, NOTIFY)]
+        #[qproperty(i32, layout_revision, cxx_name = "layoutRevision", READ, NOTIFY)]
+        #[qproperty(bool, saved_layout_available, cxx_name = "savedLayoutAvailable", READ, NOTIFY)]
+        #[qproperty(i32, saved_layout_x, cxx_name = "savedLayoutX", READ, NOTIFY)]
+        #[qproperty(i32, saved_layout_y, cxx_name = "savedLayoutY", READ, NOTIFY)]
+        #[qproperty(i32, saved_layout_width, cxx_name = "savedLayoutWidth", READ, NOTIFY)]
+        #[qproperty(i32, saved_layout_height, cxx_name = "savedLayoutHeight", READ, NOTIFY)]
+        #[qproperty(i32, saved_layout_state, cxx_name = "savedLayoutState", READ, NOTIFY)]
+        #[qproperty(i32, saved_sidebar_splitter, cxx_name = "savedSidebarSplitter", READ, NOTIFY)]
+        #[qproperty(i32, saved_browser_splitter, cxx_name = "savedBrowserSplitter", READ, NOTIFY)]
         #[qproperty(i32, bindings_revision, cxx_name = "bindingsRevision", READ, NOTIFY)]
         #[qproperty(QString, startup_failure, cxx_name = "startupFailure", READ, NOTIFY)]
         type WorkspaceBridge = super::WorkspaceBridgeRust;
@@ -106,6 +120,16 @@ pub mod ffi {
         fn notice_offers_journal_retry(self: &WorkspaceBridge, notice: i32) -> bool;
         #[cxx_name = "retryJournal"]
         fn retry_journal(self: Pin<&mut WorkspaceBridge>);
+        #[cxx_name = "changeHideNoticesAtStartup"]
+        fn change_hide_notices_at_startup(self: Pin<&mut WorkspaceBridge>, hide: bool);
+        #[cxx_name = "startupPeriodElapsed"]
+        fn startup_period_elapsed(self: Pin<&mut WorkspaceBridge>);
+        #[cxx_name = "settingsLoadTimedOut"]
+        fn settings_load_timed_out(self: Pin<&mut WorkspaceBridge>);
+        /// Reports the workspace's current logical-point layout after a
+        /// settled native layout change.
+        #[cxx_name = "updateWindowLayout"]
+        fn update_window_layout(self: Pin<&mut WorkspaceBridge>, origin: i64, width: i32, height: i32, state: i32, sidebar_splitter: i32, browser_splitter: i32);
         /// Resets settings after the person confirmed it.
         #[cxx_name = "resetSettings"]
         fn reset_settings(self: Pin<&mut WorkspaceBridge>);
@@ -156,6 +180,17 @@ pub struct WorkspaceBridgeRust {
     favorites_revision: i32,
     notices_revision: i32,
     notices_open_requests: i32,
+    hide_notices_at_startup: bool,
+    notices_startup_ready: bool,
+    layout_revision: i32,
+    saved_layout_available: bool,
+    saved_layout_x: i32,
+    saved_layout_y: i32,
+    saved_layout_width: i32,
+    saved_layout_height: i32,
+    saved_layout_state: i32,
+    saved_sidebar_splitter: i32,
+    saved_browser_splitter: i32,
     bindings_revision: i32,
     startup_failure: QString,
     shown: WorkspaceViewModel,
@@ -186,7 +221,7 @@ impl ffi::WorkspaceBridge {
     }
 
     fn refresh(mut self: Pin<&mut Self>) {
-        let Some(view) = with_session(|session| session.workspace_view().clone()) else { return };
+        let Some((view, layout)) = with_session(|session| (session.workspace_view().clone(), session.take_layout_request())) else { return };
         // The session lock is released, so Qt may call back into this binder
         // while the notifications below are delivered.
         let favorites = revision(view.favorites_revision());
@@ -195,6 +230,8 @@ impl ffi::WorkspaceBridge {
         let bindings = revision(view.bindings_revision());
         let active = i32::from(view.active_browser() == BrowserSide::Right);
         let ready = view.favorites_ready();
+        let hide_notices = view.hide_notices_at_startup();
+        let notices_ready = view.notices_startup_ready();
         self.as_mut().rust_mut().get_mut().shown = view;
         self.as_mut().set_active_browser(active);
         self.as_mut().set_favorites_ready(ready);
@@ -202,6 +239,28 @@ impl ffi::WorkspaceBridge {
         self.as_mut().set_bindings_revision(bindings);
         self.as_mut().set_notices_revision(notices);
         self.as_mut().set_notices_open_requests(opened);
+        self.as_mut().set_hide_notices_at_startup(hide_notices);
+        self.as_mut().set_notices_startup_ready(notices_ready);
+        if let Some(layout) = layout {
+            let values = layout.map_or((false, 0, 0, 0, 0, 0, 0, 0), |layout| {
+                let state = match layout.state {
+                    WindowState::Normal => 0,
+                    WindowState::Zoomed => 1,
+                    WindowState::FullScreen => 2,
+                };
+                (true, layout.frame.x, layout.frame.y, layout.frame.width, layout.frame.height, state, layout.sidebar_splitter, layout.browser_splitter)
+            });
+            let bridge = self.as_mut().rust_mut().get_mut();
+            bridge.saved_layout_available = values.0;
+            bridge.saved_layout_x = values.1;
+            bridge.saved_layout_y = values.2;
+            bridge.saved_layout_width = values.3;
+            bridge.saved_layout_height = values.4;
+            bridge.saved_layout_state = values.5;
+            bridge.saved_sidebar_splitter = values.6;
+            bridge.saved_browser_splitter = values.7;
+            self.as_mut().bump_layout_revision();
+        }
     }
 
     fn set_root_volume_name(mut self: Pin<&mut Self>, name: &QString) {
@@ -303,6 +362,30 @@ impl ffi::WorkspaceBridge {
         with_session(|session| session.submit(dual_pane_application::Command::ResetSettings));
         self.as_mut().session_changed();
     }
+    fn change_hide_notices_at_startup(mut self: Pin<&mut Self>, hide: bool) {
+        with_session(|session| session.submit(dual_pane_application::Command::SetHideNoticesAtStartup { hide }));
+        self.as_mut().session_changed();
+    }
+    fn startup_period_elapsed(mut self: Pin<&mut Self>) {
+        with_session(|session| session.submit(dual_pane_application::Event::StartupPeriodElapsed));
+        self.as_mut().session_changed();
+    }
+    fn settings_load_timed_out(mut self: Pin<&mut Self>) {
+        with_session(|session| session.submit(dual_pane_application::Event::SettingsLoadTimedOut));
+        self.as_mut().session_changed();
+    }
+    fn update_window_layout(mut self: Pin<&mut Self>, origin: i64, width: i32, height: i32, state: i32, sidebar_splitter: i32, browser_splitter: i32) {
+        let x = (origin >> 32) as i32;
+        let y = origin as i32;
+        let state = match state {
+            1 => WindowState::Zoomed,
+            2 => WindowState::FullScreen,
+            _ => WindowState::Normal,
+        };
+        let layout = WindowLayout { frame: WindowFrame { x, y, width, height }, state, sidebar_splitter, browser_splitter };
+        with_session(|session| session.submit(dual_pane_application::Command::UpdateWindowLayout { layout }));
+        self.as_mut().session_changed();
+    }
 
     fn binding_count(&self) -> i32 {
         count(self.rust().shown.bindings().len())
@@ -322,6 +405,11 @@ impl ffi::WorkspaceBridge {
             self.as_mut().rust_mut().get_mut().active_browser = value;
             self.active_browser_changed();
         }
+    }
+    fn bump_layout_revision(mut self: Pin<&mut Self>) {
+        let next = self.rust().layout_revision.wrapping_add(1);
+        self.as_mut().rust_mut().get_mut().layout_revision = next;
+        self.layout_revision_changed();
     }
     fn set_favorites_ready(mut self: Pin<&mut Self>, value: bool) {
         if self.rust().favorites_ready != value {
@@ -345,6 +433,18 @@ impl ffi::WorkspaceBridge {
         if self.rust().notices_open_requests != value {
             self.as_mut().rust_mut().get_mut().notices_open_requests = value;
             self.notices_open_requests_changed();
+        }
+    }
+    fn set_hide_notices_at_startup(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().hide_notices_at_startup != value {
+            self.as_mut().rust_mut().get_mut().hide_notices_at_startup = value;
+            self.hide_notices_at_startup_changed();
+        }
+    }
+    fn set_notices_startup_ready(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().notices_startup_ready != value {
+            self.as_mut().rust_mut().get_mut().notices_startup_ready = value;
+            self.notices_startup_ready_changed();
         }
     }
     fn set_bindings_revision(mut self: Pin<&mut Self>, value: i32) {
@@ -424,5 +524,10 @@ mod tests {
         assert_eq!(scope_code(ActionId::MoveToTrash.scope()), 0, "scope_folder_items_list");
         assert_eq!(scope_code(ActionId::NewFolder.scope()), 1, "scope_window");
         assert_eq!(scope_code(ActionId::QuitApplication.scope()), 2, "scope_application");
+    }
+
+    #[test]
+    fn quick_look_gesture_seam_covers_native_panel_boundaries() {
+        assert!(ffi::quick_look_seam_tests());
     }
 }

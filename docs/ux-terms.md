@@ -65,6 +65,7 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Notices Button | `notices_button` |
 | Notice | `notice` |
 | Notices Startup Checkbox | `notices_startup_checkbox` |
+| Quick Look Panel | `quick_look_panel` |
 | Item Icon Column | `item_icon_column` |
 | Relative Date Column | `relative_date_column` |
 | Exact Date Column | `exact_date_column` |
@@ -109,4 +110,4 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 
 ## Deferred components
 
-Since P3-M6, the development build renders the Browser Tabs Strip, Browser Tabs, Sidebar Favorites, the six Folder Items columns, the eight sort buttons, the Notices Button, and Notices. Their accessible names use the terms above; each sort button's accessible name and tooltip read like "Sort items by type (A-Z)". Since P3-M8, it also renders the Folder Items Context Menu, Rename Item Editor, New Folder Name Editor, Missing Folder Overlay, Operation Panel components, Permanent Delete Confirmation Window, and Quit Confirmation Window under these names. The Notices Startup Checkbox and Waiting Window are not rendered yet; their planned behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions).
+Since P3-M6, the development build renders the Browser Tabs Strip, Browser Tabs, Sidebar Favorites, the six Folder Items columns, the eight sort buttons, the Notices Button, and Notices. Their accessible names use the terms above; each sort button's accessible name and tooltip read like "Sort items by type (A-Z)". Since P3-M8, it also renders the Folder Items Context Menu, Rename Item Editor, New Folder Name Editor, Missing Folder Overlay, Operation Panel components, Permanent Delete Confirmation Window, and Quit Confirmation Window under these names. The active P3-M9 development build also renders the Notices Startup Checkbox and Waiting Window; their behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions). P3-M11 adds the system-owned Quick Look Panel.

@@ -8,6 +8,7 @@ Goal: Make each Browser a durable, independently tabbed workspace that can safel
 - Both Browsers support independent tab sets, active tabs, tab history, and tab-local browsing state.
 - One level of Favorite Groups and Favorite Items can be edited in the Sidebar and retains its hierarchy and order during the session and across relaunches.
 - Copy, move, rename, directory creation, Trash, permanent deletion, and default-application opening work with every safeguard in [product-behavior.md](../product-behavior.md#file-operation-safeguards).
+- A Folder Pane cursor item previews through native macOS Quick Look without creating a built-in viewer.
 - Relaunch restores each Browser's tabs, active tab, locations, location-shared folder sort, the active Browser, and the workspace window's frame, zoomed or full-screen state, and splitter positions; a tab whose saved location cannot be restored is discarded without preventing the remaining session from restoring. Text filtering is outside Phase 3.
 - Open locations are watched; changed Folder Items refresh automatically and retain matching selection and cursor state.
 - Directory loading, watching, persistence, and file operations keep the interface responsive as required by [architecture.md](../architecture.md#51-threading-and-responsiveness).
@@ -65,9 +66,16 @@ Plan: [overview](milestone-08-overview.md), [architecture](milestone-08-architec
 
 ### P3-M9: Persist and restore the workspace
 
-Status: Planned
+Status: Done
 Goal: Persist coalesced workspace-session snapshots and restore valid saved Browser tabs, fallback tabs, the window layout, and Notices preferences at launch.
 Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architecture.md)
+
+### P3-M11: Native Quick Look
+
+Status: Active
+Goal: Preview the Folder Pane cursor item through macOS Quick Look, including a held-Space maximized preview.
+Plan: [overview](milestone-11-overview.md), [architecture](milestone-11-architecture.md)
+Notes: This milestone deliberately runs before P3-M10.
 
 ### P3-M10: Watch open locations
 

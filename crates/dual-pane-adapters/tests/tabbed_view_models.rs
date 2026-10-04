@@ -107,6 +107,21 @@ fn rows_show_six_columns_in_the_specified_formats() {
     assert_eq!(FolderItemsColumn::ALL.map(FolderItemsColumn::title), ["Item Icon Column", "Name", "Type", "Relative Date Column", "Exact Date Column", "Size"]);
 }
 
+#[test]
+fn native_preview_paths_preserve_name_bytes_and_directory_kind() {
+    let mut session = Session::new();
+    let location = Location::from_components([name("work"), EntryName::new(b"raw\xFF".to_vec()).unwrap()]);
+    let image_name = EntryName::new(b"image\xFE.png".to_vec()).unwrap();
+    let image = Entry::new(image_name, EntryKind::File);
+    session.show(BrowserSide::Left, location, vec![folder("Photos"), image]);
+
+    let view = session.left.view();
+    assert_eq!(view.row_native_path(0), Some((b"/work/raw\xFF/Photos".to_vec(), true)));
+    assert_eq!(view.row_native_path(1), Some((b"/work/raw\xFF/image\xFE.png".to_vec(), false)));
+    assert_eq!(view.row_native_path(2), None);
+    assert_ne!(view.row_path(1).unwrap().as_bytes(), b"/work/raw\xFF/image\xFE.png");
+}
+
 fn parts(view: &BrowserViewModel) -> (&str, &str, &str) {
     let summary = view.summary();
     (&summary.count, &summary.selected, &summary.size)

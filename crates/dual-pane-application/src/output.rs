@@ -128,6 +128,8 @@ pub enum Output {
         notice: Notice,
         open: bool,
     },
+    /// Opens Notices without adding a second Notice entry.
+    OpenNotices,
 }
 
 /// The smallest single contiguous change that turns `old` into `new`: rows

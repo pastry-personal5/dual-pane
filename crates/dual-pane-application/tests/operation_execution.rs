@@ -339,6 +339,7 @@ fn name_less_availability_matches_the_named_checks() {
 #[test]
 fn an_unavailable_journal_disables_copy_until_it_reopens() {
     let (mut ws, tab) = setup(vec![item("a", EntryKind::File)]);
+    ws.handle(Event::StartupPeriodElapsed.into());
     select(&mut ws, tab, &["a"]);
     let unavailable = ws.handle(Event::JournalStatus { available: false }.into());
     assert_eq!(notices(&unavailable), vec![(NoticeKind::JournalUnavailable, true)]);
@@ -556,6 +557,7 @@ fn quick_successes_are_recorded_and_sweep_failures_open_notices() {
     let finished = stepped(&mut ws, id, generation_of(&work), StepResult::Finished { progress: progress(1, 0, 0) });
     assert!(matches!(notices(&finished).as_slice(), [(NoticeKind::OperationFinished { outcome: OperationOutcome::Succeeded, .. }, false)]));
     assert!(notices(&ws.handle(Event::TemporariesSwept { removed: 0, failed: vec![] }.into())).is_empty());
+    ws.handle(Event::StartupPeriodElapsed.into());
     assert_eq!(notices(&ws.handle(Event::TemporariesSwept { removed: 2, failed: vec![] }.into())), vec![(NoticeKind::TemporariesSwept { removed: 2, failed: vec![] }, false)]);
     assert_eq!(notices(&ws.handle(Event::TemporariesSwept { removed: 0, failed: vec![path(&["vol"])] }.into())), vec![(NoticeKind::TemporariesSwept { removed: 0, failed: vec![path(&["vol"])] }, true)]);
 }

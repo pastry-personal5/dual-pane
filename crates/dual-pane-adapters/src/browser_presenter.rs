@@ -327,6 +327,21 @@ impl BrowserViewModel {
         Some(location_text(&location.join(entry.name())))
     }
 
+    /// The exact file-system path and directory flag for a native preview.
+    /// Display paths can replace invalid UTF-8 bytes and must not identify an Item.
+    pub fn row_native_path(&self, row: usize) -> Option<(Vec<u8>, bool)> {
+        let entry = self.entry(row)?;
+        let location = self.location.as_ref()?;
+        let mut path = Vec::new();
+        for component in location.components() {
+            path.push(b'/');
+            path.extend_from_slice(component.as_bytes());
+        }
+        path.push(b'/');
+        path.extend_from_slice(entry.name().as_bytes());
+        Some((path, entry.kind() == EntryKind::Directory))
+    }
+
     pub(crate) fn entry(&self, index: usize) -> Option<&Entry> {
         self.entries.get(index)
     }
@@ -478,7 +493,7 @@ impl BrowserPresenter {
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
             Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
-            Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } => return,
+            Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
             return;
