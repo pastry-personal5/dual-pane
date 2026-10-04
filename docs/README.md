@@ -33,6 +33,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-3/milestone-08-architecture.md](phase-3/milestone-08-architecture.md) | P3-M8 P3-M7 contract extensions, native gateway, safety journal, presentation, and verification approach. |
 | [phase-3/milestone-09-overview.md](phase-3/milestone-09-overview.md) | P3-M9 decisions and executable checklist for session saving, restoration, Waiting timeout, and startup Notices. |
 | [phase-3/milestone-09-architecture.md](phase-3/milestone-09-architecture.md) | P3-M9 launch sequence, timeout protection, restoration and discard rules, storage, and verification approach. |
+| [phase-3/milestone-10-overview.md](phase-3/milestone-10-overview.md) | P3-M10 decisions, scope, and executable checklist for watching open locations and automatic refresh. |
+| [phase-3/milestone-10-architecture.md](phase-3/milestone-10-architecture.md) | P3-M10 watch lifecycle, read coalescing, native and fallback monitoring, feedback, and verification approach. |
 | [phase-3/milestone-11-overview.md](phase-3/milestone-11-overview.md) | P3-M11 scope and executable checklist for native macOS Quick Look. |
 | [phase-3/milestone-11-architecture.md](phase-3/milestone-11-architecture.md) | P3-M11 Quick Look panel ownership, held-Space lifecycle, and verification approach. |
 | [phase-3/changelog.md](phase-3/changelog.md) | Phase 3 decisions and plan changes. |

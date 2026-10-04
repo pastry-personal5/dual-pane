@@ -4,6 +4,12 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-04 — P3-M10 planning
+
+- Added the [overview](milestone-10-overview.md) and [architecture plan](milestone-10-architecture.md) for watching open locations. P3-M11 remains the active prerequisite; P3-M10 remains Planned with every completion item unchecked.
+- **Owner decisions:** finish an in-flight read and perform one coalesced reread for invalidations received during it; retain native watches but pause fallback checks and watch-triggered reads while the app is hidden or unfocused; check inactive fallback tabs sparsely while active; and show a Browser Status Bar cue if native monitoring degrades or automatic checking is unavailable. This resolves the read-storm open item.
+- **Dependency approval:** the owner approved a dynamic link to Apple's CoreServices framework for FSEvents. The plan adds no third-party crate or build tool.
+
 ## 2026-10-04 — P3-M11 first-frame reveal and 256 ms hold
 
 - **Owner decision:** The held-Space threshold is 256 ms. The first visible Quick Look frame must already use the largest usable frame on the workspace screen.

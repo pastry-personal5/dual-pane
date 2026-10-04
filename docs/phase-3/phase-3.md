@@ -81,3 +81,4 @@ Notes: This milestone deliberately runs before P3-M10 and is active again for fo
 
 Status: Planned
 Goal: Watch open tab locations, including inactive tabs, coalesce invalidations, and refresh listings without losing matching selection or cursor state.
+Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architecture.md)
