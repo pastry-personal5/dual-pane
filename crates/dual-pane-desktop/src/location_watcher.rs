@@ -18,6 +18,9 @@ const INACTIVE_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const IDLE_WAIT: Duration = Duration::from_secs(60);
 const ROOT_CHANGED: u32 = 1;
+/// The native stream lost continuity, so it must be registered again before
+/// its notifications can be treated as authoritative.
+const RECOVERY_REQUIRED: u32 = 1 << 1;
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
 pub mod ffi {
@@ -221,7 +224,7 @@ fn run_service(mailbox: Arc<Mutex<Mailbox>>, dirty: Arc<Mutex<HashMap<u64, u32>>
         for (id, flags) in native_events {
             let Some(location) = ids.get(&id).cloned() else { continue };
             let Some(subscription) = subscriptions.get_mut(&location) else { continue };
-            if flags & ROOT_CHANGED != 0 {
+            if requires_recovery(flags) {
                 if let Some(watcher) = native.as_mut() {
                     watcher.unwatch(id);
                 }
@@ -266,6 +269,10 @@ fn next_delay(generation: u64, location: &Location, visible: bool, failures: u32
     Duration::from_millis(seconds.saturating_mul(1000).saturating_mul(percent) / 100)
 }
 
+fn requires_recovery(flags: u32) -> bool {
+    flags & (ROOT_CHANGED | RECOVERY_REQUIRED) != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +291,14 @@ mod tests {
         assert!((Duration::from_millis(4500)..=Duration::from_millis(5500)).contains(&visible));
         assert!((Duration::from_secs(54)..=Duration::from_secs(66)).contains(&hidden));
         assert!(next_delay(7, &folder, true, 20) <= Duration::from_secs(330));
+    }
+
+    #[test]
+    fn root_and_rescan_notifications_require_native_recovery() {
+        assert!(requires_recovery(ROOT_CHANGED));
+        assert!(requires_recovery(RECOVERY_REQUIRED));
+        assert!(requires_recovery(ROOT_CHANGED | RECOVERY_REQUIRED));
+        assert!(!requires_recovery(0));
     }
 
     fn wait_for_invalidation(events: &Receiver<Event>, location: &Location, generation: u64) {

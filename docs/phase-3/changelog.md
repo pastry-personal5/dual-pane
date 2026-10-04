@@ -4,6 +4,10 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-05 — P3-M10 watcher recovery follow-up
+
+- FSEvents reports a dropped or coalesced history and wrapped event IDs as a continuity failure. The watcher now demotes that stream to periodic checking, requests a reconciliation, and registers a fresh native stream before it reports Native again. This prevents a stream with an uncertain event history from being treated as authoritative.
+
 ## 2026-10-04 — P3-M10 Done
 
 - The owner passed the native macOS watcher check for active and inactive tab changes, folder loss and return, foreground reconciliation, degraded monitoring feedback, and selection/cursor retention. The automated gate also passed, so every P3-M10 checklist item is complete.

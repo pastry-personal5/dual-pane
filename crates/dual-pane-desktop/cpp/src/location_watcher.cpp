@@ -16,6 +16,7 @@
 namespace dual_pane_desktop {
 namespace {
 constexpr std::uint32_t root_changed = 1;
+constexpr std::uint32_t recovery_required = 1U << 1U;
 constexpr CFTimeInterval event_latency_seconds = 0.2;
 
 void queue_barrier(void *unused) { static_cast<void>(unused); }
@@ -145,8 +146,17 @@ class NativeLocationWatcher::Impl final {
         }
         std::uint32_t published = 0;
         for (std::size_t index = 0; index < count; ++index) {
-            if ((flags[index] & kFSEventStreamEventFlagRootChanged) != 0) { // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            const auto event_flags = static_cast<std::uint32_t>(flags[index]); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            if ((event_flags & static_cast<std::uint32_t>(kFSEventStreamEventFlagRootChanged)) != 0U) {
                 published |= root_changed;
+            }
+            const auto discontinuity_flags = static_cast<std::uint32_t>(kFSEventStreamEventFlagMustScanSubDirs) | static_cast<std::uint32_t>(kFSEventStreamEventFlagEventIdsWrapped);
+            if ((event_flags & discontinuity_flags) != 0U) {
+                // A dropped/coalesced history or wrapped event ID leaves this
+                // stream unable to prove continuity. Rust will reconcile the
+                // listing and establish a fresh stream before restoring the
+                // Native status.
+                published |= recovery_required;
             }
         }
         context->owner->publisher_->native_invalidated(context->subscription_id, published);
