@@ -23,4 +23,25 @@ lint-rust:
 lint-cpp:
 	scripts/lint-cpp.sh
 
-check: fmt-check lint-rust lint-cpp test
+check:
+	@set -e; \
+	run_check() { \
+		label="$$1"; \
+		shift; \
+		output="$$(mktemp)"; \
+		printf '%s... ' "$$label"; \
+		if "$$@" >"$$output" 2>&1; then \
+			printf 'ok\n'; \
+			rm -f "$$output"; \
+		else \
+			printf 'failed\n'; \
+			cat "$$output"; \
+			rm -f "$$output"; \
+			exit 1; \
+		fi; \
+	}; \
+	run_check 'Rust formatting' cargo fmt --all -- --check; \
+	run_check 'C++ formatting' scripts/format-cpp.sh --check; \
+	run_check 'Rust lint' cargo clippy --all-targets -- -D warnings; \
+	run_check 'C++ lint' scripts/lint-cpp.sh; \
+	run_check 'Tests' cargo test
