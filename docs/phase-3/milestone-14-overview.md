@@ -8,7 +8,7 @@ This milestone fills the Settings Window with approved basic preferences and edi
 
 Before implementation starts, the owner records in this overview the exact additional basic settings and the complete keyboard-shortcut design: capture grammar, supported keys/modifiers, unbinding, reserved combinations, conflict presentation and resolution, localization, migration, defaults, persistence, and reset behavior. No implementation may invent a setting or shortcut policy absent from that table.
 
-The following decisions are already fixed: valid changes apply immediately; each shortcut row offers Restore Default; General contains the existing “Don’t show notices at startup” preference and whole-app Reset Settings; Reset retains its explicit confirmation, closes Settings after confirmation, and performs the established workspace reset; and Settings stays unavailable when storage is unhealthy.
+The following decisions are already fixed: valid changes apply immediately; each shortcut row offers Restore Default; General contains the existing “Don’t show notices at startup” preference and whole-app Reset Settings; Reset retains its explicit confirmation, closes Settings after confirmation, and performs the established workspace reset; Settings stays unavailable when storage is unhealthy; and fixed macOS `Command+,` remains reserved for Settings and cannot be assigned to an ActionId.
 
 ## Scope and fixed inputs
 

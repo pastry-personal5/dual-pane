@@ -6,6 +6,9 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-10 — P3-M12 through P3-M14 planning
 
+- **P3-M13 implementation correction:** Settings interaction availability is now a read-only application-to-desktop projection, not desktop-only composition. It becomes unavailable for every non-stale settings-store write failure, including a workspace-session write, and recovers only after successful Reset Settings and replacement load. Fixed macOS `Command+,` is reserved for Settings rather than an editable ActionId binding.
+- **P3-M13 implementation review:** Settings dialog teardown relies on `QPointer` automatic nulling after the dialog schedules deletion for every completion, avoiding a captured stack-pointer teardown callback. Availability projection tests confirm this presentation state does not trigger workspace shortcut rebinding.
+
 - Started P3-M12. Its implementation retains the application and persistence boundaries, uses cached in-process Qt bitmap icons, and receives native macOS visual/accessibility verification before completion.
 - **P3-M12 owner follow-up:** Folder Pane Toolbar Row #2 uses ordinary English singular inflection: `1 item M selected`; zero and every other count use `N items M selected`.
 - **P3-M12 owner follow-up:** the same `N items M selected` text appears in both Folder Pane Toolbar Row #2 and the Browser Status Bar. Favorite Groups use dark `#15171A` containers with a one-pixel `#3A4048` border, 6px radius, and an 8px margin on every side; their internal rows remain flush. Status Bar loading, error, monitoring, and temporary command feedback remains visible instead of being replaced by the normal summary.

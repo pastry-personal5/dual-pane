@@ -32,6 +32,10 @@ pub struct Workspace {
     home: Location,
     settings: SettingsState,
     settings_status: SettingsStatus,
+    /// Presentation may open Settings only after a known-good load. A storage
+    /// failure leaves in-memory state intact but disables that interaction
+    /// until Reset Settings has reloaded a fresh store.
+    settings_interaction_available: bool,
     /// False once the session learned that no settings service exists, so
     /// nothing can be reset.
     settings_worker: bool,
@@ -144,7 +148,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new() }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
@@ -502,6 +506,9 @@ impl Workspace {
     pub fn settings_status(&self) -> SettingsStatus {
         self.settings_status
     }
+    pub fn settings_interaction_available(&self) -> bool {
+        self.settings_interaction_available
+    }
     /// The effective shortcut of every catalogued action.
     pub fn bindings(&self) -> Vec<ActionBinding> {
         self.settings.bindings()
@@ -520,7 +527,7 @@ impl Workspace {
     }
     /// Workspace-wide presentation state.
     pub fn workspace_chrome(&self) -> WorkspaceChrome {
-        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, notices: Arc::clone(&self.notices) }
+        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, settings_interaction_available: self.settings_interaction_available, notices: Arc::clone(&self.notices) }
     }
     /// The save to flush before the application exits, if loaded settings
     /// have changed since the last confirmed save.
@@ -831,6 +838,7 @@ impl Workspace {
         // The loaded snapshot is what storage already holds.
         self.settings.mark_saved(self.settings.revision());
         self.settings_status = SettingsStatus::Loaded;
+        self.settings_interaction_available = true;
         let replayed = !self.pending_sorts.is_empty();
         for (location, sort) in std::mem::take(&mut self.pending_sorts) {
             self.settings.set_sort(location, sort);
@@ -904,6 +912,7 @@ impl Workspace {
             return Transition::default();
         }
         self.settings_status = SettingsStatus::LoadFailed(failure);
+        self.settings_interaction_available = false;
         if failure == SettingsFailure::WorkerUnavailable {
             self.settings_worker = false;
         }
@@ -923,6 +932,7 @@ impl Workspace {
             return Transition::default();
         }
         self.settings_status = SettingsStatus::LoadFailed(failure);
+        self.settings_interaction_available = false;
         if failure == SettingsFailure::WorkerUnavailable {
             self.settings_worker = false
         }
@@ -937,6 +947,7 @@ impl Workspace {
             return Transition::default();
         }
         self.launch_completed = true;
+        self.settings_interaction_available = false;
         self.session_write_protected = true;
         let mut transition = self.fallback_home();
         transition.append(self.add_notice(NoticeKind::SettingsLoadTimedOut));
@@ -1038,6 +1049,7 @@ impl Workspace {
         if self.is_stale_save(revision) {
             return Transition::default();
         }
+        self.settings_interaction_available = false;
         let mut transition = Transition::output(Output::SettingsSaveFailed { revision, failure });
         transition.append(self.add_notice(NoticeKind::SettingsSaveFailed { failure }));
         transition
@@ -1052,6 +1064,7 @@ impl Workspace {
         }
         self.reset_from = Some(self.settings_status);
         self.settings_status = SettingsStatus::Loading;
+        self.settings_interaction_available = false;
         self.stale_save_floor = Some(self.settings.revision());
         self.screenshots_probe = None;
         self.probing.clear();
@@ -1088,6 +1101,7 @@ impl Workspace {
     fn settings_reset_failed(&mut self, failure: SettingsFailure) -> Transition {
         let Some(previous) = self.reset_from.take() else { return Transition::default() };
         self.settings_status = previous;
+        self.settings_interaction_available = false;
         self.add_notice(NoticeKind::SettingsResetFailed { failure })
     }
     /// Records a Notice. A storage failure that repeats the latest Notice is

@@ -58,6 +58,9 @@ pub struct WorkspaceChrome {
     pub hide_notices_at_startup: bool,
     /// False while the initial settings read could still replace the choice.
     pub notices_startup_ready: bool,
+    /// Whether opening Settings is safe. It stays false until a successful
+    /// settings load and becomes false after any settings-store failure.
+    pub settings_interaction_available: bool,
     /// Current-session Notices, oldest first.
     pub notices: Arc<[Notice]>,
 }

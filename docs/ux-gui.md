@@ -70,6 +70,7 @@ Implementation status: Partly delivered. The table above still describes the rel
 
 - A later shortcut editor lists customizable actions backed by stable UpperCamelCase action IDs and lets the person replace a default keyboard shortcut. The [canonical actions](ux-terms.md#canonical-actions) name existing catalogue entries and reserved future IDs. For example, `NewFolder` starts with `Command+Shift+N` and can be assigned another valid shortcut once the action exists.
 - The editor shows each action's effective shortcut, reports conflicts, and offers Restore Default. The [P3-M2 plan](phase-3/milestone-02-architecture.md#actions-and-shortcut-settings) owns action identity, validation, and persistence.
+- On macOS, fixed `Command+,` remains reserved for Settings and is not assignable to an editable action binding.
 
 ### Settings Window
 

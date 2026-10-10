@@ -41,6 +41,35 @@ fn ready() -> Workspace {
     }
     workspace
 }
+
+#[test]
+fn settings_interaction_availability_tracks_storage_health_and_reset_reload() {
+    let mut workspace = Workspace::new();
+    assert!(!workspace.settings_interaction_available());
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    assert!(workspace.settings_interaction_available());
+
+    let failed = workspace.handle(Event::SettingsSaveFailed { revision: 1, failure: SettingsFailure::Unavailable }.into());
+    assert!(failed.outputs.iter().any(|output| matches!(output, Output::SettingsSaveFailed { .. })));
+    assert!(!workspace.settings_interaction_available());
+    workspace.handle(Event::SettingsSaved { revision: 1 }.into());
+    assert!(!workspace.settings_interaction_available(), "an ordinary later save never reopens Settings");
+
+    let reset = workspace.handle(Command::ResetSettings.into());
+    assert_eq!(reset.work, vec![WorkRequest::ResetSettings]);
+    assert!(!workspace.settings_interaction_available());
+    workspace.handle(Event::SettingsReset { backup: None }.into());
+    assert!(!workspace.settings_interaction_available());
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    assert!(workspace.settings_interaction_available());
+
+    let mut failed_load = Workspace::new();
+    failed_load.handle(Event::SettingsLoadFailed { failure: SettingsFailure::Corrupt }.into());
+    assert!(!failed_load.settings_interaction_available());
+    let mut timed_out = Workspace::new();
+    timed_out.handle(Event::SettingsLoadTimedOut.into());
+    assert!(!timed_out.settings_interaction_available());
+}
 fn rejection(transition: &Transition) -> Option<FavoriteRejection> {
     match transition.outputs.as_slice() {
         [Output::FavoriteEditRejected { reason, .. }] => Some(*reason),

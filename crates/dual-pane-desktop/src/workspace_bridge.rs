@@ -48,6 +48,7 @@ pub mod ffi {
         #[qproperty(i32, notices_open_requests, cxx_name = "noticesOpenRequests", READ, NOTIFY)]
         #[qproperty(bool, hide_notices_at_startup, cxx_name = "hideNoticesAtStartup", READ, NOTIFY)]
         #[qproperty(bool, notices_startup_ready, cxx_name = "noticesStartupReady", READ, NOTIFY)]
+        #[qproperty(bool, settings_interaction_available, cxx_name = "settingsInteractionAvailable", READ, NOTIFY)]
         #[qproperty(i32, layout_revision, cxx_name = "layoutRevision", READ, NOTIFY)]
         #[qproperty(bool, saved_layout_available, cxx_name = "savedLayoutAvailable", READ, NOTIFY)]
         #[qproperty(i32, saved_layout_x, cxx_name = "savedLayoutX", READ, NOTIFY)]
@@ -186,6 +187,7 @@ pub struct WorkspaceBridgeRust {
     notices_open_requests: i32,
     hide_notices_at_startup: bool,
     notices_startup_ready: bool,
+    settings_interaction_available: bool,
     layout_revision: i32,
     saved_layout_available: bool,
     saved_layout_x: i32,
@@ -236,6 +238,7 @@ impl ffi::WorkspaceBridge {
         let ready = view.favorites_ready();
         let hide_notices = view.hide_notices_at_startup();
         let notices_ready = view.notices_startup_ready();
+        let settings_available = view.settings_interaction_available();
         self.as_mut().rust_mut().get_mut().shown = view;
         self.as_mut().set_active_browser(active);
         self.as_mut().set_favorites_ready(ready);
@@ -245,6 +248,7 @@ impl ffi::WorkspaceBridge {
         self.as_mut().set_notices_open_requests(opened);
         self.as_mut().set_hide_notices_at_startup(hide_notices);
         self.as_mut().set_notices_startup_ready(notices_ready);
+        self.as_mut().set_settings_interaction_available(settings_available);
         if let Some(layout) = layout {
             let values = layout.map_or((false, 0, 0, 0, 0, 0, 0, 0), |layout| {
                 let state = match layout.state {
@@ -453,6 +457,12 @@ impl ffi::WorkspaceBridge {
         if self.rust().notices_startup_ready != value {
             self.as_mut().rust_mut().get_mut().notices_startup_ready = value;
             self.notices_startup_ready_changed();
+        }
+    }
+    fn set_settings_interaction_available(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().settings_interaction_available != value {
+            self.as_mut().rust_mut().get_mut().settings_interaction_available = value;
+            self.settings_interaction_available_changed();
         }
     }
     fn set_bindings_revision(mut self: Pin<&mut Self>, value: i32) {
