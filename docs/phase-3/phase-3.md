@@ -85,9 +85,10 @@ Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architec
 
 ### P3-M12: GUI enhancement
 
-Status: Active
+Status: Done
 Goal: Polish the existing workspace into a clearer, more consistent modern desktop interface without changing its file-management behavior.
 Plan: [overview](milestone-12-overview.md), [architecture](milestone-12-architecture.md)
+Notes: The automated gate and native macOS visual/accessibility verification passed.
 
 ### P3-M13: Settings Window skeleton
 
