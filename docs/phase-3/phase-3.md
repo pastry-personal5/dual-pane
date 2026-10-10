@@ -82,3 +82,21 @@ Notes: This milestone deliberately runs before P3-M10. Its automated gate and na
 Status: Done
 Goal: Watch open tab locations, including inactive tabs, coalesce invalidations, and refresh listings without losing matching selection or cursor state.
 Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architecture.md)
+
+### P3-M12: GUI enhancement
+
+Status: Active
+Goal: Polish the existing workspace into a clearer, more consistent modern desktop interface without changing its file-management behavior.
+Plan: [overview](milestone-12-overview.md), [architecture](milestone-12-architecture.md)
+
+### P3-M13: Settings Window skeleton
+
+Status: Planned
+Goal: Deliver the modal Settings window shell and its safe entry points, ready for later settings controls.
+Plan: [overview](milestone-13-overview.md), [architecture](milestone-13-architecture.md)
+
+### P3-M14: Basic Settings and Keyboard Shortcuts
+
+Status: Planned
+Goal: Expose approved basic settings and editable keyboard shortcuts through Settings while preserving the application-owned settings boundary.
+Plan: [overview](milestone-14-overview.md), [architecture](milestone-14-architecture.md)

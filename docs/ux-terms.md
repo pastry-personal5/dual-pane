@@ -12,6 +12,11 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Sidebar | `sidebar` |
 | Main Toolbar | `main_toolbar` |
 | Settings | `settings` |
+| Settings Window | `settings_window` |
+| Settings Category List | `settings_category_list` |
+| General Settings | `general_settings` |
+| Keyboard Shortcuts Settings | `keyboard_shortcuts_settings` |
+| Restore Default Shortcut Button | `restore_default_shortcut_button` |
 | Favorites Groups | `favorites_groups` |
 | Favorite Group | `favorite_group` |
 | Favorite Group Name | `favorite_group_name` |

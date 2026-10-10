@@ -130,7 +130,8 @@ constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_ne
 constexpr int scope_folder_items_list = 0, scope_application = 2;
 constexpr int status_reason_milliseconds = 3000;
 constexpr int quick_look_hold_milliseconds = 256;
-constexpr auto window_color = "#1B1D21", surface_color = "#23262B", text_color = "#ECEFF3", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#1E4668", divider_hover_border_color = "#737A84", error_color = "#E5737A";
+constexpr auto window_color = "#1B1D21", surface_color = "#23262B", inactive_surface_color = "#17191D", text_color = "#ECEFF3", inactive_text_color = "#8A9099", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#173A55", hover_color = "#2B3037", favorite_group_color = "#15171A", divider_hover_border_color = "#737A84", error_color = "#E5737A";
+constexpr int favorite_group_margin = 8;
 
 // `toolbarState` flags from the Folder Items model.
 constexpr unsigned toolbar_new_tab = 1U, toolbar_back = 2U, toolbar_forward = 4U, toolbar_up = 8U;
@@ -181,26 +182,36 @@ auto style_sheet() -> QString {
       QMainWindow, QWidget#browser, QWidget#sidebar, QWidget#favoritesGroups, QWidget#notices, QWidget#noticesList { background:%1; color:%3; }
       QLabel, QLineEdit { color:%3; background:%2; }
       QLineEdit { border:1px solid %4; padding:4px; }
-      QLabel#favoriteError, QLabel#favoriteCue { color:%8; background:%1; }
+      QLabel#favoriteError, QLabel#favoriteCue { color:%8; background:transparent; }
       QFrame#folderPane { background:%1; border:1px solid %4; }
       QFrame#folderPane[browserActive="true"][windowActive="true"] { background:%2; border:1px solid %4; }
-      QFrame#folderPane[browserActive="false"][windowActive="true"] { background:%1; border:1px solid %4; }
+      QFrame#folderPane[browserActive="false"][windowActive="true"] { background:%9; border:1px solid %4; }
       QFrame#folderPane[browserActive="true"][windowActive="true"] QTreeView { background:%2; }
-      QFrame#folderPane[browserActive="false"][windowActive="true"] QTreeView { background:%1; color:#A7ADB5; }
+      QFrame#folderPane[browserActive="false"][windowActive="true"] QTreeView { background:%9; color:%10; }
       QTreeView { background:%2; color:%3; border:0; outline:none; }
       QTreeView::item { padding-left:0; }
       QTreeView::item:selected { background:%6; color:white; }
       QTreeView[browserActive="true"][windowActive="true"]::item:selected { background:%5; color:white; }
+      QTreeView::item:hover:!selected { background:%11; }
       QToolButton { background:%2; color:%3; border:1px solid %4; padding:4px; }
       QToolButton:disabled { color:%7; }
+      QToolButton#backButton:hover:enabled, QToolButton#forwardButton:hover:enabled, QToolButton#upButton:hover:enabled, QToolButton#favoriteGroupMenuButton:hover:enabled, QToolButton#addFavoriteItemButton:hover:enabled, QToolButton#settings:hover:enabled, QToolButton#noticesButton:hover:enabled { background:%5; }
+      QToolButton#sortControl:hover:enabled:!checked, QToolButton#newTabButton:hover:enabled, QToolButton#closeTabButton:hover:enabled, QToolButton#newGroupButton:hover:enabled, QFrame#operationPanel QToolButton:hover:enabled, QFrame#operationDecisionCard QPushButton:hover:enabled { background:%11; }
       QLabel#folderPaneToolbarRow1, QWidget#folderPaneToolbarRow2, QWidget#folderPaneToolbarRow3, QWidget#folderPaneToolbarRow2 QLabel, QWidget#folderPaneToolbarRow2 QLineEdit, QWidget#folderPaneToolbarRow2 QToolButton, QWidget#folderPaneToolbarRow3 QLabel, QWidget#folderPaneToolbarRow3 QLineEdit, QWidget#folderPaneToolbarRow3 QToolButton { background:%1; }
       QLabel#folderPaneToolbarRow1[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QToolButton { background:%2; }
-      QLabel#folderPaneToolbarRow1[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QToolButton { background:%1; }
-      QFrame#folderPane[browserActive="false"][windowActive="true"] QLabel, QFrame#folderPane[browserActive="false"][windowActive="true"] QLineEdit { background:%1; color:#A7ADB5; }
+      QLabel#folderPaneToolbarRow1[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QToolButton { background:%9; }
+      QFrame#folderPane[browserActive="false"][windowActive="true"] QLabel, QFrame#folderPane[browserActive="false"][windowActive="true"] QLineEdit { background:%9; color:%10; }
       QToolButton#sortControl { min-width:16px; max-width:16px; min-height:16px; max-height:16px; padding:0; background:%1; color:#A7ADB5; }
       QToolButton#sortControl:checked { color:#FFFFFF; }
       QToolButton#upButton, QToolButton#backButton, QToolButton#forwardButton, QToolButton#sortControl, QToolButton#newTabButton, QToolButton#closeTabButton, QToolButton#favoriteGroupMenuButton, QToolButton#addFavoriteItemButton, QToolButton#newGroupButton { border:none; }
       QWidget#browserTabsStrip { background:%1; }
+      QWidget#browser[browserActive="true"][windowActive="true"], QWidget#browserTabsStrip[browserActive="true"][windowActive="true"], QLineEdit#pathEditControl[browserActive="true"][windowActive="true"] { background:%2; }
+      QWidget#browser[browserActive="false"][windowActive="true"], QLineEdit#pathEditControl[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
+      QWidget#browserTabsStrip[browserActive="false"][windowActive="true"] { background:%9; }
+      QFrame#favoriteGroupBox { background:%12; border:1px solid %4; border-radius:6px; }
+      QWidget#favoriteGroup, QLabel#favoriteGroupName, QLabel#favoriteItem { background:transparent; border:0; border-radius:0; }
+      QLabel#favoriteGroupName { font-weight:bold; }
+      QLineEdit#favoriteItemAliasEditor, QLineEdit#favoriteGroupNameEditor { background:%2; border:1px solid %5; border-radius:0; }
       QLabel#expandOverlay { background:rgba(0, 0, 0, 160); color:white; }
       QTreeView#folderItemsList[missingFolder="true"] { color:#6F757D; }
       QLabel#missingFolderOverlay { background:transparent; color:white; }
@@ -220,7 +231,11 @@ auto style_sheet() -> QString {
         .arg(active_color)
         .arg(inactive_browser_color)
         .arg(divider_hover_border_color)
-        .arg(error_color);
+        .arg(error_color)
+        .arg(inactive_surface_color)
+        .arg(inactive_text_color)
+        .arg(hover_color)
+        .arg(favorite_group_color);
 }
 
 void repolish(QWidget *widget) {
@@ -369,7 +384,7 @@ class ItemIconDelegate final : public QStyledItemDelegate {
             const auto age = index.data(relative_age_role);
             const auto position = std::clamp(age.toDouble() / 1'000'000.0, 0.0, 1.0);
             const bool active = view_->property("browserActive").toBool() && view_->property("windowActive").toBool();
-            const auto background = age.isValid() ? QColor::fromHslF(static_cast<float>((10.0 + (250.0 * position)) / 360.0), active ? 0.55F : 0.25F, active ? 0.8F : 0.68F) : QColor(active ? QStringLiteral("#D0D0D0") : QStringLiteral("#989898"));
+            const auto background = age.isValid() ? QColor::fromHslF(static_cast<float>((10.0 + (250.0 * position)) / 360.0), active ? 0.55F : 0.20F, active ? 0.8F : 0.60F) : QColor(active ? QStringLiteral("#D0D0D0") : QStringLiteral("#888888"));
             const auto swatch = option.rect.adjusted(2, 2, -2, -2);
             painter->save();
             painter->fillRect(swatch, background);
@@ -452,6 +467,8 @@ class FolderItemsList final : public QTreeView {
         setSelectionMode(QAbstractItemView::ExtendedSelection);
         setSelectionBehavior(QAbstractItemView::SelectRows);
         setEditTriggers(QAbstractItemView::NoEditTriggers);
+        setMouseTracking(true);
+        viewport()->setMouseTracking(true);
         setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         setUniformRowHeights(true);
         setRootIsDecorated(false);
@@ -494,6 +511,18 @@ class FolderItemsList final : public QTreeView {
     }
 
   protected:
+    void focusInEvent(QFocusEvent *event) override {
+        QTreeView::focusInEvent(event);
+        update();
+    }
+    void paintEvent(QPaintEvent *event) override {
+        QTreeView::paintEvent(event);
+        if (hasFocus()) {
+            QPainter painter(viewport());
+            painter.setPen(QColor(QString::fromLatin1(active_color)));
+            painter.drawRect(viewport()->rect().adjusted(0, 0, -1, -1));
+        }
+    }
     auto selectionCommand(const QModelIndex &, const QEvent *) const -> QItemSelectionModel::SelectionFlags override { return QItemSelectionModel::NoUpdate; }
 
     void mousePressEvent(QMouseEvent *event) override {
@@ -574,6 +603,7 @@ class FolderItemsList final : public QTreeView {
             stop_quick_look_timer();
         }
         QTreeView::focusOutEvent(event);
+        update();
     }
     void resizeEvent(QResizeEvent *event) override {
         QTreeView::resizeEvent(event);
@@ -719,7 +749,15 @@ class BrowserTabButton final : public QAbstractButton {
   protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(QString::fromLatin1(active_ ? surface_color : window_color)));
+        const bool browser_active = property("browserActive").toBool() && property("windowActive").toBool();
+        const char *background = inactive_surface_color;
+        if (active_)
+            background = browser_active ? surface_color : inactive_surface_color;
+        else if (underMouse())
+            background = hover_color;
+        else if (browser_active)
+            background = window_color;
+        painter.fillRect(rect(), QColor(QString::fromLatin1(background)));
         painter.setPen(QColor(QString::fromLatin1(border_color)));
         painter.drawLine(rect().topRight(), rect().bottomRight());
         if (active_)
@@ -728,7 +766,7 @@ class BrowserTabButton final : public QAbstractButton {
             painter.setPen(QColor(QString::fromLatin1(active_color)));
             painter.drawRect(rect().adjusted(1, 1, -2, -2));
         }
-        painter.setPen(QColor(QString::fromLatin1(text_color)));
+        painter.setPen(QColor(QString::fromLatin1(browser_active ? text_color : inactive_text_color)));
         const auto text_rect = rect().adjusted(8, 0, -22, 0);
         painter.drawText(text_rect, Qt::AlignVCenter | Qt::AlignLeft, fontMetrics().elidedText(label_, Qt::ElideRight, text_rect.width()));
     }
@@ -958,6 +996,53 @@ auto sort_caret_icon(const bool descending, const bool focused) -> QIcon {
     return icon;
 }
 
+enum class NavigationIcon : std::uint8_t { Back,
+                                           Forward,
+                                           Up,
+};
+
+auto make_navigation_icon(const NavigationIcon direction, const bool focused) -> QIcon {
+    auto icon = QIcon();
+    const auto draw = [direction](const QColor &color, const qreal scale) {
+        QPixmap pixmap(QSize(static_cast<int>(16 * scale), static_cast<int>(16 * scale)));
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        auto pen = QPen(color);
+        pen.setWidth(2);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(pen);
+        if (direction == NavigationIcon::Up) {
+            painter.drawLine(QPointF(8, 12), QPointF(8, 4));
+            painter.drawLine(QPointF(4.5, 7.5), QPointF(8, 4));
+            painter.drawLine(QPointF(8, 4), QPointF(11.5, 7.5));
+        } else {
+            const bool back = direction == NavigationIcon::Back;
+            const qreal point = back ? 4.0 : 12.0;
+            const qreal tail = back ? 12.0 : 4.0;
+            painter.drawLine(QPointF(tail, 8), QPointF(point, 8));
+            painter.drawLine(QPointF(back ? 7.5 : 8.5, 4.5), QPointF(point, 8));
+            painter.drawLine(QPointF(point, 8), QPointF(back ? 7.5 : 8.5, 11.5));
+        }
+        return pixmap;
+    };
+    const auto add_variants = [&icon, &draw](const QColor &color, const QIcon::Mode mode) {
+        icon.addPixmap(draw(color, 1.0), mode, QIcon::Off);
+        icon.addPixmap(draw(color, 2.0), mode, QIcon::Off);
+    };
+    add_variants(QColor(QString::fromLatin1(focused ? text_color : inactive_text_color)), QIcon::Normal);
+    add_variants(QColor(QStringLiteral("#6F757D")), QIcon::Disabled);
+    return icon;
+}
+
+auto navigation_icon(const NavigationIcon direction, const bool focused) -> const QIcon & {
+    static const std::array<QIcon, 3> active = {make_navigation_icon(NavigationIcon::Back, true), make_navigation_icon(NavigationIcon::Forward, true), make_navigation_icon(NavigationIcon::Up, true)};
+    static const std::array<QIcon, 3> inactive = {make_navigation_icon(NavigationIcon::Back, false), make_navigation_icon(NavigationIcon::Forward, false), make_navigation_icon(NavigationIcon::Up, false)};
+    return (focused ? active : inactive).at(static_cast<std::size_t>(direction));
+}
+
 class FolderPane final : public QFrame {
   public:
     FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)) {
@@ -994,6 +1079,14 @@ class FolderPane final : public QFrame {
         auto *back = command_button(QStringLiteral("backButton"), QStringLiteral("←"), QStringLiteral("Back"), QStringLiteral("Back Button"), commands);
         auto *forward = command_button(QStringLiteral("forwardButton"), QStringLiteral("→"), QStringLiteral("Forward"), QStringLiteral("Forward Button"), commands);
         auto *up = command_button(QStringLiteral("upButton"), QStringLiteral("Up"), QStringLiteral("Up"), QStringLiteral("Up Button"), commands);
+        back->setIcon(navigation_icon(NavigationIcon::Back, true));
+        forward->setIcon(navigation_icon(NavigationIcon::Forward, true));
+        up->setIcon(navigation_icon(NavigationIcon::Up, true));
+        for (auto *button : {back, forward, up}) {
+            button->setText(QString());
+            button->setIconSize(QSize(16, 16));
+            button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        }
         command_layout->addWidget(back);
         command_layout->addWidget(forward);
         command_layout->addWidget(up);
@@ -1059,20 +1152,40 @@ class FolderPane final : public QFrame {
         layout->addWidget(view_, 1);
         layout->addWidget(status);
         QObject::connect(model, &FolderItemsListModel::folderNameChanged, this, [title, model] { title->setText(model->getFolderName()); });
-        QObject::connect(model, &FolderItemsListModel::summaryCountTextChanged, this, [summary_count, model] { summary_count->setText(model->getSummaryCountText()); });
-        QObject::connect(model, &FolderItemsListModel::summarySelectedTextChanged, this, [summary_selected, model] { summary_selected->setText(model->getSummarySelectedText()); });
-        QObject::connect(model, &FolderItemsListModel::summarySizeTextChanged, this, [summary_size, model] { summary_size->setText(model->getSummarySizeText()); });
         auto *quick_look_failure_timer = new QTimer(this);
         quick_look_failure_timer->setSingleShot(true);
-        QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, [status, model, quick_look_failure_timer] {
-            if (!quick_look_failure_timer->isActive())
-                status->setText(model->getStatusText());
+        const auto update_status = [status, model, quick_look_failure_timer] {
+            if (quick_look_failure_timer->isActive())
+                return;
+            const auto &status_text = model->getStatusText();
+            const auto &count = model->getSummaryCountText();
+            const auto &selected = model->getSummarySelectedText();
+            // A location path was the old steady-state status. Mirror the
+            // concise summary there, but leave loading and error feedback.
+            if (status_text != model->getPathText()) {
+                status->setText(status_text);
+            } else if (count.isEmpty()) {
+                status->setText(QString());
+            } else {
+                status->setText(QStringLiteral("%1 %2").arg(count, selected));
+            }
+        };
+        QObject::connect(model, &FolderItemsListModel::summaryCountTextChanged, this, [summary_count, update_status, model] {
+            summary_count->setText(model->getSummaryCountText());
+            update_status();
         });
-        QObject::connect(quick_look_failure_timer, &QTimer::timeout, this, [status, model] { status->setText(model->getStatusText()); });
+        QObject::connect(model, &FolderItemsListModel::summarySelectedTextChanged, this, [summary_selected, update_status, model] {
+            summary_selected->setText(model->getSummarySelectedText());
+            update_status();
+        });
+        QObject::connect(model, &FolderItemsListModel::summarySizeTextChanged, this, [summary_size, model] { summary_size->setText(model->getSummarySizeText()); });
+        QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, update_status);
+        QObject::connect(quick_look_failure_timer, &QTimer::timeout, this, update_status);
         view_->setQuickLookFailureHandler([status, quick_look_failure_timer] {
             status->setText(QStringLiteral("Quick Look couldn’t open this item."));
             quick_look_failure_timer->start(status_reason_milliseconds);
         });
+        update_status();
         const auto update_toolbar = [back, forward, up, model] {
             const int state = model->getToolbarState();
             back->setEnabled(has_flag(state, toolbar_back));
@@ -1482,7 +1595,8 @@ class FavoriteItemRow final : public QLabel {
         setAccessibleDescription(path);
         setToolTip(path);
         setFocusPolicy(Qt::TabFocus);
-        setIndent(18);
+        setIndent(0);
+        setMouseTracking(true);
     }
     [[nodiscard]] auto id() const -> std::int64_t { return id_; }
     void setOpenHandler(std::function<void()> handler) { on_open_ = std::move(handler); }
@@ -1491,6 +1605,16 @@ class FavoriteItemRow final : public QLabel {
     void setStepHandler(std::function<void(int)> handler) { on_step_ = std::move(handler); }
 
   protected:
+    void enterEvent(QEnterEvent *event) override {
+        hovered_ = true;
+        update();
+        QLabel::enterEvent(event);
+    }
+    void leaveEvent(QEvent *event) override {
+        hovered_ = false;
+        update();
+        QLabel::leaveEvent(event);
+    }
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() == Qt::LeftButton)
             press_ = event->position().toPoint();
@@ -1528,6 +1652,10 @@ class FavoriteItemRow final : public QLabel {
         event->accept();
     }
     void paintEvent(QPaintEvent *event) override {
+        if (hovered_ && !hasFocus()) {
+            QPainter painter(this);
+            painter.fillRect(rect(), QColor(QString::fromLatin1(hover_color)));
+        }
         QLabel::paintEvent(event);
         if (hasFocus()) {
             QPainter painter(this);
@@ -1539,9 +1667,49 @@ class FavoriteItemRow final : public QLabel {
   private:
     std::int64_t id_;
     std::optional<QPoint> press_;
+    bool hovered_ = false;
     std::function<void()> on_open_;
     std::function<void(const QPoint &)> on_menu_;
     std::function<void(int)> on_step_;
+};
+
+/// A Favorite Group row that keeps its neutral hover separate from its
+/// blue-accent child command buttons.
+class FavoriteGroupRow final : public QWidget {
+  public:
+    explicit FavoriteGroupRow(QWidget *parent) : QWidget(parent) { setMouseTracking(true); }
+
+    void addCommandButton(QToolButton *button) { button->installEventFilter(this); }
+
+  protected:
+    void enterEvent(QEnterEvent *event) override {
+        hovered_ = true;
+        update();
+        QWidget::enterEvent(event);
+    }
+    void leaveEvent(QEvent *event) override {
+        hovered_ = false;
+        update();
+        QWidget::leaveEvent(event);
+    }
+    auto eventFilter(QObject *watched, QEvent *event) -> bool override {
+        if (qobject_cast<QToolButton *>(watched) != nullptr && (event->type() == QEvent::Enter || event->type() == QEvent::Leave)) {
+            command_hovered_ = event->type() == QEvent::Enter;
+            update();
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+    void paintEvent(QPaintEvent *event) override {
+        if (hovered_ && !command_hovered_) {
+            QPainter painter(this);
+            painter.fillRect(rect(), QColor(QString::fromLatin1(hover_color)));
+        }
+        QWidget::paintEvent(event);
+    }
+
+  private:
+    bool hovered_ = false;
+    bool command_hovered_ = false;
 };
 
 /// The Sidebar's Favorite Groups. It renders the application-owned order and
@@ -1553,7 +1721,7 @@ class FavoritesPanel final : public QWidget {
         setAccessibleName(QStringLiteral("Favorites Groups"));
         setAcceptDrops(true);
         layout_->setContentsMargins(0, 0, 0, 0);
-        layout_->setSpacing(2);
+        layout_->setSpacing(0);
         indicator_->setStyleSheet(QStringLiteral("background:%1;").arg(QString::fromLatin1(active_color)));
         indicator_->hide();
         QObject::connect(bridge_, &WorkspaceBridge::favoritesRevisionChanged, this, [this] { rebuild(); });
@@ -1615,15 +1783,16 @@ class FavoritesPanel final : public QWidget {
     [[nodiscard]] auto drop_target(QPoint position) const -> DropTarget {
         DropTarget target;
         for (const auto &section : sections_) {
-            const auto header = section.header->geometry();
+            const auto header = QRect(section.header->mapTo(this, QPoint()), section.header->size());
             if (position.y() < header.top() && target.group >= 0)
                 break;
             target = {section.group, 0, header.bottom() + 1};
             for (const auto *item : section.items) {
-                if (position.y() < item->geometry().center().y())
+                const auto item_rect = QRect(item->mapTo(this, QPoint()), item->size());
+                if (position.y() < item_rect.center().y())
                     return target;
                 target.slot += 1;
-                target.y = item->geometry().bottom() + 1;
+                target.y = item_rect.bottom() + 1;
             }
         }
         return target;
@@ -1646,10 +1815,20 @@ class FavoritesPanel final : public QWidget {
         for (int group = 0; group < bridge_->groupCount(); ++group) {
             const auto id = bridge_->groupId(group);
             const auto name = bridge_->groupName(group);
-            auto *header = new QWidget(this);
+            auto *container = new QWidget(this);
+            auto *container_layout = new QVBoxLayout(container);
+            container_layout->setContentsMargins(favorite_group_margin, favorite_group_margin, favorite_group_margin, favorite_group_margin);
+            container_layout->setSpacing(0);
+            auto *box = new QFrame(container);
+            box->setObjectName(QStringLiteral("favoriteGroupBox"));
+            auto *box_layout = new QVBoxLayout(box);
+            box_layout->setContentsMargins(0, 0, 0, 0);
+            box_layout->setSpacing(0);
+            container_layout->addWidget(box);
+            auto *header = new FavoriteGroupRow(box);
             header->setObjectName(QStringLiteral("favoriteGroup"));
             auto *row = new QHBoxLayout(header);
-            row->setContentsMargins(4, 4, 0, 0);
+            row->setContentsMargins(0, 0, 0, 0);
             row->setSpacing(0);
             if (editing_kind_ == EditKind::Group && editing_id_ == id) {
                 add_editor(row, header, QStringLiteral("favoriteGroupNameEditor"), QStringLiteral("Favorite Group Name Editor"), name, [this, id](const QString &text) { return bridge_->renameGroup(id, text); });
@@ -1664,6 +1843,7 @@ class FavoritesPanel final : public QWidget {
             menu_button->setPopupMode(QToolButton::InstantPopup);
             menu_button->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image:none; width:0px; }"));
             menu_button->setEnabled(ready);
+            header->addCommandButton(menu_button);
             auto *menu = new QMenu(menu_button);
             menu->setObjectName(QStringLiteral("favoriteGroupMenu"));
             menu->setAccessibleName(QStringLiteral("Favorite Group Menu"));
@@ -1680,41 +1860,43 @@ class FavoritesPanel final : public QWidget {
             auto *add = command_button(QStringLiteral("addFavoriteItemButton"), QStringLiteral("+"), QStringLiteral("Add the current folder"), QStringLiteral("Add Favorite Item Button"), header);
             add->setFocusPolicy(Qt::TabFocus);
             add->setEnabled(ready);
+            header->addCommandButton(add);
             QObject::connect(add, &QToolButton::clicked, this, [this, id] {
                 const auto error = bridge_->addItem(id);
                 if (!error.isEmpty())
                     show_cue(id, error);
             });
             row->addWidget(add);
-            layout_->addWidget(header);
-            auto *cue = new QLabel(this);
+            box_layout->addWidget(header);
+            auto *cue = new QLabel(box);
             cue->setObjectName(QStringLiteral("favoriteCue"));
             cue->hide();
-            layout_->addWidget(cue);
+            box_layout->addWidget(cue);
             cues_.insert(id, cue);
             Section section{id, header, {}};
             for (int item = 0; item < bridge_->itemCount(group); ++item) {
                 const auto item_id = bridge_->itemId(group, item);
                 const auto alias = bridge_->itemAlias(group, item);
                 if (editing_kind_ == EditKind::Item && editing_id_ == item_id) {
-                    auto *holder = new QWidget(this);
+                    auto *holder = new QWidget(box);
                     auto *holder_layout = new QHBoxLayout(holder);
-                    holder_layout->setContentsMargins(16, 0, 0, 0);
+                    holder_layout->setContentsMargins(0, 0, 0, 0);
                     add_editor(holder_layout, holder, QStringLiteral("favoriteItemAliasEditor"), QStringLiteral("Favorite Item Alias Editor"), alias, [this, item_id](const QString &text) { return bridge_->renameItem(item_id, text); });
-                    layout_->addWidget(holder);
+                    box_layout->addWidget(holder);
                     continue;
                 }
-                auto *row_widget = new FavoriteItemRow(item_id, alias, bridge_->itemPath(group, item), this);
+                auto *row_widget = new FavoriteItemRow(item_id, alias, bridge_->itemPath(group, item), box);
                 row_widget->setOpenHandler([this, item_id] {
                     bridge_->openItem(item_id);
                     focus_active_list_();
                 });
                 row_widget->setMenuHandler([this, item_id](const QPoint &at) { show_item_menu(item_id, at); });
-                layout_->addWidget(row_widget);
+                box_layout->addWidget(row_widget);
                 section.items.push_back(row_widget);
                 all_items.push_back(row_widget);
             }
             sections_.push_back(std::move(section));
+            layout_->addWidget(container);
         }
         for (std::size_t index = 0; index < all_items.size(); ++index) {
             all_items.at(index)->setStepHandler([all_items, index](int step) {
@@ -1726,7 +1908,7 @@ class FavoritesPanel final : public QWidget {
         if (editing_kind_ == EditKind::Draft) {
             auto *holder = new QWidget(this);
             auto *holder_layout = new QHBoxLayout(holder);
-            holder_layout->setContentsMargins(4, 0, 0, 0);
+            holder_layout->setContentsMargins(0, 0, 0, 0);
             add_editor(holder_layout, holder, QStringLiteral("favoriteGroupNameEditor"), QStringLiteral("Favorite Group Name Editor"), QString(), [this](const QString &text) { return bridge_->createGroup(text); });
             layout_->addWidget(holder);
         }
@@ -1734,7 +1916,7 @@ class FavoritesPanel final : public QWidget {
         new_group->setFocusPolicy(Qt::TabFocus);
         new_group->setEnabled(ready && !editing_);
         QObject::connect(new_group, &QToolButton::clicked, this, [this] { begin_edit(EditKind::Draft, -1); });
-        layout_->addWidget(new_group, 0, Qt::AlignLeft);
+        layout_->addWidget(new_group);
         if (editor_ != nullptr)
             editor_->setFocus(Qt::OtherFocusReason);
     }
@@ -2427,6 +2609,8 @@ class Sidebar final : public QWidget {
         setObjectName(QStringLiteral("sidebar"));
         setAccessibleName(QStringLiteral("Sidebar"));
         auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
         auto *scroll = new QScrollArea(this);
         scroll->setWidgetResizable(true);
         scroll->setFrameShape(QFrame::NoFrame);
@@ -2444,7 +2628,7 @@ class Sidebar final : public QWidget {
 
 class BrowserHighlightController final : public QObject {
   public:
-    BrowserHighlightController(QWidget *window, std::array<QFrame *, 2> folders, std::array<FolderItemsList *, 2> views) : window_(window), folders_(folders), views_(views) {
+    BrowserHighlightController(QWidget *window, std::array<Browser *, 2> browsers) : window_(window), browsers_(browsers) {
         window_->installEventFilter(this);
         apply(window_->isActiveWindow());
     }
@@ -2470,20 +2654,24 @@ class BrowserHighlightController final : public QObject {
                 widget->setProperty("windowActive", window_active);
                 if (auto *sort = dynamic_cast<QToolButton *>(widget); sort != nullptr && sort->objectName() == QStringLiteral("sortControl"))
                     sort->setIcon(sort_caret_icon(sort->property("sortDescending").toBool(), browser == active_ && window_active));
+                else if (auto *button = dynamic_cast<QToolButton *>(widget); button != nullptr && button->objectName() == QStringLiteral("backButton"))
+                    button->setIcon(navigation_icon(NavigationIcon::Back, browser == active_ && window_active));
+                else if (auto *button = dynamic_cast<QToolButton *>(widget); button != nullptr && button->objectName() == QStringLiteral("forwardButton"))
+                    button->setIcon(navigation_icon(NavigationIcon::Forward, browser == active_ && window_active));
+                else if (auto *button = dynamic_cast<QToolButton *>(widget); button != nullptr && button->objectName() == QStringLiteral("upButton"))
+                    button->setIcon(navigation_icon(NavigationIcon::Up, browser == active_ && window_active));
                 repolish(widget);
             };
-            auto *folder = static_cast<QWidget *>(folders_.at(browser));
-            apply_state(folder);
-            for (QWidget *child : folder->findChildren<QWidget *>())
+            auto *browser_widget = static_cast<QWidget *>(browsers_.at(browser));
+            apply_state(browser_widget);
+            for (QWidget *child : browser_widget->findChildren<QWidget *>())
                 apply_state(child);
-            apply_state(views_.at(browser));
-            views_.at(browser)->viewport()->update();
+            browsers_.at(browser)->view()->viewport()->update();
         }
     }
 
     QWidget *window_;
-    std::array<QFrame *, 2> folders_;
-    std::array<FolderItemsList *, 2> views_;
+    std::array<Browser *, 2> browsers_;
     int active_ = 0;
 };
 
@@ -2831,7 +3019,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
             startup_period_timer.start(5000);
         }
     });
-    BrowserHighlightController browser_highlighter(&window, {left_browser->folder(), right_browser->folder()}, {left_browser->view(), right_browser->view()});
+    BrowserHighlightController browser_highlighter(&window, browsers);
     QObject::connect(&bridge, &WorkspaceBridge::activeBrowserChanged, &window, [&bridge, &browser_highlighter] { browser_highlighter.activate(bridge.getActiveBrowser()); });
     QObject::connect(&bridge, &WorkspaceBridge::startupFailureChanged, &window, [&bridge, browsers] {
         for (auto *browser : browsers)

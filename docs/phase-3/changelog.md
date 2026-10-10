@@ -4,6 +4,16 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-10 — P3-M12 through P3-M14 planning
+
+- Started P3-M12. Its implementation retains the application and persistence boundaries, uses cached in-process Qt bitmap icons, and receives native macOS visual/accessibility verification before completion.
+- **P3-M12 owner follow-up:** Folder Pane Toolbar Row #2 uses ordinary English singular inflection: `1 item M selected`; zero and every other count use `N items M selected`.
+- **P3-M12 owner follow-up:** the same `N items M selected` text appears in both Folder Pane Toolbar Row #2 and the Browser Status Bar. Favorite Groups use dark `#15171A` containers with a one-pixel `#3A4048` border, 6px radius, and an 8px margin on every side; their internal rows remain flush. Status Bar loading, error, monitoring, and temporary command feedback remains visible instead of being replaced by the normal summary.
+- Added planned P3-M12 GUI enhancement, P3-M13 Settings Window skeleton, and P3-M14 basic-settings and keyboard-shortcut milestones, each with an overview and architecture plan.
+- **P3-M12 owner decisions:** the pass prioritizes clarity, consistency, modern flat surfaces, visible enabled-control hover feedback, a flatter Sidebar, and stronger inactive-Browser dimming. Favorite Items and alias editors align flush left with their groups; group names are bold and Items regular. Sidebar rows are edge-to-edge with neutral-gray `#2B3037` hover; Favorite Group Menu and Add Favorite Item Buttons, Back, Forward, Up, and Main Toolbar Settings and Notices use distinct `#2F6D9A` blue-accent hover without highlighting their parent row. Folder Items, inactive Browser Tabs, and sort controls use subtle neutral-gray hover. Back, Forward, and Up replace text glyphs with monochrome local shafted-arrow bitmap icons. Inactive Browser surfaces, text, selection, and Relative Date colors use the values in [ux-gui.md](../ux-gui.md#visual-layout-and-accessibility), while keyboard focus remains blue. After its first successful listing, Folder Pane Toolbar Row #2 uses `1 item M selected` for one Item and `N items M selected` otherwise, with the selected segment in muted blue; it is blank before that listing and retains last-successful values later.
+- **P3-M13 owner decisions:** the existing Settings gear and fixed `Command+,` open one window-modal Settings Window with a left category list. It has no footer controls; Escape and its title-bar close control dismiss it. It is unavailable whenever settings storage is unhealthy.
+- **P3-M14 owner decisions:** General owns whole-app Reset Settings and each keyboard-shortcut row owns Restore Default. The exact additional basic-settings inventory, shortcut capture grammar, and conflict-resolution behavior are decided and recorded immediately before P3-M14 implementation begins; they must not be invented during implementation.
+
 ## 2026-10-05 — P3-M10 watcher recovery follow-up
 
 - FSEvents reports a dropped or coalesced history and wrapped event IDs as a continuity failure. The watcher now demotes that stream to periodic checking, requests a reconciliation, and registers a fresh native stream before it reports Native again. This prevents a stream with an uncertain event history from being treated as authoritative.

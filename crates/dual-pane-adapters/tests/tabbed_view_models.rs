@@ -170,14 +170,14 @@ fn a_link_to_a_folder_shows_link_type_and_counts_as_a_folder() {
     session.show(BrowserSide::Left, path(&["work"]), vec![folder("Photos"), link]);
     let view = session.left.view();
     assert_eq!((view.cell_text(1, FolderItemsColumn::Type).unwrap(), view.cell_text(1, FolderItemsColumn::Size).unwrap()), ("[LNK]".to_owned(), String::new()));
-    assert_eq!(parts(view), ("2 items", "", "0 B"));
+    assert_eq!(parts(view), ("2 items", "0 selected", "0 B"));
 }
 
 #[test]
 fn the_summary_counts_and_totals_the_selection_or_else_the_folder() {
     let mut session = Session::new();
     session.show(BrowserSide::Left, path(&["work"]), vec![folder("Photos"), file("a", None, Some(600)), file("b", None, Some(900)), file("c", None, None)]);
-    assert_eq!(parts(session.left.view()), ("4 items", "", "—"));
+    assert_eq!(parts(session.left.view()), ("4 items", "0 selected", "—"));
     session.ui(BrowserSide::Left, UiEvent::SelectRow { row: 1 });
     session.ui(BrowserSide::Left, UiEvent::ExtendToRow { row: 2 });
     assert_eq!(parts(session.left.view()), ("4 items", "2 selected", "1.5 KB / —"));
@@ -194,6 +194,16 @@ fn the_summary_counts_and_totals_the_selection_or_else_the_folder() {
     session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: dual_pane_domain::ListingErrorKind::ItemMissing });
     let view = session.left.view();
     assert_eq!((view.location_text(), parts(view), view.status_text()), ("/work", ("4 items", "1 selected", "0 B / —"), "“/missing” no longer exists."));
+}
+
+#[test]
+fn summary_inflects_one_item_and_keeps_zero_selection_visible() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Left, path(&["one"]), vec![file("only", None, Some(12))]);
+    assert_eq!(parts(session.left.view()), ("1 item", "0 selected", "12 B"));
+
+    session.show(BrowserSide::Right, path(&["empty"]), Vec::new());
+    assert_eq!(parts(session.right.view()), ("0 items", "0 selected", "0 B"));
 }
 
 #[test]

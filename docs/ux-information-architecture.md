@@ -46,6 +46,7 @@ The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider
   - Operation Panel Strip below both Browsers, containing docked Operation Panels
 - Floating Operation Panels, each with Operation Progress Indicator, Cancel Operation Button, and any Operation Decision Card for its job
 - Notices auxiliary window with Notice entries and Notices Startup Checkbox
+- Settings Window with General Settings and Keyboard Shortcuts Settings categories
 - Transient Waiting Window while the workspace session loads
 - Permanent Delete Confirmation Window
 

@@ -412,7 +412,7 @@ impl BrowserViewModel {
         let count = item_count(self.entries.len());
         let total = total_size(self.entries.iter());
         self.summary = match self.selection.entries().len() {
-            0 => Summary { count, selected: String::new(), size: total },
+            0 => Summary { count, selected: "0 selected".to_owned(), size: total },
             selected => {
                 let names = self.selection.entries().iter().collect::<HashSet<_>>();
                 Summary { count, selected: format!("{selected} selected"), size: format!("{} / {total}", total_size(self.entries.iter().filter(|entry| names.contains(entry.name())))) }
