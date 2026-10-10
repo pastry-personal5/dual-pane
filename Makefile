@@ -35,7 +35,7 @@ check:
 			rm -f "$$output"; \
 		else \
 			printf 'failed\n'; \
-			cat "$$output"; \
+			rg -n -i 'error:|failed|panic|assertion' "$$output" | head -n 80 || sed -n '1,80p' "$$output"; \
 			rm -f "$$output"; \
 			exit 1; \
 		fi; \
