@@ -12,7 +12,7 @@ The Main Toolbar owns its existing Settings button. The desktop adds a fixed `Co
 
 The desktop applies availability to both entry points. If it becomes false while the dialog is visible, its lifecycle owner rejects the dialog before disabling its entry points; Notices continues to expose the established failure and Reset Settings recovery flow.
 
-The dialog owns a left category list and a stacked content area. It starts with General Settings and Keyboard Shortcuts Settings placeholders only. It has accessible labels and standard focus order, opens with category-list focus, and rejects on Escape or the title-bar close control. P3-M14 replaces placeholders with live controls.
+The dialog owns a left category list and a stacked content area. It starts with General Settings and Keyboard Shortcuts Settings placeholders only. It has accessible labels and standard focus order, opens with category-list focus, and rejects on Escape or the title-bar close control. It has a 1400 by 900 logical-pixel minimum; the category sidebar reuses the main window’s dark surface, blue selection, neutral hover, and divider while the content pane uses the Browser surface. P3-M14 replaces placeholders with live controls.
 
 ## Verification
 

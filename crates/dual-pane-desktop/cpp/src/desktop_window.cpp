@@ -2,6 +2,7 @@
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
 #include "dual-pane-desktop/src/operations_bridge.cxxqt.h"
 #include "dual-pane-desktop/src/workspace_bridge.cxxqt.h"
+#include "dual_pane_desktop/notices_glyph.hpp"
 #include "dual_pane_desktop/quick_look_preview.hpp"
 #include "dual_pane_desktop/settings_glyph.hpp"
 
@@ -136,6 +137,8 @@ constexpr int status_reason_milliseconds = 3000;
 constexpr int quick_look_hold_milliseconds = 256;
 constexpr auto window_color = "#1B1D21", surface_color = "#23262B", inactive_surface_color = "#17191D", text_color = "#ECEFF3", inactive_text_color = "#8A9099", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#173A55", hover_color = "#2B3037", favorite_group_color = "#15171A", divider_hover_border_color = "#737A84", error_color = "#E5737A";
 constexpr int favorite_group_margin = 8;
+constexpr int favorite_row_horizontal_padding = 8;
+constexpr int favorite_row_vertical_padding = 4;
 
 // `toolbarState` flags from the Folder Items model.
 constexpr unsigned toolbar_new_tab = 1U, toolbar_back = 2U, toolbar_forward = 4U, toolbar_up = 8U;
@@ -212,10 +215,14 @@ auto style_sheet() -> QString {
       QWidget#browser[browserActive="true"][windowActive="true"], QWidget#browserTabsStrip[browserActive="true"][windowActive="true"], QLineEdit#pathEditControl[browserActive="true"][windowActive="true"] { background:%2; }
       QWidget#browser[browserActive="false"][windowActive="true"], QLineEdit#pathEditControl[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
       QWidget#browserTabsStrip[browserActive="false"][windowActive="true"] { background:%9; }
-      QFrame#favoriteGroupBox { background:%12; border:1px solid %4; border-radius:6px; }
+      QFrame#favoriteGroupBox { background:%12; border:0; border-radius:6px; }
       QWidget#favoriteGroup, QLabel#favoriteGroupName, QLabel#favoriteItem { background:transparent; border:0; border-radius:0; }
-      QLabel#favoriteGroupName { font-weight:bold; }
+      QLabel#favoriteGroupName { font-size:13px; font-weight:bold; }
+      QLabel#favoriteItem { font-size:13px; }
       QLineEdit#favoriteItemAliasEditor, QLineEdit#favoriteGroupNameEditor { background:%2; border:1px solid %5; border-radius:0; }
+      QToolButton#newGroupButton { padding-left:8px; text-align:left; }
+      QToolButton#settings, QToolButton#noticesButton { min-width:24px; max-width:24px; min-height:24px; max-height:24px; margin:0; padding:0; border:0; }
+      QWidget#mainToolbar { background:transparent; border:0; }
       QLabel#expandOverlay { background:rgba(0, 0, 0, 160); color:white; }
       QTreeView#folderItemsList[missingFolder="true"] { color:#6F757D; }
       QLabel#missingFolderOverlay { background:transparent; color:white; }
@@ -226,6 +233,13 @@ auto style_sheet() -> QString {
       QFrame#operationDecisionCard { background:%1; border:1px solid %8; }
       QWidget#floatingOperationPanel { background:%1; color:%3; }
       QLabel#operationPanelTitle { font-weight:bold; }
+      QDialog#settingsWindow { background:%1; color:%3; }
+      QListWidget#settingsCategoryList { background:%1; color:%3; border:0; border-right:1px solid %4; outline:none; padding:8px; }
+      QListWidget#settingsCategoryList::item { padding:10px 12px; margin:2px 0; border-radius:4px; }
+      QListWidget#settingsCategoryList::item:hover:!selected { background:%11; }
+      QListWidget#settingsCategoryList::item:selected { background:%5; color:white; }
+      QStackedWidget#settingsPages { background:%2; border:0; }
+      QWidget#settingsPage { background:%2; color:%3; }
       QSplitter::handle { background:%4; }
     )")
         .arg(window_color)
@@ -1600,6 +1614,7 @@ class FavoriteItemRow final : public QLabel {
         setToolTip(path);
         setFocusPolicy(Qt::TabFocus);
         setIndent(0);
+        setContentsMargins(favorite_row_horizontal_padding, favorite_row_vertical_padding, favorite_row_horizontal_padding, favorite_row_vertical_padding);
         setMouseTracking(true);
     }
     [[nodiscard]] auto id() const -> std::int64_t { return id_; }
@@ -1832,7 +1847,7 @@ class FavoritesPanel final : public QWidget {
             auto *header = new FavoriteGroupRow(box);
             header->setObjectName(QStringLiteral("favoriteGroup"));
             auto *row = new QHBoxLayout(header);
-            row->setContentsMargins(0, 0, 0, 0);
+            row->setContentsMargins(favorite_row_horizontal_padding, favorite_row_vertical_padding, favorite_row_horizontal_padding, favorite_row_vertical_padding);
             row->setSpacing(0);
             if (editing_kind_ == EditKind::Group && editing_id_ == id) {
                 add_editor(row, header, QStringLiteral("favoriteGroupNameEditor"), QStringLiteral("Favorite Group Name Editor"), name, [this, id](const QString &text) { return bridge_->renameGroup(id, text); });
@@ -1884,7 +1899,7 @@ class FavoritesPanel final : public QWidget {
                 if (editing_kind_ == EditKind::Item && editing_id_ == item_id) {
                     auto *holder = new QWidget(box);
                     auto *holder_layout = new QHBoxLayout(holder);
-                    holder_layout->setContentsMargins(0, 0, 0, 0);
+                    holder_layout->setContentsMargins(favorite_row_horizontal_padding, favorite_row_vertical_padding, favorite_row_horizontal_padding, favorite_row_vertical_padding);
                     add_editor(holder_layout, holder, QStringLiteral("favoriteItemAliasEditor"), QStringLiteral("Favorite Item Alias Editor"), alias, [this, item_id](const QString &text) { return bridge_->renameItem(item_id, text); });
                     box_layout->addWidget(holder);
                     continue;
@@ -1912,15 +1927,19 @@ class FavoritesPanel final : public QWidget {
         if (editing_kind_ == EditKind::Draft) {
             auto *holder = new QWidget(this);
             auto *holder_layout = new QHBoxLayout(holder);
-            holder_layout->setContentsMargins(0, 0, 0, 0);
+            holder_layout->setContentsMargins(favorite_row_horizontal_padding, favorite_row_vertical_padding, favorite_row_horizontal_padding, favorite_row_vertical_padding);
             add_editor(holder_layout, holder, QStringLiteral("favoriteGroupNameEditor"), QStringLiteral("Favorite Group Name Editor"), QString(), [this](const QString &text) { return bridge_->createGroup(text); });
             layout_->addWidget(holder);
         }
-        auto *new_group = command_button(QStringLiteral("newGroupButton"), QStringLiteral("New Group"), QStringLiteral("New Group"), QStringLiteral("New Group Button"), this);
+        auto *new_group_holder = new QWidget(this);
+        auto *new_group_layout = new QHBoxLayout(new_group_holder);
+        new_group_layout->setContentsMargins(favorite_group_margin, 0, favorite_group_margin, favorite_group_margin);
+        auto *new_group = command_button(QStringLiteral("newGroupButton"), QStringLiteral("New Group"), QStringLiteral("New Group"), QStringLiteral("New Group Button"), new_group_holder);
         new_group->setFocusPolicy(Qt::TabFocus);
         new_group->setEnabled(ready && !editing_);
         QObject::connect(new_group, &QToolButton::clicked, this, [this] { begin_edit(EditKind::Draft, -1); });
-        layout_->addWidget(new_group);
+        new_group_layout->addWidget(new_group);
+        layout_->addWidget(new_group_holder);
         if (editor_ != nullptr)
             editor_->setFocus(Qt::OtherFocusReason);
     }
@@ -2592,8 +2611,12 @@ class SettingsWindow final : public QDialog {
         setWindowModality(Qt::WindowModal);
         QObject::connect(this, &QDialog::finished, this, &QObject::deleteLater);
         auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(favorite_group_margin, 0, favorite_group_margin, 0);
+        layout->addStretch();
+        layout->setSpacing(0);
         categories_->setObjectName(QStringLiteral("settingsCategoryList"));
         categories_->setAccessibleName(QStringLiteral("Settings Category List"));
+        categories_->setMinimumWidth(320);
         categories_->addItem(QStringLiteral("General Settings"));
         categories_->addItem(QStringLiteral("Keyboard Shortcuts Settings"));
         categories_->setCurrentRow(0);
@@ -2603,7 +2626,8 @@ class SettingsWindow final : public QDialog {
         QObject::connect(categories_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
         layout->addWidget(categories_);
         layout->addWidget(pages_, 1);
-        resize(560, 340);
+        setMinimumSize(1400, 900);
+        resize(1400, 900);
         categories_->setFocus();
     }
 
@@ -2615,7 +2639,7 @@ class SettingsWindow final : public QDialog {
 
     auto placeholder(const QString &name, const QString &text) -> QWidget * {
         auto *page = new QWidget(pages_);
-        page->setObjectName(name);
+        page->setObjectName(QStringLiteral("settingsPage"));
         page->setAccessibleName(name);
         page->setAccessibleDescription(text);
         auto *layout = new QVBoxLayout(page);
@@ -2637,24 +2661,29 @@ class MainToolbar final : public QWidget {
         setObjectName(QStringLiteral("mainToolbar"));
         setAccessibleName(QStringLiteral("Main Toolbar"));
         auto *layout = new QHBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setContentsMargins(favorite_group_margin, 4, 0, 4);
+        layout->setSpacing(0);
         settings_->setObjectName(QStringLiteral("settings"));
         settings_->setIcon(QIcon(QPixmap(settings_glyph::pixels)));
         settings_->setToolTip(QStringLiteral("Settings"));
         settings_->setAccessibleName(QStringLiteral("Settings"));
         settings_->setFocusPolicy(Qt::NoFocus);
+        settings_->setIconSize(QSize(16, 16));
+        settings_->setFixedSize(24, 24);
         settings_->setDisabled(true);
         QObject::connect(settings_, &QToolButton::clicked, this, show_settings);
-        layout->addWidget(settings_);
+        layout->addWidget(settings_, 0, Qt::AlignLeft);
         auto *notices = new QToolButton(this);
         notices->setObjectName(QStringLiteral("noticesButton"));
-        notices->setText(QStringLiteral("Notices"));
+        notices->setIcon(QIcon(QPixmap(notices_glyph::pixels)));
+        notices->setIconSize(QSize(16, 16));
+        notices->setFixedSize(24, 24);
         notices->setToolTip(QStringLiteral("Notices"));
         notices->setAccessibleName(QStringLiteral("Notices Button"));
         notices->setFocusPolicy(Qt::TabFocus);
         QObject::connect(notices, &QToolButton::clicked, this, show_notices);
-        layout->addWidget(notices);
-        layout->addStretch();
+        layout->addWidget(notices, 0, Qt::AlignLeft);
+        layout->addStretch(1);
     }
 
     void set_settings_available(bool available) {

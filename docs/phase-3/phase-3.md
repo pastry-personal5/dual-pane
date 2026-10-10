@@ -101,3 +101,9 @@ Plan: [overview](milestone-13-overview.md), [architecture](milestone-13-architec
 Status: Planned
 Goal: Expose approved basic settings and editable keyboard shortcuts through Settings while preserving the application-owned settings boundary.
 Plan: [overview](milestone-14-overview.md), [architecture](milestone-14-architecture.md)
+
+### P3-M15: Hide macOS housekeeping items
+
+Status: Planned
+Goal: Let people hide or reveal an owner-approved narrow set of macOS housekeeping artifacts without concealing intentional dotfiles or changing file-operation safety.
+Plan: [overview](milestone-15-overview.md), [architecture](milestone-15-architecture.md)

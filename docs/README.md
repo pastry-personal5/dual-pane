@@ -9,6 +9,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [development-process.md](development-process.md) | Phases, milestones, IDs (`P1-M2`), definition of done, where plans live, and doc status values |
 | [architecture.md](architecture.md) | Active Clean Architecture with MVVM presentation and command-based input, technical stack, crate boundaries, threading, file-operation safety, and testing. |
 | [product-behavior.md](product-behavior.md) | Active product scope, Favorites identity, file-operation safeguards, session recovery, Notices startup policy, and exclusions. |
+| [hidden-files-research.md](hidden-files-research.md) | Research and proposed bounded policy for hiding macOS housekeeping artifacts without hiding intentional dotfiles. |
 | [ux-terms.md](ux-terms.md) | Canonical component and action names, code mappings, and naming exemptions. |
 | [ux-information-architecture.md](ux-information-architecture.md) | Current Standard Layout and planned Phase 3 component containment. |
 | [ux-gui.md](ux-gui.md) | Version 2.0.0 interaction table and planned Phase 3 tabs, Favorites, commands, operation UI, Notices, sort, and refresh rules. |
@@ -43,6 +44,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-3/milestone-13-architecture.md](phase-3/milestone-13-architecture.md) | P3-M13 modal Settings entry, availability, and desktop-boundary design. |
 | [phase-3/milestone-14-overview.md](phase-3/milestone-14-overview.md) | P3-M14 decision gate and checklist for basic settings and keyboard shortcuts. |
 | [phase-3/milestone-14-architecture.md](phase-3/milestone-14-architecture.md) | P3-M14 application-owned settings and shortcut-editor delivery approach. |
+| [phase-3/milestone-15-overview.md](phase-3/milestone-15-overview.md) | P3-M15 decision gate and executable checklist for a macOS-housekeeping display setting. |
+| [phase-3/milestone-15-architecture.md](phase-3/milestone-15-architecture.md) | P3-M15 application-owned filtering, refresh, persistence, and desktop-worker approach. |
 | [phase-3/changelog.md](phase-3/changelog.md) | Phase 3 decisions and plan changes. |
 | [phase-3/open-items.md](phase-3/open-items.md) | Unresolved Phase 3 design and product questions, deferred verification, and the milestone or phase that must settle each. |
 | [archive/phases/phase-2/phase-2.md](archive/phases/phase-2/phase-2.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |

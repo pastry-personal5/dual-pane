@@ -4,10 +4,22 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-10 — P3-M15 hidden-files research and planning
+
+- Added [hidden-file research](../hidden-files-research.md) and P3-M15’s [overview](milestone-15-overview.md) and [architecture plan](milestone-15-architecture.md).
+- The proposal narrowly distinguishes Finder/AppleDouble housekeeping artifacts from intentional Unix and project dotfiles. The exact matcher, default, General-page wording, and any macOS-invisible-item behavior remain owner decisions; no product behavior has changed.
+
 ## 2026-10-10 — P3-M12 through P3-M14 planning
 
 - **P3-M13 implementation correction:** Settings interaction availability is now a read-only application-to-desktop projection, not desktop-only composition. It becomes unavailable for every non-stale settings-store write failure, including a workspace-session write, and recovers only after successful Reset Settings and replacement load. Fixed macOS `Command+,` is reserved for Settings rather than an editable ActionId binding.
 - **P3-M13 implementation review:** Settings dialog teardown relies on `QPointer` automatic nulling after the dialog schedules deletion for every completion, avoiding a captured stack-pointer teardown callback. Availability projection tests confirm this presentation state does not trigger workspace shortcut rebinding.
+- **P3-M13 owner design change:** Settings Window has a 1400 by 900 logical-pixel minimum. Its category sidebar and content pane reuse the main workspace’s dark sidebar and Browser visual hierarchy.
+- **P3-M12 owner design change:** Favorite Groups are borderless; their rows and inline editors use 4px vertical and 8px horizontal padding. New Group aligns to Group boxes with matching left text padding. Settings and Notices move to the right of the Main Toolbar, and Notices becomes a local bitmap button so narrow Sidebars show no clipped label.
+- **P3-M12 owner follow-up:** Settings and Notices are grouped together in a borderless box at the bottom-left of the Sidebar, with a left inset.
+- **P3-M12 owner follow-up:** Settings and Notices have no gap between their buttons. Favorite Group names use bold 13px text to match Browser row text.
+- **P3-M12 layout follow-up:** Explicit left alignment and a trailing stretch anchor the Settings/Notices pair at the Sidebar's modest left inset instead of letting the toolbar's horizontal layout distribute its free width around them.
+- **P3-M12 owner follow-up:** Favorite Item labels use regular 13px text to match Browser Folder Items.
+- **P3-M12 owner follow-up:** Removed the visible Settings/Notices seam caused by generic tool-button border and padding rules; both icon buttons now have explicit zero margin, padding, and border at a fixed 24px size, inside a zero-spacing layout.
 
 - Started P3-M12. Its implementation retains the application and persistence boundaries, uses cached in-process Qt bitmap icons, and receives native macOS visual/accessibility verification before completion.
 - **P3-M12 owner follow-up:** Folder Pane Toolbar Row #2 uses ordinary English singular inflection: `1 item M selected`; zero and every other count use `N items M selected`.
