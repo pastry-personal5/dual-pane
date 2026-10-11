@@ -14,6 +14,7 @@ This document is the active source of truth for committed product behavior, safe
 - Previewing a Folder Pane item with native macOS Quick Look.
 - Restoring each Browser's open tabs, their order, active tab, locations, and active Browser, and the workspace window's frame, zoomed or full-screen state, and Sidebar Splitter and Browser Divider positions, when the application relaunches. Folder sort choices are restored from location-shared memory; text filtering is outside Phase 3 behavior and session state.
 - Watching open tab locations and automatically refreshing Folder Items, including inactive tabs, while preserving matching selection and cursor state.
+- Three global file and folder visibility settings, planned for P3-M15: macOS metadata and service items hidden by default, other leading-dot items shown by default, and items marked invisible by macOS hidden by default. The exact names, precedence, and controls are in the [P3-M15 owner decisions](phase-3/milestone-15-overview.md#owner-decisions). These settings affect Folder Items display, not the contents of file operations.
 
 ## Favorites
 

@@ -68,16 +68,17 @@ Implementation status: Partly delivered. The table above still describes the rel
 
 ### Future shortcut editor
 
-- A later shortcut editor lists customizable actions backed by stable UpperCamelCase action IDs and lets the person replace a default keyboard shortcut. The [canonical actions](ux-terms.md#canonical-actions) name existing catalogue entries and reserved future IDs. For example, `NewFolder` starts with `Command+Shift+N` and can be assigned another valid shortcut once the action exists.
-- The editor shows each action's effective shortcut, reports conflicts, and offers Restore Default. The [P3-M2 plan](phase-3/milestone-02-architecture.md#actions-and-shortcut-settings) owns action identity, validation, and persistence.
-- On macOS, fixed `Command+,` remains reserved for Settings and is not assignable to an editable action binding.
+- The P3-M14 shortcut editor lists the [canonical actions](ux-terms.md#canonical-actions) backed by stable UpperCamelCase action IDs. Each action can have several distinct one-key shortcuts or none; its row shows all effective shortcuts, scope, Add, individual Remove controls, Restore Default, and item-specific help.
+- Capture, modifier display, protected keys, conflicts, reserved macOS combinations, and default/reset behavior follow the [P3-M14 owner decisions](phase-3/milestone-14-overview.md#owner-decisions). Fixed `Command+,` remains reserved for Settings. The [P3-M2 contract](phase-3/milestone-02-architecture.md#actions-and-shortcut-settings) continues to own stable action identity and the settings boundary.
 
 ### Settings Window
 
-- The Main Toolbar Settings control and fixed `Command+,` open or raise one parented, window-modal Settings Window only while settings storage is healthy. The window has a left Settings Category List with General Settings and Keyboard Shortcuts Settings. It has no footer action; Escape and the title-bar close control dismiss it.
+- The Main Toolbar Settings control and fixed `Command+,` open or raise one parented, window-modal Settings Window only while settings storage is healthy. The window has a left Settings Category List with General Settings and Keyboard Shortcuts Settings. It has no footer action; Escape and the in-window Close control at the upper right dismiss it.
 - The Settings Window has a 1400 by 900 logical-pixel minimum. Its category sidebar uses the workspace’s dark window surface, blue selected state, neutral hover state, and divider; its content pane uses the Browser surface so the dialog reads as a focused extension of the main workspace.
+- P3-M14 shows **Settings** as visible text at the window's upper left. Small bitmap circled-i buttons sit beside General controls and shortcut actions; each opens a keyboard-accessible, item-specific anchored explanation overlay.
 - Settings is unavailable while initial settings load is pending or storage is unhealthy. A storage failure disables both entries and dismisses an open Settings Window; Notices keeps its existing recovery path.
-- General exposes “Don’t show notices at startup” and Reset Settings. A valid setting change applies immediately. Reset requires the existing explicit confirmation, closes Settings after confirmation, and retains its established workspace-reset behavior. P3-M14 records the remaining basic-settings and shortcut-capture decisions before implementation.
+- General exposes “Don’t show notices at startup” and Reset Settings, with no other P3-M14 preference. A valid setting change applies immediately. Reset requires the existing explicit confirmation, closes Settings after confirmation, and retains its established workspace-reset behavior.
+- P3-M15 adds three independent General controls: “Show macOS metadata and service items” (off by default), “Show dotfiles” (on by default), and “Show items marked invisible by macOS” (off by default). Help text explains that an Item hidden by more than one rule needs each applicable Show control enabled. A change updates both Browsers and all tabs; while the new listing loads, old rows from a broader policy are not displayed or actionable. The [P3-M15 decision table](phase-3/milestone-15-overview.md#owner-decisions) defines exact matches and persistence.
 
 ### Sidebar Favorites
 

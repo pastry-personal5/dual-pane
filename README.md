@@ -20,6 +20,7 @@ The current development build adds Phase 3 workspace features that are not in a 
 - Folder Items show six columns, including native icons and age-colored Relative Dates that dim with their Browser, with direct sort buttons and a summary row.
 - Multiple Items can be selected with Command-click, Shift-click, Shift-arrow, and `Command+A`.
 - A Notices window reports settings and Favorites problems and offers a confirmed Reset Settings.
+- The Settings gear and `Command+,` open a read-only Settings Window shell while settings storage is healthy; General and Keyboard Shortcuts controls arrive in a later milestone.
 - Workspace sessions restore tabs, active Browsers, and window layout; a delayed settings load shows an accessible Waiting Window and protects the prior session after its timeout.
 - Space previews the Folder Items cursor with macOS Quick Look; a tap opens its normal panel, while a 256 ms hold opens a panel at the largest usable screen frame with a short, motion-aware native transition.
 - File operations, delivered by milestone P3-M8, are in the development build:

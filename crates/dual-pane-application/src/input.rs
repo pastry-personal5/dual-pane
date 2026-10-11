@@ -331,6 +331,10 @@ pub enum Event {
         revision: u64,
         failure: SettingsFailure,
     },
+    SessionSaveFailed {
+        revision: u64,
+        failure: SettingsFailure,
+    },
     SettingsLoaded {
         snapshot: SettingsSnapshot,
     },

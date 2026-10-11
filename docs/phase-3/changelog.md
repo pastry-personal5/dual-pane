@@ -4,10 +4,20 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-11 — P3-M13 Done
+
+- Native review confirmed Settings entry, category switching, and Escape on macOS 26.7.1. A parented Qt window-modal dialog appears as a macOS sheet without a title-bar close control. The owner chose an in-window Close control at the upper right while retaining window modality and no footer.
+- Session-save failures now carry a distinct event and reset revision floor, so a current session write failure cannot be mistaken for a stale settings write after Reset Settings.
+- The offscreen Qt Settings Window check, native accessibility and failure-time dismissal checks, `make check`, and the direct Rust formatting, lint, and test commands passed. The [P3-M13 checklist](milestone-13-overview.md#completion-checklist) is complete.
+
+## 2026-10-11 — P3-M14 owner shortcut and Settings decisions
+
+- The owner approved the [P3-M14 decision table](milestone-14-overview.md#owner-decisions): a visible Settings heading, optional item-level circled-i help overlays, a modern shortcut table, several single-key modifier combinations per action, deliberate unbinding, global conflict rejection, protected plain keys, known macOS reservations, written modifier labels, and replacement-style Restore Default. General adds no preference before P3-M15. The [architecture plan](milestone-14-architecture.md) now covers the multi-binding model, transactional migration, capture suppression, and verification.
+
 ## 2026-10-10 — P3-M15 hidden-files research and planning
 
 - Added [hidden-file research](../hidden-files-research.md) and P3-M15’s [overview](milestone-15-overview.md) and [architecture plan](milestone-15-architecture.md).
-- The proposal narrowly distinguishes Finder/AppleDouble housekeeping artifacts from intentional Unix and project dotfiles. The exact matcher, default, General-page wording, and any macOS-invisible-item behavior remain owner decisions; no product behavior has changed.
+- **Owner decisions:** General has three independent controls. Named macOS metadata/service items and macOS-invisible items start hidden; other dotfiles start shown. The owner approved exact typed matches for `.DS_Store`, `._*`, `Icon\r`, `.AppleDouble`, and `.localized` files; `.fseventsd`, `.Spotlight-V100`, `.Trashes`, `.TemporaryItems`, and `.DocumentRevisions-V100` directories match only at a volume root. The research and plan now record the complete precedence and safety behavior.
 
 ## 2026-10-10 — P3-M12 through P3-M14 planning
 

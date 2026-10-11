@@ -70,6 +70,23 @@ fn settings_interaction_availability_tracks_storage_health_and_reset_reload() {
     timed_out.handle(Event::SettingsLoadTimedOut.into());
     assert!(!timed_out.settings_interaction_available());
 }
+
+#[test]
+fn session_write_failure_uses_its_own_reset_revision_floor() {
+    let mut workspace = ready();
+    workspace.handle(Command::CreateFavoriteGroup { name: "First".into() }.into());
+    workspace.handle(Command::CreateFavoriteGroup { name: "Second".into() }.into());
+    workspace.handle(Command::ResetSettings.into());
+    assert_eq!(workspace.handle(Event::SessionSaveFailed { revision: 0, failure: SettingsFailure::Unavailable }.into()), Transition::default());
+    workspace.handle(Event::SettingsReset { backup: None }.into());
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    assert!(workspace.settings_interaction_available());
+
+    let failed = workspace.handle(Event::SessionSaveFailed { revision: 1, failure: SettingsFailure::Unavailable }.into());
+    assert!(failed.outputs.iter().any(|output| matches!(output, Output::SettingsSaveFailed { .. })));
+    assert!(!workspace.settings_interaction_available());
+    assert!(failed.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if notice.offers_reset)));
+}
 fn rejection(transition: &Transition) -> Option<FavoriteRejection> {
     match transition.outputs.as_slice() {
         [Output::FavoriteEditRejected { reason, .. }] => Some(*reason),

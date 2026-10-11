@@ -92,9 +92,10 @@ Notes: The automated gate and native macOS visual/accessibility verification pas
 
 ### P3-M13: Settings Window skeleton
 
-Status: Planned
+Status: Done
 Goal: Deliver the modal Settings window shell and its safe entry points, ready for later settings controls.
 Plan: [overview](milestone-13-overview.md), [architecture](milestone-13-architecture.md)
+Notes: The automated gate, offscreen Qt lifecycle check, and native macOS accessibility and storage-failure verification passed.
 
 ### P3-M14: Basic Settings and Keyboard Shortcuts
 
@@ -102,8 +103,8 @@ Status: Planned
 Goal: Expose approved basic settings and editable keyboard shortcuts through Settings while preserving the application-owned settings boundary.
 Plan: [overview](milestone-14-overview.md), [architecture](milestone-14-architecture.md)
 
-### P3-M15: Hide macOS housekeeping items
+### P3-M15: File and folder visibility
 
 Status: Planned
-Goal: Let people hide or reveal an owner-approved narrow set of macOS housekeeping artifacts without concealing intentional dotfiles or changing file-operation safety.
+Goal: Give people independent Settings controls for macOS metadata/service items, dotfiles, and items marked invisible by macOS, with safe live updates across both Browsers.
 Plan: [overview](milestone-15-overview.md), [architecture](milestone-15-architecture.md)

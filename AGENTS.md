@@ -56,6 +56,7 @@ make fmt-check                               # formatter checks
 make lint-rust                               # Clippy with warnings denied
 make lint-cpp                                # builds the desktop crate, then configured clang-tidy
 make check                                   # full formatter, linter, and test gate
+scripts/check-settings-window.sh            # offscreen Qt Settings Window lifecycle check
 ```
 
 Before you consider a change done, run `make check` and the equivalent direct commands. Rustfmt uses `max_width = 1000000` and `use_small_heuristics = "Max"`; `.clang-format` uses `ColumnLimit: 0`. Clippy and clang-tidy deliberately have no line-length diagnostic.

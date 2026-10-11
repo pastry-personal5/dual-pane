@@ -43,6 +43,7 @@ pub struct Workspace {
     reset_from: Option<SettingsStatus>,
     /// Save results for this revision or older predate the latest reset.
     stale_save_floor: Option<u64>,
+    stale_session_save_floor: Option<u64>,
     /// Sort choices made before the stored settings loaded. They are replayed
     /// over the loaded snapshot so the person's latest choice wins.
     pending_sorts: Vec<(Location, SortSpec)>,
@@ -148,7 +149,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new() }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
@@ -249,6 +250,7 @@ impl Workspace {
                 Transition::default()
             }
             Event::SettingsSaveFailed { revision, failure } => self.settings_save_failed(revision, failure),
+            Event::SessionSaveFailed { revision, failure } => self.session_save_failed(revision, failure),
             // Compatibility event for embedders that do not have a session
             // store. The desktop always uses the atomic session-bearing form.
             Event::SettingsLoaded { snapshot } => {
@@ -1049,6 +1051,15 @@ impl Workspace {
         if self.is_stale_save(revision) {
             return Transition::default();
         }
+        self.save_failed(revision, failure)
+    }
+    fn session_save_failed(&mut self, revision: u64, failure: SettingsFailure) -> Transition {
+        if self.stale_session_save_floor.is_some_and(|floor| revision <= floor) {
+            return Transition::default();
+        }
+        self.save_failed(revision, failure)
+    }
+    fn save_failed(&mut self, revision: u64, failure: SettingsFailure) -> Transition {
         self.settings_interaction_available = false;
         let mut transition = Transition::output(Output::SettingsSaveFailed { revision, failure });
         transition.append(self.add_notice(NoticeKind::SettingsSaveFailed { failure }));
@@ -1066,6 +1077,7 @@ impl Workspace {
         self.settings_status = SettingsStatus::Loading;
         self.settings_interaction_available = false;
         self.stale_save_floor = Some(self.settings.revision());
+        self.stale_session_save_floor = Some(self.session_revision);
         self.screenshots_probe = None;
         self.probing.clear();
         self.pending_sorts.clear();

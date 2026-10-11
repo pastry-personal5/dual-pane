@@ -78,6 +78,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -238,8 +239,11 @@ auto style_sheet() -> QString {
       QListWidget#settingsCategoryList::item { padding:10px 12px; margin:2px 0; border-radius:4px; }
       QListWidget#settingsCategoryList::item:hover:!selected { background:%11; }
       QListWidget#settingsCategoryList::item:selected { background:%5; color:white; }
-      QStackedWidget#settingsPages { background:%2; border:0; }
+      QWidget#settingsContent, QStackedWidget#settingsPages { background:%2; border:0; }
       QWidget#settingsPage { background:%2; color:%3; }
+      QToolButton#settingsCloseButton { background:%2; border:1px solid %4; border-radius:4px; padding:6px 12px; }
+      QToolButton#settingsCloseButton:hover:enabled { background:%5; }
+      QToolButton#settingsCloseButton:focus { border-color:%5; }
       QSplitter::handle { background:%4; }
     )")
         .arg(window_color)
@@ -2612,7 +2616,6 @@ class SettingsWindow final : public QDialog {
         QObject::connect(this, &QDialog::finished, this, &QObject::deleteLater);
         auto *layout = new QHBoxLayout(this);
         layout->setContentsMargins(favorite_group_margin, 0, favorite_group_margin, 0);
-        layout->addStretch();
         layout->setSpacing(0);
         categories_->setObjectName(QStringLiteral("settingsCategoryList"));
         categories_->setAccessibleName(QStringLiteral("Settings Category List"));
@@ -2624,8 +2627,25 @@ class SettingsWindow final : public QDialog {
         pages_->addWidget(placeholder(QStringLiteral("General Settings"), QStringLiteral("General settings will be available here in a future update.")));
         pages_->addWidget(placeholder(QStringLiteral("Keyboard Shortcuts Settings"), QStringLiteral("Keyboard shortcut settings will be available here in a future update.")));
         QObject::connect(categories_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
+        auto *content = new QWidget(this);
+        content->setObjectName(QStringLiteral("settingsContent"));
+        auto *content_layout = new QVBoxLayout(content);
+        content_layout->setContentsMargins(0, 0, 0, 0);
+        content_layout->setSpacing(0);
+        auto *header = new QHBoxLayout();
+        header->setContentsMargins(0, 8, 16, 8);
+        header->addStretch();
+        auto *close = new QToolButton(content);
+        close->setObjectName(QStringLiteral("settingsCloseButton"));
+        close->setText(QStringLiteral("Close"));
+        close->setAccessibleName(QStringLiteral("Close Settings Window"));
+        close->setFocusPolicy(Qt::TabFocus);
+        QObject::connect(close, &QToolButton::clicked, this, &QDialog::reject);
+        header->addWidget(close);
+        content_layout->addLayout(header);
+        content_layout->addWidget(pages_, 1);
         layout->addWidget(categories_);
-        layout->addWidget(pages_, 1);
+        layout->addWidget(content, 1);
         setMinimumSize(1400, 900);
         resize(1400, 900);
         categories_->setFocus();
@@ -2654,6 +2674,114 @@ class SettingsWindow final : public QDialog {
     QListWidget *categories_;
     QStackedWidget *pages_;
 };
+
+class SettingsWindowController final : public QObject {
+  public:
+    explicit SettingsWindowController(QWidget *owner) : QObject(owner), owner_(owner), shortcut_(new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma), owner)) {
+        shortcut_->setContext(Qt::WindowShortcut);
+        shortcut_->setEnabled(false);
+        QObject::connect(shortcut_, &QShortcut::activated, this, [this] { present(); });
+    }
+
+    void set_available(bool available) {
+        if (!available && dialog_)
+            dialog_->reject();
+        available_ = available;
+        shortcut_->setEnabled(available);
+    }
+
+    void present() {
+        if (!available_)
+            return;
+        if (dialog_) {
+            dialog_->show();
+            dialog_->raise();
+            dialog_->activateWindow();
+            return;
+        }
+        auto *dialog = new SettingsWindow(owner_);
+        dialog_ = dialog;
+        QObject::connect(dialog, &QDialog::finished, this, [this] { dialog_.clear(); });
+        dialog->open();
+    }
+
+    [[nodiscard]] auto dialog() const -> SettingsWindow * { return dialog_; }
+    [[nodiscard]] auto shortcut() const -> QShortcut * { return shortcut_; }
+
+  private:
+    QWidget *owner_;
+    QShortcut *shortcut_;
+    QPointer<SettingsWindow> dialog_;
+    bool available_ = false;
+};
+
+/// Exercises real Qt widgets without a display. The repository check script
+/// launches this path with Qt's offscreen platform plugin.
+auto run_settings_window_checks(QApplication &app) -> int {
+    QMainWindow owner;
+    QToolButton gear(&owner);
+    gear.setEnabled(false);
+    SettingsWindowController controller(&owner);
+    const auto apply_availability = [&controller, &gear](bool available) {
+        controller.set_available(available);
+        gear.setEnabled(available);
+    };
+    QObject::connect(&gear, &QToolButton::clicked, &controller, [&controller] { controller.present(); });
+    owner.show();
+    QTimer::singleShot(0, &app, [&] {
+        bool failed = false;
+        const auto check = [&failed](bool condition, const char *name) {
+            if (!condition) {
+                std::cerr << "Settings window check failed: " << name << '\n';
+                failed = true;
+            }
+        };
+        check(!gear.isEnabled() && !controller.shortcut()->isEnabled(), "initial availability");
+        controller.present();
+        check(controller.dialog() == nullptr, "unavailable entry");
+        apply_availability(true);
+        check(gear.isEnabled() && controller.shortcut()->isEnabled(), "healthy availability");
+        gear.click();
+        auto *dialog = controller.dialog();
+        if (!dialog) {
+            check(false, "pointer entry");
+            QApplication::exit(1);
+            return;
+        }
+        check(dialog->isVisible() && dialog->parentWidget() == &owner && dialog->windowModality() == Qt::WindowModal, "parented window modality");
+        auto *categories = dialog->findChild<QListWidget *>(QStringLiteral("settingsCategoryList"));
+        auto *pages = dialog->findChild<QStackedWidget *>(QStringLiteral("settingsPages"));
+        auto *close = dialog->findChild<QToolButton *>(QStringLiteral("settingsCloseButton"));
+        check(categories && dialog->focusWidget() == categories && categories->currentRow() == 0, "initial category focus");
+        check(pages && pages->count() == 2, "placeholder pages");
+        if (categories && pages) {
+            categories->setCurrentRow(1);
+            check(pages->currentIndex() == 1, "category switching");
+        }
+        controller.present();
+        check(controller.dialog() == dialog && owner.findChildren<QDialog *>().size() == 1, "one-window raising");
+        check(close && close->accessibleName() == QStringLiteral("Close Settings Window"), "accessible Close control");
+        if (close)
+            close->click();
+        check(controller.dialog() == nullptr, "Close dismissal");
+        QMetaObject::invokeMethod(controller.shortcut(), "activated");
+        dialog = controller.dialog();
+        check(dialog != nullptr, "keyboard entry");
+        if (dialog) {
+            QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(dialog, &escape);
+            check(controller.dialog() == nullptr, "Escape dismissal");
+        }
+        controller.present();
+        check(controller.dialog() != nullptr, "reopen after Escape");
+        apply_availability(false);
+        check(controller.dialog() == nullptr && !gear.isEnabled() && !controller.shortcut()->isEnabled(), "failure-time dismissal");
+        controller.present();
+        check(controller.dialog() == nullptr, "disabled entry after failure");
+        QApplication::exit(failed ? 1 : 0);
+    });
+    return QApplication::exec();
+}
 
 class MainToolbar final : public QWidget {
   public:
@@ -2930,6 +3058,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     char name[] = "dual-pane";
     char *argv[] = {name, nullptr};
     QApplication app(argc, argv);
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_SETTINGS_WINDOW_CHECK"))
+        return run_settings_window_checks(app);
     WorkspaceWindow window;
     auto *waiting = new WaitingWindow(&window);
     FolderItemsListModel left_model, right_model;
@@ -2957,18 +3087,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         notices->raise();
         notices->activateWindow();
     };
-    QPointer<SettingsWindow> settings_window;
-    const auto show_settings = [&window, &settings_window] {
-        if (settings_window) {
-            settings_window->show();
-            settings_window->raise();
-            settings_window->activateWindow();
-            return;
-        }
-        auto *dialog = new SettingsWindow(&window);
-        settings_window = dialog;
-        dialog->open();
-    };
+    auto *settings_controller = new SettingsWindowController(&window);
+    const auto show_settings = [settings_controller] { settings_controller->present(); };
     auto *sidebar = new Sidebar(&bridge, focus_active_list, show_notices, show_settings, &standard_layout);
     split->addWidget(left_browser);
     split->addWidget(right_browser);
@@ -3142,22 +3262,12 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         notices->raise();
         notices->setAttribute(Qt::WA_ShowWithoutActivating, false);
     });
-    // This is a fixed presentation command, not an ActionId. It deliberately
-    // uses the workspace window as its context, so the modal Settings Window
-    // owns Command+, while it has focus.
-    auto *open_settings = new QShortcut(QKeySequence(Qt::META | Qt::Key_Comma), &window);
-    open_settings->setContext(Qt::WindowShortcut);
-    open_settings->setEnabled(false);
-    QObject::connect(open_settings, &QShortcut::activated, &window, [&bridge, show_settings] {
-        if (bridge.getSettingsInteractionAvailable())
-            show_settings();
-    });
-    const auto apply_settings_availability = [&bridge, sidebar, open_settings, &settings_window] {
+    // This fixed presentation command is not an ActionId. Its workspace
+    // window context keeps it inactive while the modal sheet owns focus.
+    const auto apply_settings_availability = [&bridge, sidebar, settings_controller] {
         const bool available = bridge.getSettingsInteractionAvailable();
-        if (!available && settings_window)
-            settings_window->reject();
+        settings_controller->set_available(available);
         sidebar->set_settings_available(available);
-        open_settings->setEnabled(available);
     };
     QObject::connect(&bridge, &WorkspaceBridge::settingsInteractionAvailableChanged, &window, apply_settings_availability);
     apply_settings_availability();

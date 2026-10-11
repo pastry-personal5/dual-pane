@@ -260,7 +260,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         let (job, failed) = match request {
             WorkRequest::SaveSettings { revision, snapshot } => (SettingsJob::Save { revision, snapshot }, Event::SettingsSaveFailed { revision, failure: SettingsFailure::WorkerUnavailable }),
-            WorkRequest::SaveSession { revision, session } => (SettingsJob::SaveSession { revision, session }, Event::SettingsSaveFailed { revision, failure: SettingsFailure::WorkerUnavailable }),
+            WorkRequest::SaveSession { revision, session } => (SettingsJob::SaveSession { revision, session }, Event::SessionSaveFailed { revision, failure: SettingsFailure::WorkerUnavailable }),
             WorkRequest::LoadSettings => (SettingsJob::Load, Event::SettingsLoadFailedAtLaunch { failure: SettingsFailure::WorkerUnavailable }),
             WorkRequest::ResetSettings => (SettingsJob::Reset, Event::SettingsResetFailed { failure: SettingsFailure::WorkerUnavailable }),
             request => return self.runner.dispatch(request),
@@ -312,7 +312,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                 SettingsResult::Saved { revision } => Event::SettingsSaved { revision },
                 SettingsResult::SaveFailed { revision, error } => Event::SettingsSaveFailed { revision, failure: error.failure() },
                 SettingsResult::SessionSaved { .. } => continue,
-                SettingsResult::SessionSaveFailed { revision, error } => Event::SettingsSaveFailed { revision, failure: error.failure() },
+                SettingsResult::SessionSaveFailed { revision, error } => Event::SessionSaveFailed { revision, failure: error.failure() },
                 SettingsResult::Reset { backup } => Event::SettingsReset { backup: backup.as_deref().and_then(location_from_path) },
                 SettingsResult::ResetFailed(error) => Event::SettingsResetFailed { failure: error.failure() },
             });
