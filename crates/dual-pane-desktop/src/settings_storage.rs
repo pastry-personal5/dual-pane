@@ -11,7 +11,7 @@ use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, BrowserSna
 use dual_pane_domain::{BrowserSide, EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(50);
 type BindingParameters = (&'static str, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>);
 
@@ -193,7 +193,7 @@ impl SettingsDatabase {
             }
         }
         let layout = session.layout;
-        tx.execute("INSERT INTO session_window(id, x, y, width, height, state, sidebar_splitter, browser_splitter) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![layout.frame.x, layout.frame.y, layout.frame.width, layout.frame.height, encode_window_state(layout.state), layout.sidebar_splitter, layout.browser_splitter])?;
+        tx.execute("INSERT INTO session_window(id, x, y, width, height, state, sidebar_splitter, browser_splitter, left_preview_height, right_preview_height) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", params![layout.frame.x, layout.frame.y, layout.frame.width, layout.frame.height, encode_window_state(layout.state), layout.sidebar_splitter, layout.browser_splitter, layout.left_preview_height, layout.right_preview_height])?;
         tx.commit()?;
         Ok(())
     }
@@ -281,6 +281,9 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
         // databases. A future release can change its fresh-profile defaults
         // without silently changing an already migrated person's choices.
         tx.execute_batch("INSERT OR IGNORE INTO setting_marker(key, value) VALUES ('show_macos_items', 0); INSERT OR IGNORE INTO setting_marker(key, value) VALUES ('show_dotfiles', 1); INSERT OR IGNORE INTO setting_marker(key, value) VALUES ('show_macos_invisible', 0);")?;
+    }
+    if version < 8 {
+        tx.execute_batch("ALTER TABLE session_window ADD COLUMN left_preview_height INTEGER NOT NULL DEFAULT 0; ALTER TABLE session_window ADD COLUMN right_preview_height INTEGER NOT NULL DEFAULT 0;")?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     // Validate migrated records before committing the schema change. A
@@ -388,7 +391,7 @@ fn decode_location(bytes: &[u8]) -> Result<Location, SettingsStorageError> {
 fn read_session(connection: &Connection) -> Result<SessionSnapshot, SettingsStorageError> {
     let browser_rows = connection.prepare("SELECT browser, active_position, active FROM session_browser ORDER BY browser")?.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
     let tab_rows = connection.prepare("SELECT browser, position, location FROM session_tab ORDER BY browser, position")?.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, Vec<u8>>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
-    let layout_rows = connection.prepare("SELECT x, y, width, height, state, sidebar_splitter, browser_splitter FROM session_window")?.query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?, row.get::<_, i32>(2)?, row.get::<_, i32>(3)?, row.get::<_, i64>(4)?, row.get::<_, i32>(5)?, row.get::<_, i32>(6)?)))?.collect::<Result<Vec<_>, _>>()?;
+    let layout_rows = connection.prepare("SELECT x, y, width, height, state, sidebar_splitter, browser_splitter, left_preview_height, right_preview_height FROM session_window")?.query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?, row.get::<_, i32>(2)?, row.get::<_, i32>(3)?, row.get::<_, i64>(4)?, row.get::<_, i32>(5)?, row.get::<_, i32>(6)?, row.get::<_, rusqlite::types::Value>(7)?, row.get::<_, rusqlite::types::Value>(8)?)))?.collect::<Result<Vec<_>, _>>()?;
     if browser_rows.is_empty() && tab_rows.is_empty() && layout_rows.is_empty() {
         return Ok(SessionSnapshot::Absent);
     }
@@ -396,9 +399,13 @@ fn read_session(connection: &Connection) -> Result<SessionSnapshot, SettingsStor
     if browser_rows.len() != 2 || layout_rows.len() != 1 {
         return damaged();
     }
-    let layout_row = layout_rows[0];
+    let layout_row = &layout_rows[0];
     let Some(state) = decode_window_state(layout_row.4) else { return damaged() };
-    let layout = WindowLayout { frame: WindowFrame { x: layout_row.0, y: layout_row.1, width: layout_row.2, height: layout_row.3 }, state, sidebar_splitter: layout_row.5, browser_splitter: layout_row.6 };
+    let preview_height = |value: &rusqlite::types::Value| match value {
+        rusqlite::types::Value::Integer(height) if (0..=32_767).contains(height) => *height as i32,
+        _ => 0,
+    };
+    let layout = WindowLayout { frame: WindowFrame { x: layout_row.0, y: layout_row.1, width: layout_row.2, height: layout_row.3 }, state, sidebar_splitter: layout_row.5, browser_splitter: layout_row.6, left_preview_height: preview_height(&layout_row.7), right_preview_height: preview_height(&layout_row.8) };
     if !layout.valid() {
         return damaged();
     }
@@ -509,7 +516,7 @@ pub enum SettingsJob {
     Reset,
 }
 pub enum SettingsResult {
-    Loaded(LoadedSettings),
+    Loaded(Box<LoadedSettings>),
     LoadFailed(SettingsStorageError),
     Saved { revision: u64 },
     SaveFailed { revision: u64, error: SettingsStorageError },
@@ -605,7 +612,7 @@ fn worker_loop(mut state: WorkerState, jobs: Receiver<SettingsJob>, results: Sen
                     if let Some((revision, session)) = latest_session.take() {
                         send(state.save_session(revision, &session));
                     }
-                    send(state.database().and_then(|database| database.load_with_session()).map_or_else(SettingsResult::LoadFailed, SettingsResult::Loaded));
+                    send(state.database().and_then(|database| database.load_with_session()).map_or_else(SettingsResult::LoadFailed, |loaded| SettingsResult::Loaded(Box::new(loaded))));
                 }
                 SettingsJob::Save { revision, snapshot } => latest = Some((revision, snapshot)),
                 SettingsJob::SaveSession { revision, session } => latest_session = Some((revision, session)),
@@ -665,6 +672,9 @@ mod tests {
         let path = directory.path().join("settings.sqlite3");
         (directory, path)
     }
+    fn drop_preview_height_columns(connection: &Connection) {
+        connection.execute_batch("ALTER TABLE session_window DROP COLUMN right_preview_height; ALTER TABLE session_window DROP COLUMN left_preview_height;").unwrap();
+    }
     fn wait_for_results(worker: &SettingsWorker) -> Vec<SettingsResult> {
         std::iter::repeat_with(|| worker.take_results()).find(|items| !items.is_empty()).unwrap()
     }
@@ -693,7 +703,7 @@ mod tests {
         let left_second = Location::root().join(&EntryName::new("left-second").unwrap());
         let right = Location::root().join(&EntryName::new("right").unwrap());
         for state in [WindowState::Normal, WindowState::Zoomed, WindowState::FullScreen] {
-            let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: left_first.clone() }, TabSnapshot { location: left_second.clone() }], active_tab: Some(1) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: right.clone() }], active_tab: Some(0) }, active_browser: BrowserSide::Right, layout: WindowLayout { frame: WindowFrame { x: -42, y: 17, width: 1200, height: 800 }, state, sidebar_splitter: 280, browser_splitter: 610 } };
+            let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: left_first.clone() }, TabSnapshot { location: left_second.clone() }], active_tab: Some(1) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: right.clone() }], active_tab: Some(0) }, active_browser: BrowserSide::Right, layout: WindowLayout { frame: WindowFrame { x: -42, y: 17, width: 1200, height: 800 }, state, sidebar_splitter: 280, browser_splitter: 610, left_preview_height: 0, right_preview_height: 0 } };
             db.save_session(&session).unwrap();
             assert_eq!(db.load_with_session().unwrap().session, SessionSnapshot::Saved(session));
         }
@@ -706,7 +716,7 @@ mod tests {
         assert_eq!(db.load_with_session().unwrap().session, SessionSnapshot::Damaged);
 
         let location = Location::root().join(&EntryName::new("restored").unwrap());
-        let replacement = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout: WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 } };
+        let replacement = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout: WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400, left_preview_height: 0, right_preview_height: 0 } };
         db.save_session(&replacement).unwrap();
         assert_eq!(db.load_with_session().unwrap().session, SessionSnapshot::Saved(replacement));
     }
@@ -736,6 +746,9 @@ mod tests {
         for version in [2, SCHEMA_VERSION] {
             let (_directory, path) = temp_database();
             let db = SettingsDatabase::open(&path).unwrap();
+            if version < 8 {
+                drop_preview_height_columns(&db.connection);
+            }
             db.connection.execute("DELETE FROM action_binding WHERE action = 'NewTab'", []).unwrap();
             db.connection.execute("INSERT INTO favorite_group(id, name, position) VALUES (1, ' ', 0)", []).unwrap();
             db.connection.pragma_update(None, "user_version", version).unwrap();
@@ -755,6 +768,7 @@ mod tests {
         let database = SettingsDatabase::open(&path).unwrap();
         drop(database);
         let connection = Connection::open(&path).unwrap();
+        drop_preview_height_columns(&connection);
         connection.pragma_update(None, "user_version", 0).unwrap();
         drop(connection);
         let db = SettingsDatabase::open(&path).unwrap();
@@ -775,6 +789,7 @@ mod tests {
         let (_directory, path) = temp_database();
         drop(SettingsDatabase::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
+        drop_preview_height_columns(&connection);
         connection.execute("DELETE FROM setting_marker WHERE key IN ('show_macos_items', 'show_dotfiles', 'show_macos_invisible')", []).unwrap();
         connection.pragma_update(None, "user_version", 6).unwrap();
         drop(connection);
@@ -923,7 +938,7 @@ mod tests {
         let (_directory, path) = temp_database();
         let worker = SettingsWorker::start(path.clone()).unwrap();
         let location = Location::root().join(&EntryName::new("saved").unwrap());
-        let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout: WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 } };
+        let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout: WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400, left_preview_height: 0, right_preview_height: 0 } };
         let results = worker.shutdown_with_session(None, Some((12, session.clone())), Duration::from_secs(10));
         assert!(results.iter().any(|result| matches!(result, SettingsResult::SessionSaved { revision: 12 })));
         assert_eq!(SettingsDatabase::open(&path).unwrap().load_with_session().unwrap().session, SessionSnapshot::Saved(session));
@@ -1067,6 +1082,7 @@ mod tests {
         let (_directory, path) = temp_database();
         let database = SettingsDatabase::open(&path).unwrap();
         database.connection.execute_batch("DROP TABLE action_shortcut; UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'J' WHERE action = 'NewFolder'; UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'NewTab'; PRAGMA user_version = 4;").unwrap();
+        drop_preview_height_columns(&database.connection);
         drop(database);
         let loaded = SettingsDatabase::open(&path).unwrap().load().unwrap();
         let mut state = SettingsState::new();

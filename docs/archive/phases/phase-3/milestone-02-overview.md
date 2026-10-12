@@ -4,7 +4,7 @@ Status: Done
 
 This milestone establishes how Phase 3 defines defaults, owns settings, and stores durable state. It delivers a responsive, versioned storage foundation for folder sort memory, Favorites, future shortcut customization, and later workspace restoration.
 
-Supersession note: P3-M4 removed text filtering from Phase 3 behavior and restored session state. Filter references below record the completed P3-M2 storage handoff and acceptance evidence, not a current Phase 3 feature requirement. Follow the [current product scope](../product-behavior.md#included-product-scope) and [P3-M4 handoff](milestone-04-architecture.md#contract-to-later-milestones); later code and persisted action compatibility work must preserve existing records without presenting filtering as a Phase 3 feature.
+Supersession note: P3-M4 removed text filtering from Phase 3 behavior and restored session state. Filter references below record the completed P3-M2 storage handoff and acceptance evidence, not a current Phase 3 feature requirement. Follow the [current product scope](../../../product-behavior.md#included-product-scope) and [P3-M4 handoff](milestone-04-architecture.md#contract-to-later-milestones); later code and persisted action compatibility work must preserve existing records without presenting filtering as a Phase 3 feature.
 
 ## Scope
 
@@ -33,7 +33,7 @@ The inventory distinguishes five kinds of data:
 
 `NewFolder` is a stable canonical action with default `Command+Shift+N`. Its command, UI, and shortcut editor arrive later; its persisted default binding is preloaded now and an override remains inert until the action is delivered. Folder sort memory stores `Name`, `Type`, `Modified`, or `Size` with an explicit ascending or descending direction; an unrecorded folder uses natural Name ascending. Both Browsers and all tabs share one sort choice for the same byte-exact logical location.
 
-The [Favorites policy](../product-behavior.md#favorites) defines the fresh-profile items and the launch-time removal rule. P3-M2 prepares typed, durable records and validation results; P3-M5 applies them to domain state, and P3-M6 connects that state to Sidebar startup and editing.
+The [Favorites policy](../../../product-behavior.md#favorites) defines the fresh-profile items and the launch-time removal rule. P3-M2 prepares typed, durable records and validation results; P3-M5 applies them to domain state, and P3-M6 connects that state to Sidebar startup and editing.
 
 Out of scope: a Settings window, shortcut editor, new menu or toolbar controls, Sidebar editing controls, folder metadata columns, sort comparators beyond today's Name order, directory creation, tab restoration, and operation-recovery execution. P3-M3/P3-M4 settle visible interactions, P3-M5/P3-M6 add tab and Favorites behavior, and P3-M9 persists and restores workspace sessions.
 

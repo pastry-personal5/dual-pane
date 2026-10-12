@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{BrowserChrome, MonitoringStatus, Output, RowChange};
+use dual_pane_application::{BrowserChrome, MonitoringStatus, Output, PreviewView, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
@@ -46,6 +46,8 @@ pub struct BrowserViewModel {
     selection: Selection,
     cursor_row: Option<usize>,
     selection_revision: u64,
+    preview: PreviewView,
+    preview_revision: u64,
     summary: Summary,
     scroll_hint: Option<ScrollAnchor>,
     folder_items_revision: u64,
@@ -63,7 +65,7 @@ pub struct BrowserViewModel {
 
 impl Default for BrowserViewModel {
     fn default() -> Self {
-        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
+        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, preview: PreviewView::Collapsed, preview_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
     }
 }
 
@@ -253,6 +255,41 @@ impl BrowserViewModel {
     /// Changes whenever the selection or cursor changes.
     pub fn selection_revision(&self) -> u64 {
         self.selection_revision
+    }
+
+    pub fn preview(&self) -> &PreviewView {
+        &self.preview
+    }
+
+    pub fn preview_revision(&self) -> u64 {
+        self.preview_revision
+    }
+
+    pub fn preview_details_text(&self) -> String {
+        let name = match &self.preview {
+            PreviewView::Collapsed => return String::new(),
+            PreviewView::NoSelection => return "Select one item to see its details.".to_owned(),
+            PreviewView::MultipleSelection => return "Multiple items selected. Select one item to see its details.".to_owned(),
+            PreviewView::UnsupportedSelection { name } | PreviewView::Loading { name } | PreviewView::Unavailable { name } | PreviewView::DecodeFailed { name } | PreviewView::Image { name, .. } => name,
+        };
+        let entry = self.entries.iter().find(|entry| entry.name() == name);
+        let kind = entry.map(entry_type_text).unwrap_or_else(|| "—".to_owned());
+        let (size, modified) = match &self.preview {
+            PreviewView::Image { byte_size, modified_unix_seconds, .. } => (Some(*byte_size), *modified_unix_seconds),
+            _ => entry.map_or((None, None), |entry| (entry.metadata().size_bytes(), entry.metadata().modified_unix_seconds())),
+        };
+        let size = size.map(format_size).unwrap_or_else(|| "—".to_owned());
+        let modified = modified.map(|seconds| format_exact(seconds, &self.time_zone)).unwrap_or_else(|| "—".to_owned());
+        let mut details = format!("Name: {}\nType: {kind}\nModified: {modified}\nSize: {size}", name.to_text_lossy());
+        match &self.preview {
+            PreviewView::Image { source_width, source_height, .. } => details.push_str(&format!("\nDimensions: {source_width} × {source_height}")),
+            PreviewView::Loading { .. } => details.push_str("\nLoading image…"),
+            PreviewView::UnsupportedSelection { .. } => details.push_str("\nPreview unavailable for this item."),
+            PreviewView::Unavailable { .. } => details.push_str("\nThis item is unavailable."),
+            PreviewView::DecodeFailed { .. } => details.push_str("\nThe image could not be read."),
+            PreviewView::Collapsed | PreviewView::NoSelection | PreviewView::MultipleSelection => {}
+        }
+        details
     }
 
     /// The selected rows in ascending order.
@@ -510,7 +547,7 @@ impl BrowserPresenter {
 
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
-            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
+            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
             Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
@@ -537,6 +574,10 @@ impl BrowserPresenter {
         }
         let view = &mut self.view;
         match output {
+            Output::PreviewChanged { view: preview, .. } => {
+                view.preview = preview.clone();
+                view.preview_revision = view.preview_revision.wrapping_add(1);
+            }
             Output::OperationRejected { reason, .. } => {
                 view.status_message = Some(rejection_text(*reason).to_owned());
                 view.status_token = view.status_token.wrapping_add(1);

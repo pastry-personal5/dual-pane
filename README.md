@@ -2,7 +2,7 @@
 
 Dual Pane is a super-fast file manager for macOS, written in Rust.
 
-> **Version 2.0.0 has been released.** Dual Pane now offers two independently browsable directories in a dark native window. Each Browser can select entries, enter folders and folder links, and go to the logical parent. Directory reads run on separate workers per Browser, and access failures leave the last successful Folder Items visible.
+> **Version v3.0.0 has been released.** Dual Pane now includes tabbed Browsers, editable Favorites, safe file operations, persistent workspace sessions, live folder refresh, image previews, and a redesigned Settings Window. The frameless macOS window moves from its Sidebar title row and supports the system full-screen shortcut.
 
 ## Goals
 
@@ -10,9 +10,9 @@ Two Browsers sit side by side. Each Browser browses its own directory, and futur
 
 The [product behavior](docs/product-behavior.md) defines included features, file-operation safeguards, session recovery, and exclusions. The [UX documents](docs/ux-terms.md) define the current interface.
 
-Version 2.0.0 shows two independently browsable Browsers with compact, edge-to-edge layouts. `Command+W` closes its window and exits the app; `Command+Q` quits the app.
+Version v3.0.0 shows two independently browsable Browsers with compact, edge-to-edge layouts. `Command+W` closes the active tab; `Command+Q` quits the app; `Control+Command+F` toggles full screen.
 
-The current development build adds Phase 3 workspace features that are not in a release yet:
+Version v3.0.0 adds:
 
 - Each Browser has up to eight tabs with Back, Forward, Up, and `Command+R` refresh.
 - `Command+T` opens a tab and `Command+W` closes the active tab; Close Window has no default shortcut.
@@ -23,6 +23,7 @@ The current development build adds Phase 3 workspace features that are not in a 
 - The Settings gear and `Command+,` open Settings while settings storage is healthy. Its title row can be dragged to move the window. General controls startup Notices, Reset Settings, and three independent visibility switches for macOS metadata and service items, dotfiles, and items marked invisible by macOS. Keyboard Shortcuts groups actions by purpose and uses icon controls to add, remove, and restore multiple bindings per action.
 - Workspace sessions restore tabs, active Browsers, and window layout; a delayed settings load shows an accessible Waiting Window and protects the prior session after its timeout.
 - Space previews the Folder Items cursor with macOS Quick Look; a tap opens its normal panel, while a 256 ms hold opens a panel at the largest usable screen frame with a short, motion-aware native transition.
+- Each Browser has a collapsible Preview Pane above its always-visible one-line Status Bar. Expanding the pane shows a selected image supported by the installed Qt reader and item details; the chosen pane height is restored with the workspace.
 - File operations, delivered by milestone P3-M8, are in the development build:
   - Copy and Move to the other Browser, Rename, New Folder, Move to Trash, and Delete Permanently, from the Folder Items Context Menu or their shortcuts.
   - Each operation runs off the GUI thread, never overwrites without a choice, and reports its progress and decisions in an Operation Panel and its result in Notices.

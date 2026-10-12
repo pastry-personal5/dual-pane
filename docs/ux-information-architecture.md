@@ -6,8 +6,11 @@ This document describes the current component hierarchy of Dual Pane. It records
 
 ## Workspace Window
 
+- Frameless main application window; the Application Title Row moves the window
+- Fixed `Control+Command+F` workspace shortcut toggles full screen
 - Workspace Window
   - Sidebar
+    - Draggable Application Title Row with **Dual Pane** heading
     - Drives Group with Drive Items
     - Favorites Groups
       - Favorite Group rows with Favorite Group Name, Favorite Group Menu Button, Add Favorite Item Button, and Favorite Items
@@ -30,11 +33,11 @@ This document describes the current component hierarchy of Dual Pane. It records
       - Missing Folder Overlay
     - Preview Pane Splitter
     - Preview Pane
-      - Status Presentation
       - Item Content Preview
       - Item Details Preview
+    - Browser Status Bar
   - Browser Divider
-  - Right Browser with the same Navigation Pane, Folder Pane, and Preview Pane structure as the Left Browser
+  - Right Browser with the same Navigation Pane, Folder Pane, Preview Pane, and Browser Status Bar structure as the Left Browser
   - Operation Panel Strip containing docked Operation Panels
 - Floating Operation Panels, each with Operation Progress Indicator, Cancel Operation Button, and any Operation Decision Card for its job
 
@@ -44,11 +47,18 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
 
 - Notices Window with Notice entries and the Notices Startup Checkbox
 - Settings Window
-  - Settings Title Row with Settings heading and Close Button
+  - Settings Title Row with Close Button at the far left, followed by the Settings heading
   - Settings Category List
     - General Settings
-      - Don’t show notices at startup
-      - Reset Settings
+      - Startup Notices card
+        - Don’t show notices at startup
+      - Item Visibility card
+        - Show macOS metadata and service items
+        - Show dotfiles
+        - Show items marked invisible by macOS
+        - Visibility rules help
+      - Reset Settings card
+        - Reset Settings Button
     - Keyboard Shortcuts Settings
       - Scrollable list of left-aligned category cards sized to the table columns, ending just beyond Add with a small right inset: Navigation, Tabs and Windows, File Actions, Sorting, and Other Actions
         - Category heading

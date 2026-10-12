@@ -6,7 +6,7 @@ This milestone adds macOS Quick Look to the Folder Pane without making Dual Pane
 
 ## Scope and fixed inputs
 
-Use the [included product scope](../product-behavior.md#included-product-scope), [Quick Look interaction](../ux-gui.md#quick-look), [input and active-Browser state](../ux-gui.md#input-and-active-browser-state), [outer-ring ownership](../architecture.md#34-frameworks-and-drivers--replaceable-mechanics), and [P3-M8 opening boundary](milestone-08-architecture.md#application-contract-extensions). This milestone runs before P3-M10.
+Use the [included product scope](../../../product-behavior.md#included-product-scope), [Quick Look interaction](../../../ux-gui.md#quick-look), [input and active-Browser state](../../../ux-gui.md#input-and-active-browser-state), [outer-ring ownership](../../../architecture.md#34-frameworks-and-drivers--replaceable-mechanics), and [P3-M8 opening boundary](milestone-08-architecture.md#application-contract-extensions). This milestone runs before P3-M10.
 
 In scope: native macOS Quick Look for the current Folder Items cursor; files, folders, packages, and links; normal sized panel presentation after an early Space release; a 256 ms held-Space opening at the largest usable screen frame; matching-key release and interruption dismissal; Status Bar feedback when the system panel cannot be acquired or presented; native panel lifecycle; an Objective-C++ adapter dynamically linked with `QuickLookUI.framework`; automated seam tests; a native human check; and the documentation changes in this plan.
 

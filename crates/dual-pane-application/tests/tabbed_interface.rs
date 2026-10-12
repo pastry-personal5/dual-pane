@@ -344,7 +344,7 @@ fn a_startup_notice_waits_for_the_preference_before_opening_notices() {
 #[test]
 fn session_snapshot_keeps_requested_locations_for_unconfirmed_tabs() {
     let mut workspace = Workspace::new();
-    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 900, height: 700 }, state: WindowState::Normal, sidebar_splitter: 220, browser_splitter: 440 };
+    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 900, height: 700 }, state: WindowState::Normal, sidebar_splitter: 220, browser_splitter: 440, left_preview_height: 0, right_preview_height: 0 };
     workspace.handle(Command::UpdateWindowLayout { layout }.into());
     workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("left-pending") }.into());
     workspace.handle(Command::Navigate { browser: BrowserSide::Right, location: location("right-pending") }.into());

@@ -7,12 +7,13 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{Event, FavoriteProbeOutcome, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes};
+use dual_pane_application::{Event, FavoriteProbeOutcome, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes};
 use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, OperationId, RequestToken, SortSpec, TabId};
 
 use crate::location_probe::resolve_item;
 use crate::location_watcher::WatcherHandle;
 use crate::operation_lane::{OperationLane, Publisher, Services};
+use crate::preview_reader::read_preview;
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 pub type FolderItemsSource = Box<dyn Fn(&Location, SortSpec, VisibilityPolicy, &AtomicBool) -> FolderItemsOutcome + Send>;
@@ -46,6 +47,9 @@ pub struct Runtime {
     next_event: Option<Event>,
     wake_pending: Arc<AtomicBool>,
     outstanding: HashMap<RequestToken, (BrowserSide, TabId, Arc<JobState>)>,
+    preview_jobs: [SyncSender<PreviewJob>; 2],
+    preview_pending: [Option<PreviewJob>; 2],
+    preview_outstanding: HashMap<(BrowserSide, u64), Arc<AtomicBool>>,
     /// Reads per Browser that may be queued, running, or awaiting delivery.
     read_capacity: usize,
     delivery: Delivery,
@@ -66,6 +70,20 @@ struct Job {
     /// The shown Folder Items this read's result is diffed against.
     previous: Option<Arc<[Entry]>>,
     state: Arc<JobState>,
+}
+
+struct PreviewJob {
+    request: PreviewRequest,
+    cancelled: Arc<AtomicBool>,
+}
+
+const PENDING_PREVIEW_CAPACITY: usize = 1;
+
+fn preview_index(browser: BrowserSide) -> usize {
+    match browser {
+        BrowserSide::Left => 0,
+        BrowserSide::Right => 1,
+    }
 }
 
 struct JobQueue {
@@ -229,7 +247,20 @@ impl Runtime {
         thread::Builder::new().name(PROBE_THREAD_NAME.to_owned()).spawn(move || run_probes(probe_jobs, probe, probe_delivery))?;
         let watcher_delivery = delivery.clone();
         let watcher = WatcherHandle::start(Arc::new(move |event| deliver_event(&watcher_delivery, event))).unwrap_or_else(|_| WatcherHandle::unavailable());
-        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
+        let mut preview_senders = Vec::with_capacity(2);
+        for browser in [BrowserSide::Left, BrowserSide::Right] {
+            let (sender, receiver) = mpsc::sync_channel::<PreviewJob>(PENDING_PREVIEW_CAPACITY);
+            let preview_delivery = delivery.clone();
+            thread::Builder::new().name(format!("preview-reader-{browser:?}")).spawn(move || {
+                for job in receiver {
+                    let result = panic::catch_unwind(AssertUnwindSafe(|| read_preview(&job.request, &job.cancelled))).unwrap_or(PreviewResult::DecodeFailed);
+                    deliver_event(&preview_delivery, Event::PreviewFinished { request: job.request, result });
+                }
+            })?;
+            preview_senders.push(sender);
+        }
+        let preview_jobs: [SyncSender<PreviewJob>; 2] = preview_senders.try_into().map_err(|_| io::Error::from(io::ErrorKind::Other))?;
+        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
     }
 
     /// Starts the file-operation lane, which reports through this runtime.
@@ -249,12 +280,25 @@ impl Runtime {
 
     fn receive(&mut self) -> Option<Event> {
         let event = self.next_event.take().or_else(|| self.events.try_recv().ok())?;
+        if let Event::PreviewFinished { request, .. } = &event {
+            self.preview_outstanding.remove(&(request.browser, request.token));
+            self.start_pending_preview(request.browser);
+        }
         if let Some((browser, tab, token)) = event_address(&event)
             && self.outstanding.get(&token).is_some_and(|(owner, owner_tab, _)| *owner == browser && *owner_tab == tab)
         {
             self.outstanding.remove(&token);
         }
         Some(event)
+    }
+    fn start_pending_preview(&mut self, browser: BrowserSide) {
+        let index = preview_index(browser);
+        let Some(job) = self.preview_pending[index].take() else { return };
+        match self.preview_jobs[index].try_send(job) {
+            Ok(()) => {}
+            Err(TrySendError::Full(job)) => self.preview_pending[index] = Some(job),
+            Err(TrySendError::Disconnected(job)) => deliver_event(&self.delivery, Event::PreviewFinished { request: job.request, result: PreviewResult::Unavailable }),
+        }
     }
 }
 
@@ -279,6 +323,40 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
+            WorkRequest::ReadPreview { request } => {
+                let browser = request.browser;
+                let token = request.token;
+                let cancelled = Arc::new(AtomicBool::new(false));
+                self.preview_outstanding.insert((browser, token), Arc::clone(&cancelled));
+                let index = preview_index(browser);
+                match self.preview_jobs[index].try_send(PreviewJob { request, cancelled }) {
+                    Ok(()) => None,
+                    Err(TrySendError::Full(job)) => {
+                        if let Some(replaced) = self.preview_pending[index].replace(job) {
+                            self.preview_outstanding.remove(&(browser, replaced.request.token));
+                            deliver_event(&self.delivery, Event::PreviewFinished { request: replaced.request, result: PreviewResult::Cancelled });
+                        }
+                        None
+                    }
+                    Err(TrySendError::Disconnected(job)) => {
+                        self.preview_outstanding.remove(&(browser, token));
+                        Some(Event::PreviewFinished { request: job.request, result: PreviewResult::Unavailable })
+                    }
+                }
+            }
+            WorkRequest::CancelPreview { browser, token } => {
+                if let Some(cancelled) = self.preview_outstanding.get(&(browser, token)) {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+                let index = preview_index(browser);
+                if self.preview_pending[index].as_ref().is_some_and(|job| job.request.token == token) {
+                    if let Some(job) = self.preview_pending[index].take() {
+                        deliver_event(&self.delivery, Event::PreviewFinished { request: job.request, result: PreviewResult::Cancelled });
+                    }
+                    self.preview_outstanding.remove(&(browser, token));
+                }
+                None
+            }
             WorkRequest::Operation(effect) => {
                 if let Some(operations) = &self.operations {
                     return operations.submit(effect);
@@ -428,6 +506,9 @@ impl Drop for Runtime {
         for (_, _, state) in self.outstanding.values() {
             state.cancelled.store(true, Ordering::Relaxed);
         }
+        for cancelled in self.preview_outstanding.values() {
+            cancelled.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -518,7 +599,7 @@ fn wake(delivery: &Delivery) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
+        Event::PreviewFinished { .. } | Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
@@ -1042,7 +1123,7 @@ mod tests {
         let (_event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
         let delivery = Delivery { events: mpsc::channel().0, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
-        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
+        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], preview_pending: [None, None], preview_outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
 
         assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());

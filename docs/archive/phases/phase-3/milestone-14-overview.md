@@ -25,7 +25,7 @@ The owner approved these decisions on 2026-10-11. They supersede the earlier one
 
 ## Scope and fixed inputs
 
-Use the [P3-M2 action and shortcut settings contract](milestone-02-architecture.md#actions-and-shortcut-settings), [P3-M9 startup preference and reset behavior](milestone-09-overview.md), [shortcut editor UX](../ux-gui.md#keyboard-shortcuts-settings-p3-m14), and P3-M13. Finish P3-M13's remaining native verification before claiming P3-M14 complete. In scope: the approved General controls, shortcut rows for every catalogued action, typed application commands and projections, live rebinding, persistence, validation feedback, tests, and native verification.
+Use the [P3-M2 action and shortcut settings contract](milestone-02-architecture.md#actions-and-shortcut-settings), [P3-M9 startup preference and reset behavior](milestone-09-overview.md), [shortcut editor UX](../../../ux-gui.md#keyboard-shortcuts-settings-p3-m14), and P3-M13. Finish P3-M13's remaining native verification before claiming P3-M14 complete. In scope: the approved General controls, shortcut rows for every catalogued action, typed application commands and projections, live rebinding, persistence, validation feedback, tests, and native verification.
 
 Out of scope: any unrecorded basic preference, a second settings store, Qt-owned persistence, changing a file-operation safety policy, or a dependency/build-tool change without the approval required by AGENTS.md.
 

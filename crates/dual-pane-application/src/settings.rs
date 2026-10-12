@@ -166,7 +166,7 @@ impl Shortcut {
         self.key.is_valid() && (matches!(self.key, Key::Function(_)) || self.command || self.option || self.control)
     }
     pub fn is_reserved(self) -> bool {
-        (self.command && matches!(self.key, Key::Character('H' | 'M' | '`' | ','))) || (self.command && self.option && self.key == Key::Escape) || (self.command && self.shift && matches!(self.key, Key::Character('3' | '4' | '5'))) || (self.command && matches!(self.key, Key::Tab | Key::Space)) || (self.control && self.key == Key::Space)
+        (self.command && matches!(self.key, Key::Character('H' | 'M' | '`' | ','))) || (self.command && self.option && self.key == Key::Escape) || (self.command && self.shift && matches!(self.key, Key::Character('3' | '4' | '5'))) || (self.command && matches!(self.key, Key::Tab | Key::Space)) || (self.control && self.key == Key::Space) || (self.command && self.control && self.key == Key::Character('F'))
     }
     fn is_valid_for(self, action: ActionId) -> bool {
         self.is_valid() || (action == ActionId::MoveToTrash && !self.command && self.shift && !self.option && !self.control && matches!(self.key, Key::Delete | Key::ForwardDelete))
@@ -375,6 +375,8 @@ pub struct WindowLayout {
     pub state: WindowState,
     pub sidebar_splitter: i32,
     pub browser_splitter: i32,
+    pub left_preview_height: i32,
+    pub right_preview_height: i32,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowFrame {
@@ -391,7 +393,7 @@ pub enum WindowState {
 }
 impl WindowLayout {
     pub const fn valid(self) -> bool {
-        self.frame.width > 0 && self.frame.height > 0 && self.sidebar_splitter >= 0 && self.browser_splitter >= 0
+        self.frame.width > 0 && self.frame.height > 0 && self.sidebar_splitter >= 0 && self.browser_splitter >= 0 && self.left_preview_height >= 0 && self.left_preview_height <= 32_767 && self.right_preview_height >= 0 && self.right_preview_height <= 32_767
     }
 }
 
@@ -767,7 +769,7 @@ mod tests {
     }
     #[test]
     fn reserved_combinations_reject_additional_modifiers() {
-        for shortcut in [Shortcut::new(true, true, true, true, Key::Character(',')), Shortcut::new(true, true, false, true, Key::Tab), Shortcut::new(true, false, true, true, Key::Escape), Shortcut::new(true, true, true, false, Key::Character('4')), Shortcut::new(false, true, true, true, Key::Space)] {
+        for shortcut in [Shortcut::new(true, true, true, true, Key::Character(',')), Shortcut::new(true, true, false, true, Key::Tab), Shortcut::new(true, false, true, true, Key::Escape), Shortcut::new(true, true, true, false, Key::Character('4')), Shortcut::new(false, true, true, true, Key::Space), Shortcut::new(true, false, false, true, Key::Character('F'))] {
             assert!(shortcut.is_reserved(), "{shortcut:?}");
         }
         assert!(!Shortcut::new(false, false, false, false, Key::Function(24)).is_reserved());

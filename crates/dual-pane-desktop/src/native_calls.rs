@@ -3,9 +3,10 @@
 //! block outside the CXX-Qt bridges lives here; callers own the policy.
 
 use std::ffi::{CString, c_char, c_int, c_void};
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::os::darwin::fs::MetadataExt;
+use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt as UnixMetadataExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -62,6 +63,25 @@ pub fn is_volume_root(path: &Path) -> io::Result<bool> {
 
 fn c_path(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
+}
+
+/// Opens only the named regular file, never a symbolic-link target. The
+/// returned descriptor stays owned by `File` while a preview reader uses it.
+pub fn open_preview_file(path: &Path) -> io::Result<File> {
+    let path = c_path(path)?;
+    // SAFETY: `path` is a live NUL-terminated string. A successful `open`
+    // returns one owned descriptor, transferred exactly once to `File`.
+    let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `descriptor` was just returned by `open`, and no other owner
+    // exists; `File` closes it exactly once.
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    }
+    Ok(file)
 }
 
 fn result(status: c_int) -> io::Result<()> {

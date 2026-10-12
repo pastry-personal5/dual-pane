@@ -154,7 +154,7 @@ fn missing_location_can_return_without_losing_matching_visit_state() {
 #[test]
 fn restoration_shares_subscriptions_and_reset_replaces_them_without_leaks() {
     let shared = location("shared");
-    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 };
+    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400, left_preview_height: 0, right_preview_height: 0 };
     let saved = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: shared.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: shared.clone() }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout };
     let home = location("home");
     let mut workspace = Workspace::with_home(home.clone());

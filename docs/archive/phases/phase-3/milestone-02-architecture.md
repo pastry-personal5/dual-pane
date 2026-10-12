@@ -4,7 +4,7 @@ Status: Done
 
 P3-M2 gives Phase 3 one application-owned model for durable choices and one serialized settings service for storage. The domain and application use typed values; the desktop driver owns SQLite, the Application Support path, native errors, and I/O scheduling.
 
-Supersession note: P3-M4 removed text filtering from Phase 3 behavior and restored session state. Filter references below preserve the historical P3-M2 contract and completed acceptance evidence; [current product scope](../product-behavior.md#included-product-scope) and the [P3-M4 handoff](milestone-04-architecture.md#contract-to-later-milestones) govern later implementation. Existing persisted records and action IDs remain untouched in this documentation milestone; any compatibility migration belongs to later implementation.
+Supersession note: P3-M4 removed text filtering from Phase 3 behavior and restored session state. Filter references below preserve the historical P3-M2 contract and completed acceptance evidence; [current product scope](../../../product-behavior.md#included-product-scope) and the [P3-M4 handoff](milestone-04-architecture.md#contract-to-later-milestones) govern later implementation. Existing persisted records and action IDs remain untouched in this documentation milestone; any compatibility migration belongs to later implementation.
 
 ## Configuration and ownership
 
@@ -27,7 +27,7 @@ Every product-facing value at this boundary is Qt-free: settings, defaults, acti
 
 Application state holds a map of explicit sort choices keyed by `Location` and an LRU order. A logical location is its exact ordered byte components: the two Browsers and any tabs at the same location see one choice, while a symlink alias and its target path can have distinct choices. Revisiting a recorded folder or changing its sort refreshes its recency; choosing natural Name ascending remains an explicit record and uses an LRU slot. On the 101st recorded location, the oldest record is evicted; revisiting it uses Name ascending. The driver encodes path components losslessly into a SQLite BLOB primary key, never through a lossy display string.
 
-P3-M5 passes the effective `SortSpec` with each tokenized directory-read request and rejects results for an obsolete specification. The later listing implementation collects non-recursive size and modification metadata on workers, uses a link's own metadata, and puts unknown metadata last. The owner-approved field order, sort controls, display formats, and narrow-Browser behavior are [planned in the GUI specification](../ux-gui.md#phase-3-gui-decisions-and-behavior).
+P3-M5 passes the effective `SortSpec` with each tokenized directory-read request and rejects results for an obsolete specification. The later listing implementation collects non-recursive size and modification metadata on workers, uses a link's own metadata, and puts unknown metadata last. The owner-approved field order, sort controls, display formats, and narrow-Browser behavior are [planned in the GUI specification](../../../ux-gui.md#phase-3-gui-decisions-and-behavior).
 
 ## Actions and shortcut settings
 
@@ -37,7 +37,7 @@ P3-M6 [supersedes the `CloseWindow` default binding](milestone-06-architecture.m
 
 Superseded in part on 2026-10-02 by [schema version 2](changelog.md#2026-10-02--pre-m6-review-fixes): normalized keys can name arrow, Return, Delete, and function keys, so the stored `NavigateParent` default is its current `Command+Up` binding; a stored NULL key means a deliberately unbound action, and unknown key text falls back to the default for that action only.
 
-Saved shortcuts are application-owned normalized modifier/key values rather than Qt or localized strings. An `ActionId` is never localized, renamed, or reused for a different meaning; UI labels are separate presentation data. Loading validates each override independently, rejects unknown IDs, malformed or platform-reserved shortcuts, and collisions among actions active in the same context. A binding for an action that has no delivered command remains inert until that action is delivered. The [planned editor behavior](../ux-gui.md#keyboard-shortcuts-settings-p3-m14) uses these values and dispatches through the existing command boundary.
+Saved shortcuts are application-owned normalized modifier/key values rather than Qt or localized strings. An `ActionId` is never localized, renamed, or reused for a different meaning; UI labels are separate presentation data. Loading validates each override independently, rejects unknown IDs, malformed or platform-reserved shortcuts, and collisions among actions active in the same context. A binding for an action that has no delivered command remains inert until that action is delivered. The [planned editor behavior](../../../ux-gui.md#keyboard-shortcuts-settings-p3-m14) uses these values and dispatches through the existing command boundary.
 
 ## Favorites hierarchy
 
@@ -45,7 +45,7 @@ Favorites are durable user data, separate from the replaceable workspace-session
 
 The SQLite design uses `favorite_group(id, name, position)` and `favorite_item(id, group_id, name, target BLOB, position)`. An index on each position scope makes ordered loading and reordering efficient. Enable `PRAGMA foreign_keys = ON` for every connection; the item-to-group foreign key restricts accidental group deletion until the application explicitly handles its items. Apply a group/item edit in one transaction so readers see either the old or new hierarchy. A durable `favorites_initialized` marker distinguishes a fresh profile from a person who intentionally deleted every favorite; an empty saved collection is never reseeded. SQLite's [foreign-key guidance](https://www.sqlite.org/foreignkeys.html) recommends an index on child keys, and its [transaction model](https://www.sqlite.org/lang_transaction.html) supports these atomic edits.
 
-The [product behavior](../product-behavior.md#favorites) owns the exact initial items, target locations, and unavailable-target policy. P3-M2 defines typed load/save records and target-probe outcomes. P3-M6 resolves initial locations and probes saved targets on workers during startup, then submits each completed result to the application. Confirmed removals commit transactionally; a failed save is reported rather than silently treated as persisted. No Favorite Item is removed because the database loader or validation worker itself failed.
+The [product behavior](../../../product-behavior.md#favorites) owns the exact initial items, target locations, and unavailable-target policy. P3-M2 defines typed load/save records and target-probe outcomes. P3-M6 resolves initial locations and probes saved targets on workers during startup, then submits each completed result to the application. Confirmed removals commit transactionally; a failed save is reported rather than silently treated as persisted. No Favorite Item is removed because the database loader or validation worker itself failed.
 
 ## Workspace-session handoff
 

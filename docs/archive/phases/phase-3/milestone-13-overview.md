@@ -6,7 +6,7 @@ This milestone makes the existing Settings affordance usable and delivers the mo
 
 ## Scope and fixed inputs
 
-Use [the settings boundary](../architecture.md#6-error-settings-and-observability-boundaries), [P3-M2 settings ownership](milestone-02-architecture.md#configuration-and-ownership), and [UX terms](../ux-terms.md). P3-M13 cannot be marked Done until P3-M12 is Done.
+Use [the settings boundary](../../../architecture.md#6-error-settings-and-observability-boundaries), [P3-M2 settings ownership](milestone-02-architecture.md#configuration-and-ownership), and [UX terms](../../../ux-terms.md). P3-M13 cannot be marked Done until P3-M12 is Done.
 
 In scope: a read-only application-to-desktop settings-interaction availability projection; enabling the existing Settings gear when settings storage is healthy; fixed `Command+,` entry; one parented window-modal Settings Window; General and Keyboard Shortcuts category placeholders; keyboard focus, Escape and in-window Close dismissal, availability transitions, desktop seams, native verification, and documentation.
 

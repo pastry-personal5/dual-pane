@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{OperationEffect, SettingsSnapshot, VisibilityPolicy, WorkspaceSnapshot};
+use crate::{OperationEffect, PreviewRequest, SettingsSnapshot, VisibilityPolicy, WorkspaceSnapshot};
 use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, TabId};
 
 /// Outside work the reducer needs, carried out by a runtime off the GUI thread.
@@ -16,6 +16,13 @@ use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, Tab
 /// `ReopenJournal` retries opening the operation safety journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRequest {
+    ReadPreview {
+        request: PreviewRequest,
+    },
+    CancelPreview {
+        browser: BrowserSide,
+        token: u64,
+    },
     Operation(OperationEffect),
     /// Starts one shared subscription for a byte-exact open location. The
     /// generation rejects callbacks from a subscription that was replaced.

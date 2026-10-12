@@ -6,6 +6,7 @@ use std::pin::Pin;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QList, QModelIndex, QString, QVariant};
 use dual_pane_adapters::{BrowserViewModel, EditorOutcome, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent};
+use dual_pane_application::PreviewView;
 use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection, SortField, SortSpec, TabId};
 
 use crate::workspace_bridge::{revision, with_session};
@@ -14,6 +15,8 @@ use crate::workspace_bridge::{revision, with_session};
 pub mod ffi {
     #[namespace = ""]
     unsafe extern "C++" {
+        include!("cxx-qt-lib/qbytearray.h");
+        type QByteArray = cxx_qt_lib::QByteArray;
         include!("cxx-qt-lib/qmodelindex.h");
         type QModelIndex = cxx_qt_lib::QModelIndex;
         include!("cxx-qt-lib/qstring.h");
@@ -41,6 +44,7 @@ pub mod ffi {
         #[qproperty(QString, summary_size_text, cxx_name = "summarySizeText", READ, NOTIFY)]
         #[qproperty(i32, cursor_row, cxx_name = "cursorRow", READ, NOTIFY)]
         #[qproperty(i32, selection_revision, cxx_name = "selectionRevision", READ, NOTIFY)]
+        #[qproperty(i32, preview_revision, cxx_name = "previewRevision", READ, NOTIFY)]
         #[qproperty(i32, tabs_revision, cxx_name = "tabsRevision", READ, NOTIFY)]
         /// Available commands as bit flags; see the `TOOLBAR_*` constants.
         #[qproperty(i32, toolbar_state, cxx_name = "toolbarState", READ, NOTIFY)]
@@ -98,6 +102,18 @@ pub mod ffi {
         #[cxx_name = "setRightBrowser"]
         fn set_right_browser(self: Pin<&mut FolderItemsListModel>);
         fn refresh(self: Pin<&mut FolderItemsListModel>);
+        #[cxx_name = "setPreviewTarget"]
+        fn set_preview_target(self: Pin<&mut FolderItemsListModel>, width: i32, height: i32);
+        #[cxx_name = "previewKind"]
+        fn preview_kind(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "previewDetails"]
+        fn preview_details(self: &FolderItemsListModel) -> QString;
+        #[cxx_name = "previewImageWidth"]
+        fn preview_image_width(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "previewImageHeight"]
+        fn preview_image_height(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "previewImagePixels"]
+        fn preview_image_pixels(self: &FolderItemsListModel) -> QByteArray;
         #[cxx_name = "activateBrowser"]
         fn activate_browser(self: Pin<&mut FolderItemsListModel>);
 
@@ -283,6 +299,7 @@ pub struct FolderItemsListModelRust {
     summary_size_text: QString,
     cursor_row: i32,
     selection_revision: i32,
+    preview_revision: i32,
     tabs_revision: i32,
     toolbar_state: i32,
     sort_choice: i32,
@@ -295,7 +312,7 @@ pub struct FolderItemsListModelRust {
 }
 impl Default for FolderItemsListModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), cursor_row: -1, selection_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default() }
+        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default() }
     }
 }
 
@@ -332,6 +349,48 @@ impl ffi::FolderItemsListModel {
         self.as_mut().rust_mut().get_mut().browser = BrowserSide::Right;
         self.as_mut().refresh();
     }
+    fn set_preview_target(mut self: Pin<&mut Self>, width: i32, height: i32) {
+        let browser = self.rust().browser;
+        with_session(|session| {
+            if let Some(tab) = session.view(browser).active_tab() {
+                session.submit(dual_pane_application::Command::SetPreviewTarget { browser, tab, width: width.max(0) as u32, height: height.max(0) as u32 });
+            }
+        });
+        self.as_mut().session_changed();
+    }
+    fn preview_kind(&self) -> i32 {
+        match self.rust().shown.preview() {
+            PreviewView::Collapsed => 0,
+            PreviewView::NoSelection => 1,
+            PreviewView::MultipleSelection => 2,
+            PreviewView::UnsupportedSelection { .. } => 3,
+            PreviewView::Loading { .. } => 4,
+            PreviewView::Unavailable { .. } => 5,
+            PreviewView::DecodeFailed { .. } => 6,
+            PreviewView::Image { .. } => 7,
+        }
+    }
+    fn preview_details(&self) -> QString {
+        QString::from(self.rust().shown.preview_details_text())
+    }
+    fn preview_image_width(&self) -> i32 {
+        match self.rust().shown.preview() {
+            PreviewView::Image { width, .. } => i32::try_from(*width).unwrap_or(0),
+            _ => 0,
+        }
+    }
+    fn preview_image_height(&self) -> i32 {
+        match self.rust().shown.preview() {
+            PreviewView::Image { height, .. } => i32::try_from(*height).unwrap_or(0),
+            _ => 0,
+        }
+    }
+    fn preview_image_pixels(&self) -> QByteArray {
+        match self.rust().shown.preview() {
+            PreviewView::Image { pixels, .. } => QByteArray::from(pixels.as_ref()),
+            _ => QByteArray::default(),
+        }
+    }
     fn refresh(mut self: Pin<&mut Self>) {
         let browser = self.rust().browser;
         let Some(view) = with_session(|session| session.view(browser).clone()) else { return };
@@ -341,6 +400,7 @@ impl ffi::FolderItemsListModel {
         let shown = &self.rust().shown;
         let cursor = shown.cursor_row().and_then(|row| i32::try_from(row).ok()).unwrap_or(-1);
         let selection = revision(shown.selection_revision());
+        let preview = revision(shown.preview_revision());
         let tabs = revision(shown.tabs_revision());
         let toolbar = shown.toolbar();
         let flags = [(toolbar.can_open_tab, TOOLBAR_NEW_TAB), (toolbar.can_go_back, TOOLBAR_BACK), (toolbar.can_go_forward, TOOLBAR_FORWARD), (toolbar.can_go_up, TOOLBAR_UP), (toolbar.can_refresh, TOOLBAR_REFRESH)].into_iter().filter(|(on, _)| *on).fold(0, |flags, (_, flag)| flags | flag);
@@ -352,6 +412,7 @@ impl ffi::FolderItemsListModel {
         let (count, selected, size) = (QString::from(summary.count.as_str()), QString::from(summary.selected.as_str()), QString::from(summary.size.as_str()));
         self.as_mut().set_cursor_row(cursor);
         self.as_mut().set_selection_revision(selection);
+        self.as_mut().set_preview_revision(preview);
         self.as_mut().set_status_text(status);
         self.as_mut().set_path_text(path);
         self.as_mut().set_folder_name(folder_name);
@@ -652,6 +713,12 @@ impl ffi::FolderItemsListModel {
         if self.rust().selection_revision != value {
             self.as_mut().rust_mut().get_mut().selection_revision = value;
             self.selection_revision_changed();
+        }
+    }
+    fn set_preview_revision(mut self: Pin<&mut Self>, value: i32) {
+        if self.rust().preview_revision != value {
+            self.as_mut().rust_mut().get_mut().preview_revision = value;
+            self.preview_revision_changed();
         }
     }
     fn set_tabs_revision(mut self: Pin<&mut Self>, value: i32) {

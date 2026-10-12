@@ -1,8 +1,37 @@
 # Phase 3 changelog
 
-Status: Active
+Status: Archived
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
+
+## 2026-10-12 — Phase 3 complete
+
+- The owner confirmed P3-M12's post-revision native visual verification complete. `make check`, direct Rust formatting, Clippy, and the full `cargo test` pass after older-schema test fixtures were corrected to remove preview-height columns when simulating pre-P3-M16 databases. Phase 3 exit criteria hold, all milestones are Done, and the phase is archived.
+
+## 2026-10-12 — P3-M16 Done
+
+- The owner reported human acceptance success and directed P3-M16 to be marked Done. Favorite control styling, the zero-height Preview Pane, persistent one-line Browser Status Bar, workspace height persistence, and Qt image previews are recorded complete. Automated preview-specific tests and the full `cargo test` / `make check` gate were not run in this completion.
+
+## 2026-10-12 — P3-M16 review follow-up
+
+- Matched the Preview Pane surfaces and details text to the active and inactive Browser colors, so preview metadata dims with its Browser while inactive.
+
+## 2026-10-12 — P3-M16 image-preview implementation
+
+- Added per-Browser preview request identity, cancellation, bounded background Qt image decoding from exact native paths, stale-result rejection, and an image/details projection in the Preview Pane. C++ lint and workspace compilation pass; native acceptance and the milestone gate remain pending.
+
+## 2026-10-12 — P3-M16 implementation started
+
+- P3-M16 is active. The first implementation slice adds per-Browser preview-height persistence with a schema migration, moves the one-line Browser Status Bar below a collapsible vertical Preview Pane splitter, and applies the approved Favorite command-button colors. Image requests, rendering, native verification, and checklist evidence remain in progress.
+
+## 2026-10-12 — P3-M16 status and preview separation
+
+- The owner revised the earlier P3-M16 one-line-preview decision: Browser Status Bar stays one readable line high at the bottom of each Browser, below Preview Pane, and shows all ordinary and transient Browser messages at every preview height. Preview Pane itself may collapse to zero content height, measured without its always-visible three-pixel splitter handle or the Status Bar. Short expansion still snaps to a usable preview height; chosen positive preview content height remains fixed in logical points when the window resizes. This resolves the expanded-state feedback open item.
+
+## 2026-10-12 — P3-M16 plan review
+
+- The owner confirmed that each Preview Pane has a one-line minimum and cannot disappear; expansion removes the status text, short expansion snaps to a useful content height, and the chosen Preview Pane height stays fixed in logical points during window resize. The P3-M16 plan now measures its minimum from the status font, preserves each chosen height through temporary space constraints, and treats a damaged preview-height field as a local fallback rather than discarding the rest of a valid saved workspace.
+- The owner chose the formats supported by the installed Qt image reader for built-in image previews, with content-based format detection and no separate required macOS format list.
 
 ## 2026-10-12 — P3-M15 Done
 
@@ -11,11 +40,11 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 ## 2026-10-12 — P3-M15 implementation started
 
 - P3-M15 is Active. The application now owns the three-value visibility policy, schema version 7 preserves older profiles with the approved defaults, and each directory read captures the policy. The desktop filters exact name and type rules, dotfiles, volume-root service folders, `UF_HIDDEN`, and Finder `kIsInvisible` without following links; the native UI acceptance check remains outstanding.
-- Code review retained selection, cursor, and scroll as private reconciliation hints while clearing actionable rows, kept the requested path visible, and stopped inactive-tab resets from activating those tabs. Visibility reads now carry a generation and retry bounded-runtime `Busy` admission after a later completion. The worker skips an entry that disappears during its own metadata check; mount-root classification resolves aliases before comparing parent identity. Schema 7 now writes the new defaults transactionally into migrated profiles. Focused application, worker, and native metadata tests cover these paths; the [research note](../research/hidden-files-research.md#native-verification-on-2026-10-12) records the disposable macOS probe and its filesystem limit.
+- Code review retained selection, cursor, and scroll as private reconciliation hints while clearing actionable rows, kept the requested path visible, and stopped inactive-tab resets from activating those tabs. Visibility reads now carry a generation and retry bounded-runtime `Busy` admission after a later completion. The worker skips an entry that disappears during its own metadata check; mount-root classification resolves aliases before comparing parent identity. Schema 7 now writes the new defaults transactionally into migrated profiles. Focused application, worker, and native metadata tests cover these paths; the [research note](../../../research/hidden-files-research.md#native-verification-on-2026-10-12) records the disposable macOS probe and its filesystem limit.
 
 ## 2026-10-12 — P3-M15 plan review
 
-- The owner confirmed that a required native invisibility or volume-root check with an uncertain result fails the listing visibly. The plan now limits those checks to entries and switch states that need them, defines safe row and selection clearing for a stricter policy, keeps saved tabs after child-classification failures, and requires bounded retry when read admission is busy. Corrected the moved [research note](../research/hidden-files-research.md) links.
+- The owner confirmed that a required native invisibility or volume-root check with an uncertain result fails the listing visibly. The plan now limits those checks to entries and switch states that need them, defines safe row and selection clearing for a stricter policy, keeps saved tabs after child-classification failures, and requires bounded retry when read admission is busy. Corrected the moved [research note](../../../research/hidden-files-research.md) links.
 
 ## 2026-10-11 — Settings presentation follow-up
 
@@ -41,7 +70,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-10 — P3-M15 hidden-files research and planning
 
-- Added [hidden-file research](../research/hidden-files-research.md) and P3-M15’s [overview](milestone-15-overview.md) and [architecture plan](milestone-15-architecture.md).
+- Added [hidden-file research](../../../research/hidden-files-research.md) and P3-M15’s [overview](milestone-15-overview.md) and [architecture plan](milestone-15-architecture.md).
 - **Owner decisions:** General has three independent controls. Named macOS metadata/service items and macOS-invisible items start hidden; other dotfiles start shown. The owner approved exact typed matches for `.DS_Store`, `._*`, `Icon\r`, `.AppleDouble`, and `.localized` files; `.fseventsd`, `.Spotlight-V100`, `.Trashes`, `.TemporaryItems`, and `.DocumentRevisions-V100` directories match only at a volume root. The research and plan now record the complete precedence and safety behavior.
 
 ## 2026-10-10 — P3-M12 through P3-M14 planning
@@ -60,7 +89,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 - **P3-M12 owner follow-up:** Folder Pane Toolbar Row #2 uses ordinary English singular inflection: `1 item M selected`; zero and every other count use `N items M selected`.
 - **P3-M12 owner follow-up:** the same `N items M selected` text appears in both Folder Pane Toolbar Row #2 and the Browser Status Bar. Favorite Groups use dark `#15171A` containers with a one-pixel `#3A4048` border, 6px radius, and an 8px margin on every side; their internal rows remain flush. Status Bar loading, error, monitoring, and temporary command feedback remains visible instead of being replaced by the normal summary.
 - Added planned P3-M12 GUI enhancement, P3-M13 Settings Window skeleton, and P3-M14 basic-settings and keyboard-shortcut milestones, each with an overview and architecture plan.
-- **P3-M12 owner decisions:** the pass prioritizes clarity, consistency, modern flat surfaces, visible enabled-control hover feedback, a flatter Sidebar, and stronger inactive-Browser dimming. Favorite Items and alias editors align flush left with their groups; group names are bold and Items regular. Sidebar rows are edge-to-edge with neutral-gray `#2B3037` hover; Favorite Group Menu and Add Favorite Item Buttons, Back, Forward, Up, and Main Toolbar Settings and Notices use distinct `#2F6D9A` blue-accent hover without highlighting their parent row. Folder Items, inactive Browser Tabs, and sort controls use subtle neutral-gray hover. Back, Forward, and Up replace text glyphs with monochrome local shafted-arrow bitmap icons. Inactive Browser surfaces, text, selection, and Relative Date colors use the values in [ux-gui.md](../ux-gui.md#visual-layout-and-accessibility), while keyboard focus remains blue. After its first successful listing, Folder Pane Toolbar Row #2 uses `1 item M selected` for one Item and `N items M selected` otherwise, with the selected segment in muted blue; it is blank before that listing and retains last-successful values later.
+- **P3-M12 owner decisions:** the pass prioritizes clarity, consistency, modern flat surfaces, visible enabled-control hover feedback, a flatter Sidebar, and stronger inactive-Browser dimming. Favorite Items and alias editors align flush left with their groups; group names are bold and Items regular. Sidebar rows are edge-to-edge with neutral-gray `#2B3037` hover; Favorite Group Menu and Add Favorite Item Buttons, Back, Forward, Up, and Main Toolbar Settings and Notices use distinct `#2F6D9A` blue-accent hover without highlighting their parent row. Folder Items, inactive Browser Tabs, and sort controls use subtle neutral-gray hover. Back, Forward, and Up replace text glyphs with monochrome local shafted-arrow bitmap icons. Inactive Browser surfaces, text, selection, and Relative Date colors use the values in [ux-gui.md](../../../ux-gui.md#visual-layout-and-accessibility), while keyboard focus remains blue. After its first successful listing, Folder Pane Toolbar Row #2 uses `1 item M selected` for one Item and `N items M selected` otherwise, with the selected segment in muted blue; it is blank before that listing and retains last-successful values later.
 - **P3-M13 owner decisions:** the existing Settings gear and fixed `Command+,` open one window-modal Settings Window with a left category list. It has no footer controls; Escape and its title-bar close control dismiss it. It is unavailable whenever settings storage is unhealthy.
 - **P3-M14 owner decisions:** General owns whole-app Reset Settings and each keyboard-shortcut row owns Restore Default. The exact additional basic-settings inventory, shortcut capture grammar, and conflict-resolution behavior are decided and recorded immediately before P3-M14 implementation begins; they must not be invented during implementation.
 
@@ -142,7 +171,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 - Planned P3-M9 as one milestone with an ordered checklist ([overview](milestone-09-overview.md), [architecture](milestone-09-architecture.md)).
 - **Plan review:** distinguished malformed session rows from SQLite read failures, so a transient storage fault cannot trigger a writable Home fallback; made Reset an ordered barrier for both save kinds; required a final flush when only the session changed; specified an initial save after valid load or damaged-session fallback; and made startup signal ordering and late-load behavior testable. Corrected the P3-M2 and P3-M4 handoffs that still named stored filter state.
-- **Owner decisions** from the planning questions and a follow-up interview, recorded in the [included product scope](../product-behavior.md#included-product-scope), the [session recovery policy](../product-behavior.md#session-recovery), and [ux-gui](../ux-gui.md#notices-and-restoration-feedback):
+- **Owner decisions** from the planning questions and a follow-up interview, recorded in the [included product scope](../../../product-behavior.md#included-product-scope), the [session recovery policy](../../../product-behavior.md#session-recovery), and [ux-gui](../../../ux-gui.md#notices-and-restoration-feedback):
   - **Discard rule:** a restored tab is discarded when its first read finds the location missing, not a folder, or unreadable for permission, privacy, or unknown reasons, as the Favorites launch probe does. Reader failures, a full read queue, and cancelled reads never discard, and a read that never answers keeps the tab loading.
   - **Restore display:** saved tabs appear at once and leave the strip when their read fails, with the active tab moving to the nearest surviving tab on the right, then the left. Each discarded tab gets its own Notice.
   - **Fallback:** every fallback opens a clean Home tab, including when no session exists. The launch working directory, `/` for a Finder or Dock launch, is no longer used at startup, which replaces the 2.0.0 launch behavior.
@@ -174,11 +203,11 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 - **Shortcut scope:** the application catalogue now records where each action's shortcut acts (`ActionId::scope`): the five file commands and Show Package Contents need a focused Folder Items List, Quit works in every window, and every other action is window-wide. The workspace bridge reports it as `bindingScope`, and the Qt binder installs shortcuts from it instead of its own list of action names, so the focus scope has a Qt-free test.
 - **Runtime and bridge tests:** an attached file-operation lane delivers its events through the runtime; a Replace or Skip decision round-trips through the lane, and a replayed pre-decision result changes nothing; lane shutdown returns within its bound while a step ignores cancellation; Decision Card choice codes and file-command codes match their Qt constants, and an unknown choice code chooses nothing.
-- **Action terms:** [ux-terms](../ux-terms.md) now lists New Folder and the six P3-M8 action IDs as catalogued current commands.
+- **Action terms:** [ux-terms](../../../ux-terms.md) now lists New Folder and the six P3-M8 action IDs as catalogued current commands.
 
 ## 2026-10-02 — Relative Date hue range
 
-- The owner narrowed the Relative Date strip hue from 0°–270° to 10°–260°; saturation and lightness are unchanged. A Qt 6.11.2 color probe measured active endpoints `#E8B9B0` and `#C3B0E8` with at least 10.22:1 black-text contrast, and dimmed endpoints `#C2A099` and `#A799C2` with at least 7.69:1 contrast. The dimmed color had lower luminance at each of 10,001 sampled positions. The [GUI rule](../ux-gui.md#folder-items-fields-and-display) records the new range.
+- The owner narrowed the Relative Date strip hue from 0°–270° to 10°–260°; saturation and lightness are unchanged. A Qt 6.11.2 color probe measured active endpoints `#E8B9B0` and `#C3B0E8` with at least 10.22:1 black-text contrast, and dimmed endpoints `#C2A099` and `#A799C2` with at least 7.69:1 contrast. The dimmed color had lower luminance at each of 10,001 sampled positions. The [GUI rule](../../../ux-gui.md#folder-items-fields-and-display) records the new range.
 
 ## 2026-10-02 — P3-M8 presentation
 
@@ -195,7 +224,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-02 — P3-M8 native executor
 
-- Added `libc = "=0.2.189"`, the version already in `Cargo.lock`, as a direct desktop dependency. Its license is MIT OR Apache-2.0, which is compatible with Apache-2.0. All of its `unsafe` calls live in `native_calls.rs`, and [AGENTS.md](../../AGENTS.md) names that module.
+- Added `libc = "=0.2.189"`, the version already in `Cargo.lock`, as a direct desktop dependency. Its license is MIT OR Apache-2.0, which is compatible with Apache-2.0. All of its `unsafe` calls live in `native_calls.rs`, and [AGENTS.md](../../../../AGENTS.md) names that module.
 - **Interrupted steps:** a step that a cancel interrupts after completing entries reports them. While cancelling, the application accepts that one result for progress only and silently, so the outcome is Partial and affected tabs refresh. A late result still cannot reopen or retarget the job.
 - **Progress:** an `Execute` effect carries the job's accepted progress, so the executor extends exactly what the application holds.
 - **New error kind:** a Copy or Move folder root whose destination folder lies inside it through a link or a case variant raises a recoverable destination-within-source error. The check compares device and inode ancestry.
@@ -220,12 +249,12 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
   - **Feedback:** refresh at terminal outcome only; item progress plus current-file bytes; a confirmed quit while jobs run.
 - Safety journal: a separate SQLite file, which satisfies the P3-M2 separation rule. It writes one record per operation and destination directory. Temporary names carry a random launch ID. The launch sweep deletes only exact-pattern files or links from earlier launches. If the journal cannot open, Copy is disabled until Try Again in its Notice reopens it, and a cross-volume move item raises a recoverable error.
 - P3-M7 contract extensions, recorded here and in the [P3-M8 architecture](milestone-08-architecture.md). P3-M7's checklist and tests are unchanged.
-  - **Folder finalization:** a post-order phase for permanent deletion and moves, because a folder-removal failure could not be expressed. [architecture.md](../architecture.md#43-file-operations-and-decisions) step 7 is updated.
+  - **Folder finalization:** a post-order phase for permanent deletion and moves, because a folder-removal failure could not be expressed. [architecture.md](../../../architecture.md#43-file-operations-and-decisions) step 7 is updated.
   - **Rename and New Folder:** typed name rejections for the editors, plus a name-less availability query.
   - **Jobs:** job dismissal, byte-progress events, and new error kinds. A worker panic reuses the executor-unavailable terminal event instead of a new internal kind.
   - **Opening and quit:** a package flag on listed entries, set by the directory reader; an open-item request for links; the quit confirmation state; and a journal-status event.
 - Interaction decisions:
-  - **Packages and scope:** activating a macOS package opens it, and Show Package Contents navigates in. This widens the included scope and removes the package out-of-scope line in [product-behavior.md](../product-behavior.md).
+  - **Packages and scope:** activating a macOS package opens it, and Show Package Contents navigates in. This widens the included scope and removes the package out-of-scope line in [product-behavior.md](../../../product-behavior.md).
   - **Shortcuts:** file-command shortcuts act only while the Folder Items List has focus; New Folder stays window-wide.
   - **Editors:** they commit asynchronously and reopen on a name problem after focus loss. The New Folder Name Editor is an empty row pinned at the top.
   - **Decision Cards:** they never take focus and have no default button. Floating panels join macOS window cycling, and docked panels are in the Tab order.
@@ -275,7 +304,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-02 — P3-M6 Relative Date color plan
 
-- The owner added a black foreground and an age-colored background behind Relative Date text. The virtual strip runs from bright red at one hour or less through positions 0.25 at one day, 0.50 at seven days, and 0.75 at 30 days to bright violet at 365 days or more. The [GUI rule](../ux-gui.md#folder-items-fields-and-display) defines the interpolation, missing-date treatment, and selection visibility; the [M6 architecture plan](milestone-06-architecture.md#relative-date-color-plan) identifies the adapter and Qt work.
+- The owner added a black foreground and an age-colored background behind Relative Date text. The virtual strip runs from bright red at one hour or less through positions 0.25 at one day, 0.50 at seven days, and 0.75 at 30 days to bright violet at 365 days or more. The [GUI rule](../../../ux-gui.md#folder-items-fields-and-display) defines the interpolation, missing-date treatment, and selection visibility; the [M6 architecture plan](milestone-06-architecture.md#relative-date-color-plan) identifies the adapter and Qt work.
 - This is an unchecked addition to the active [M6 checklist](milestone-06-overview.md#completion-checklist). The earlier implementation and verification evidence does not cover it.
 
 ## 2026-10-02 — P3-M6 interpretation review
@@ -304,8 +333,8 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-02 — P3-M6 third plan review
 
-- The owner settled the open cursor question. Movement keys start from the cursor even when no Item is selected, so after a Command-click deselects the last selected Item, Down selects the next row. Return and Right activate only when exactly one Item is selected. [Selection rules](../ux-gui.md#selection-and-file-commands) record both.
-- [Sidebar Favorites](../ux-gui.md#sidebar-favorites):
+- The owner settled the open cursor question. Movement keys start from the cursor even when no Item is selected, so after a Command-click deselects the last selected Item, Down selects the next row. Return and Right activate only when exactly one Item is selected. [Selection rules](../../../ux-gui.md#selection-and-file-commands) record both.
+- [Sidebar Favorites](../../../ux-gui.md#sidebar-favorites):
   - A single click opens a Favorite Item and focuses the active Browser's Folder Items List.
   - New Group starts as an empty draft row that exists only after a valid name is committed.
   - Inline editors commit on Return and cancel on Escape. Focus loss commits valid text and silently cancels invalid or duplicate text.
@@ -320,7 +349,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-02 — Tab history and visit state in the domain
 
-- The owner moved tab history, cursor, range anchor, and scroll position into the domain, as the [P3-M5 plan](milestone-05-architecture.md) intended. This supersedes the "application state" wording in the architecture review entry below. [Architecture §3.1](../architecture.md#31-domain--stable-file-manager-policy) now names the domain types:
+- The owner moved tab history, cursor, range anchor, and scroll position into the domain, as the [P3-M5 plan](milestone-05-architecture.md) intended. This supersedes the "application state" wording in the architecture review entry below. [Architecture §3.1](../../../architecture.md#31-domain--stable-file-manager-policy) now names the domain types:
   - `TabHistory` holds a tab's ordered `Visit`s and a current position that always stays in range. It handles new visits, Forward truncation, and Back/Forward arrival.
   - Each visit's `VisitState` holds the `Selection`, cursor, range anchor, and `ScrollAnchor`. It applies plain, Command, Shift, right-click, Select All, and clear gestures, checks each named entry against the current Folder Items, and reconciles after a reload in linear time.
   - `ScrollAnchor` replaces the `(EntryName, i32)` scroll hints in `Command::UpdateScrollHint` and the listing outputs.
@@ -329,7 +358,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-02 — MVVM and command-based architecture styles
 
-- The owner made MVVM and a command-based style part of the decided architecture. The new [Architectural styles](../architecture.md#architectural-styles) section names Clean Architecture as the dependency frame, MVVM with one-way binding for presentation, and typed command messages handled by `Workspace::handle` for input. It maps each role to its ring and code and states the binding and command rules. "Command-based" means command messages, not command objects with `execute` or `undo`; undo remains outside product scope.
+- The owner made MVVM and a command-based style part of the decided architecture. The new [Architectural styles](../../../architecture.md#architectural-styles) section names Clean Architecture as the dependency frame, MVVM with one-way binding for presentation, and typed command messages handled by `Workspace::handle` for input. It maps each role to its ring and code and states the binding and command rules. "Command-based" means command messages, not command objects with `execute` or `undo`; undo remains outside product scope.
 - Conformance fixes:
   - The desktop no longer builds commands or formats display text itself.
   - Focus activation and clearing the selection now go through `UiEvent` and the `InputController`.
@@ -343,33 +372,33 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 - Location invalidation is an externally observed fact, so `Command::InvalidateLocation` became `Event::LocationInvalidated`. P3-M10's watcher submits it.
 - The Qt-free `InputController` now maps one-row arrow movement and cursor activation (`UiEvent::MoveSelection`, `UiEvent::ActivateSelection`) to `Command::MoveSelection` and `Command::OpenEntry`. The desktop session no longer computes target rows.
 - A Favorites edit that changes nothing, such as moving a Group or Item to its current position, no longer emits `FavoritesChanged` or queues a save.
-- Docs: the [data-safety invariants](../architecture.md#44-data-safety-invariants) moved verbatim from the planned remote-volume section to their own section, and their references now link there. Architecture §3.1 now describes the domain types that exist (`BrowserTabs`, `Selection`, and the Favorites hierarchy); tab history, cursor, anchor, and scroll are application state. Two notes were added: settings work runs on its own worker, and the bridge's session mutex only holds the session for the GUI thread.
+- Docs: the [data-safety invariants](../../../architecture.md#44-data-safety-invariants) moved verbatim from the planned remote-volume section to their own section, and their references now link there. Architecture §3.1 now describes the domain types that exist (`BrowserTabs`, `Selection`, and the Favorites hierarchy); tab history, cursor, anchor, and scroll are application state. Two notes were added: settings work runs on its own worker, and the bridge's session mutex only holds the session for the GUI thread.
 
 ## 2026-10-02 — Row deltas on workers and background Screenshots probe
 
-- The owner chose to move the Folder Items diff to the workers, as [architecture §3.4](../architecture.md#34-frameworks-and-drivers--replaceable-mechanics) requires. A same-folder `ReadDirectory` request carries the tab's shown Folder Items as `previous`; the reader lane sorts, diffs against them, and returns the row change in `FolderItemsLoaded`. The reducer no longer compares listings. It accepts the change only when it was computed against the still-shown Folder Items and fits their row count; otherwise it replaces every row.
+- The owner chose to move the Folder Items diff to the workers, as [architecture §3.4](../../../architecture.md#34-frameworks-and-drivers--replaceable-mechanics) requires. A same-folder `ReadDirectory` request carries the tab's shown Folder Items as `previous`; the reader lane sorts, diffs against them, and returns the row change in `FolderItemsLoaded`. The reducer no longer compares listings. It accepts the change only when it was computed against the still-shown Folder Items and fits their row count; otherwise it replaces every row.
 - The owner chose to move the launch check of `~/Documents/Screenshots` off the main thread. `main.rs` no longer probes it. After a load finds uninitialized Favorites, the application requests `ProbeScreenshotsFolder`, and the runtime's new serialized probe lane answers with `ScreenshotsFolderProbed`. Favorites are seeded and saved when the result arrives, so only fresh profiles probe at all. Favorites edits wait for the probe as they wait for a load. A failed probe, such as a privacy denial, omits Screenshots, and the lane's bounded queue answers `Failed` at once when it is full or stopped, so seeding never waits indefinitely. P3-M6 Favorite target probes reuse the lane.
 
 ## 2026-10-02 — Pre-M6 codebase and docs review
 
 - Hardening for paths P3-M6 and P3-M10 make frequent: a reload reconciles selection, cursor, anchor, and scroll hint against a set of present names, so refreshing a large selected folder is linear instead of quadratic. The settings worker writes a save queued before a `Load` first, so a load reports what storage holds; a confirmed `Reset` still discards saves queued before it. Neither path is reachable from the 2.0.0 window.
 - Reordering a tab to its current position is a no-op and emits no `TabsChanged`. Mapping a Folder Items gesture no longer clones the Browser view model. The C++ format and lint scripts also check `settings_glyph.hpp`.
-- Docs: the [architecture §5.2](../architecture.md#52-planned-desktop-execution-model) status note now describes the current reader lanes, its lane table renders, and the property-testing note names the approved `proptest`. Completed milestone architecture docs are marked Done, the [repository tree](../planned-repository-architecture.md#repository-layout-and-future-examples) is redrawn with `settings_storage.rs`, and the P3-M6 native-verification step matches the automated-first rule.
+- Docs: the [architecture §5.2](../../../architecture.md#52-planned-desktop-execution-model) status note now describes the current reader lanes, its lane table renders, and the property-testing note names the approved `proptest`. Completed milestone architecture docs are marked Done, the [repository tree](../../../planned-repository-architecture.md#repository-layout-and-future-examples) is redrawn with `settings_storage.rs`, and the P3-M6 native-verification step matches the automated-first rule.
 
 ## 2026-10-02 — Item Icon Column
 
-- The owner added an [Item Icon Column](../ux-gui.md#folder-items-fields-and-display) as the first Folder Items column. It shows macOS native icons loaded off the GUI thread, has no header or sort buttons, and is the last column hidden as a Browser narrows. P3-M6 delivers it with the other columns.
+- The owner added an [Item Icon Column](../../../ux-gui.md#folder-items-fields-and-display) as the first Folder Items column. It shows macOS native icons loaded off the GUI thread, has no header or sort buttons, and is the last column hidden as a Browser narrows. P3-M6 delivers it with the other columns.
 
 ## 2026-10-02 — Borderless Folder Pane commands
 
-- The owner removed the border from the Up Button and the eight sort buttons in Folder Pane Toolbar Row #3; [visual layout](../ux-gui.md#visual-layout-and-accessibility) records the rule.
+- The owner removed the border from the Up Button and the eight sort buttons in Folder Pane Toolbar Row #3; [visual layout](../../../ux-gui.md#visual-layout-and-accessibility) records the rule.
 
 ## 2026-10-02 — Pre-M6 review fixes
 
 The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 code to be fixed before P3-M6 starts.
 
 - Settings safety: the application tracks whether stored settings are loading, loaded, or failed, and saves only after a successful load. A sort chosen before the load result is replayed over the loaded snapshot; Favorites edits wait for the load. After a failed load, edits stay in memory and are never saved, so a damaged database is preserved until an explicit reset. Load failures arrive as a typed `SettingsLoadFailed` event, and a session without a settings worker settles as failed instead of loading forever.
-- Quitting flushes unsaved settings with a bounded wait after the Qt event loop exits, as [architecture §5.2](../architecture.md#cancellation-and-shutdown) allows. The settings worker stays available after a failed open, and a reset that cannot move every file restores the moved ones and never falls back to an in-memory database.
+- Quitting flushes unsaved settings with a bounded wait after the Qt event loop exits, as [architecture §5.2](../../../architecture.md#cancellation-and-shutdown) allows. The settings worker stays available after a failed open, and a reset that cannot move every file restores the moved ones and never falls back to an in-memory database.
 - Back and Forward count a pending history step as taken, so repeated presses keep moving; `can_go_back` and `can_go_forward` expose the same rule for P3-M6. The application now uses the domain `BrowserTabs` for tab order and activation instead of a duplicate.
 - Each Browser reads folders on four lanes, so a slow folder in one tab no longer delays the Browser's other tabs. Correction to the P3-M5 entry: admission was bounded per Browser, not per tab; it is now bounded per Browser at the pending capacity plus the lane count. Four lanes is provisional until measured.
 - Same-folder reloads report one minimal row change, and the Qt list model applies it as row insertions, removals, and `dataChanged` notifications instead of a reset. Navigation and tab switches still replace every row.
@@ -381,10 +410,10 @@ The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 c
 
 - Development continues with Claude Code. The owner commits changes; the agent does not commit or push unless asked. Codex's existing code is reviewed before P3-M6 implementation starts, and P3-M6 stays one milestone delivered in its four planned steps.
 - Verification uses automated tests first; the owner is notified when an automated check fails or cannot establish a checklist item. This replaces the earlier no-display exception question.
-- [Folder Items fields](../ux-gui.md#folder-items-fields-and-display): Type shows `[DIR]` for folders, `[LNK]` for every symbolic link, and otherwise the lowercase text after the last `.` (blank without one). Type sort uses that text, replacing P3-M5's kind-only key. Folders have a blank Size cell and are excluded from totals. Relative dates show `now` under one minute or in the future and `N min` under one hour; sizes below 1 KB show whole bytes.
+- [Folder Items fields](../../../ux-gui.md#folder-items-fields-and-display): Type shows `[DIR]` for folders, `[LNK]` for every symbolic link, and otherwise the lowercase text after the last `.` (blank without one). Type sort uses that text, replacing P3-M5's kind-only key. Folders have a blank Size cell and are excluded from totals. Relative dates show `now` under one minute or in the future and `N min` under one hour; sizes below 1 KB show whole bytes.
 - The owner approved adding the `jiff` crate (MIT/Unlicense) to `dual-pane-adapters` for local-time Exact Date formatting.
-- [Browser Tabs](../ux-gui.md#browser-tabs-strip-and-navigation) shrink and elide without scrolling, with at most eight tabs per Browser; New Tab is disabled at the limit. The root folder is labeled with its volume name, falling back to `/`.
-- [Add Favorite Item](../ux-gui.md#sidebar-favorites) with an alias already in the group adds nothing and shows a brief inline “Already in this group” cue instead of a Notice.
+- [Browser Tabs](../../../ux-gui.md#browser-tabs-strip-and-navigation) shrink and elide without scrolling, with at most eight tabs per Browser; New Tab is disabled at the limit. The root folder is labeled with its volume name, falling back to `/`.
+- [Add Favorite Item](../../../ux-gui.md#sidebar-favorites) with an alias already in the group adds nothing and shows a brief inline “Already in this group” cue instead of a Notice.
 
 ## 2026-10-01 — P3-M6 second plan review
 
@@ -426,19 +455,19 @@ The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 c
 
 ## 2026-10-01 — P3-M4 workspace interview decisions
 
-- The owner settled the remaining [keyboard-focus and range-anchor rules](../ux-gui.md#phase-3-gui-decisions-and-behavior): focus entering any control in a Browser activates that Browser before Browser-specific commands, and Shift-click or Shift-arrow does nothing until a plain selection establishes an anchor. The [scenario trace](milestone-04-overview.md#scenario-trace) records both cases.
-- The owner completed the [selection and file-command contract](../ux-gui.md#selection-and-file-commands): fixed range anchor and cursor behavior, confirmed-folder command availability, context-menu entry points, frozen destructive targets, and a Cancel-default Permanent Delete confirmation. Rename and New Folder reject whitespace-only names.
+- The owner settled the remaining [keyboard-focus and range-anchor rules](../../../ux-gui.md#phase-3-gui-decisions-and-behavior): focus entering any control in a Browser activates that Browser before Browser-specific commands, and Shift-click or Shift-arrow does nothing until a plain selection establishes an anchor. The [scenario trace](milestone-04-overview.md#scenario-trace) records both cases.
+- The owner completed the [selection and file-command contract](../../../ux-gui.md#selection-and-file-commands): fixed range anchor and cursor behavior, confirmed-folder command availability, context-menu entry points, frozen destructive targets, and a Cancel-default Permanent Delete confirmation. Rename and New Folder reject whitespace-only names.
 - The owner corrected Permanent Delete Confirmation to show the frozen target count only, without names; Cancel remains the default and deletion requires explicit activation.
-- The owner completed [operation result behavior](../ux-gui.md#operation-panels-and-decisions): reveal panels for long work, decisions, and partial or failed results; hide successful and cleanly cancelled panels after about three seconds; close completed panels with `Command+W`; open Notices for quick failures and default-app opening failures. Tab reordering, Favorite Item movement, and panel docking remain drag-only by owner choice.
-- The owner completed [refresh behavior](../ux-gui.md#automatic-refresh): `Command+R` is the sole manual entry point and reserves the `RefreshFolder` action ID; unavailable watched folders keep their last successful view and path with an error; affected open tabs refresh after operations; disappeared Items leave selection and a disappeared cursor clears.
+- The owner completed [operation result behavior](../../../ux-gui.md#operation-panels-and-decisions): reveal panels for long work, decisions, and partial or failed results; hide successful and cleanly cancelled panels after about three seconds; close completed panels with `Command+W`; open Notices for quick failures and default-app opening failures. Tab reordering, Favorite Item movement, and panel docking remain drag-only by owner choice.
+- The owner completed [refresh behavior](../../../ux-gui.md#automatic-refresh): `Command+R` is the sole manual entry point and reserves the `RefreshFolder` action ID; unavailable watched folders keep their last successful view and path with an error; affected open tabs refresh after operations; disappeared Items leave selection and a disappeared cursor clears.
 - For keyboard focus, Browser Tabs and Favorite Items use arrow keys and Return under Full Keyboard Access, and text editing suppresses file-command shortcuts. The Favorite Item Context Menu remains pointer-only by owner choice.
-- The owner set [tab, history, and selection gestures](../ux-gui.md#browser-tabs-strip-and-navigation), [Favorite controls](../ux-gui.md#sidebar-favorites), [file-command entry points](../ux-gui.md#selection-and-file-commands), and [Operation Panels and Decision Cards](../ux-gui.md#operation-panels-and-decisions). The [product safeguards](../product-behavior.md#file-operation-safeguards) retain conflict choices and define the conflict-only apply-to-all option.
-- The owner set [fallback restoration and Notices policy](../product-behavior.md#session-recovery), [Notices controls](../ux-gui.md#notices-and-restoration-feedback), and [inactive-tab refresh feedback](../ux-gui.md#automatic-refresh). [Planned containment](../ux-information-architecture.md#planned-phase-3-containment) places the new components while current 2.0.0 layout and gestures stay separate.
-- Text filtering was removed from Phase 3 scope and restored session state; location-shared [sort memory and controls](../ux-gui.md#sort-controls-and-remembered-choice) remain. Completed P3-M2 filter references now carry a supersession note. Existing code and persisted action IDs are unchanged; P3-M5/P3-M9 own later compatibility work.
+- The owner set [tab, history, and selection gestures](../../../ux-gui.md#browser-tabs-strip-and-navigation), [Favorite controls](../../../ux-gui.md#sidebar-favorites), [file-command entry points](../../../ux-gui.md#selection-and-file-commands), and [Operation Panels and Decision Cards](../../../ux-gui.md#operation-panels-and-decisions). The [product safeguards](../../../product-behavior.md#file-operation-safeguards) retain conflict choices and define the conflict-only apply-to-all option.
+- The owner set [fallback restoration and Notices policy](../../../product-behavior.md#session-recovery), [Notices controls](../../../ux-gui.md#notices-and-restoration-feedback), and [inactive-tab refresh feedback](../../../ux-gui.md#automatic-refresh). [Planned containment](../../../ux-information-architecture.md#planned-phase-3-containment) places the new components while current 2.0.0 layout and gestures stay separate.
+- Text filtering was removed from Phase 3 scope and restored session state; location-shared [sort memory and controls](../../../ux-gui.md#sort-controls-and-remembered-choice) remain. Completed P3-M2 filter references now carry a supersession note. Existing code and persisted action IDs are unchanged; P3-M5/P3-M9 own later compatibility work.
 
 ## 2026-10-01 — Canonical terminology before P3-M4
 
-- Recorded shortcut-capable action names and planned component names in [UX terms](../ux-terms.md). Nine new action IDs are reserved in documentation only; the persisted catalogue and tab behavior are unchanged. Renamed the inert native Browser Tabs Strip widget and its object and accessibility names to match the canonical container term.
+- Recorded shortcut-capable action names and planned component names in [UX terms](../../../ux-terms.md). Nine new action IDs are reserved in documentation only; the persisted catalogue and tab behavior are unchanged. Renamed the inert native Browser Tabs Strip widget and its object and accessibility names to match the canonical container term.
 
 ## 2026-10-01 — P3-M4 plan review
 
@@ -480,11 +509,11 @@ The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 c
 
 ## 2026-10-01 — Date-column terminology
 
-- Added Relative Date Column and Exact Date Column to [ux-terms.md](../ux-terms.md#canonical-components) as planned GUI components and aligned the planned GUI description with those exact names.
+- Added Relative Date Column and Exact Date Column to [ux-terms.md](../../../ux-terms.md#canonical-components) as planned GUI components and aligned the planned GUI description with those exact names.
 
 ## 2026-10-01 — Planned GUI owner decisions recorded
 
-- Recorded the owner's planned field order and display, direct sort buttons, responsive field hiding and `Expand` overlay, and future shortcut editor in [ux-gui.md](../ux-gui.md#phase-3-gui-decisions-and-behavior). Current GUI behavior remains described separately.
+- Recorded the owner's planned field order and display, direct sort buttons, responsive field hiding and `Expand` overlay, and future shortcut editor in [ux-gui.md](../../../ux-gui.md#phase-3-gui-decisions-and-behavior). Current GUI behavior remains described separately.
 
 ## 2026-10-01 — P3-M2 scope clarified
 

@@ -6,7 +6,7 @@ P3-M4 is a documentation milestone. It translates committed product policy and e
 
 ## Sources and decision method
 
-[Product behavior](../product-behavior.md) owns product scope, file-operation safeguards, Favorites policy, and session recovery. [UX GUI](../ux-gui.md) owns gestures, focus, control behavior, accessibility, and visible states. [UX terms](../ux-terms.md) owns component names; [UX information architecture](../ux-information-architecture.md) owns containment. Update the latter two only if a decided interaction requires new vocabulary or structure. The milestone overview lists questions and acceptance evidence; it does not become another behavior source.
+[Product behavior](../../../product-behavior.md) owns product scope, file-operation safeguards, Favorites policy, and session recovery. [UX GUI](../../../ux-gui.md) owns gestures, focus, control behavior, accessibility, and visible states. [UX terms](../../../ux-terms.md) owns component names; [UX information architecture](../../../ux-information-architecture.md) owns containment. Update the latter two only if a decided interaction requires new vocabulary or structure. The milestone overview lists questions and acceptance evidence; it does not become another behavior source.
 
 The [owner interview decisions](changelog.md#2026-10-01--p3-m4-workspace-interview-decisions) are recorded in the canonical sources before feature implementation. The current 2.0.0 gesture table remains separate from planned Phase 3 behavior. P3-M2's completed filter storage evidence is historical; the current product scope removes text filtering from Phase 3 behavior and restored state. Existing code and persisted action IDs remain unchanged in this documentation milestone; later implementations must reconcile compatibility without reusing or silently changing those IDs.
 
@@ -35,6 +35,6 @@ The agreed interactions should describe commands, events, state, and output at t
 
 ## Verification and sequence
 
-1. Trace the interview decisions to [product behavior](../product-behavior.md), [GUI rules](../ux-gui.md#phase-3-gui-decisions-and-behavior), and [planned containment](../ux-information-architecture.md#planned-phase-3-containment).
+1. Trace the interview decisions to [product behavior](../../../product-behavior.md), [GUI rules](../../../ux-gui.md#phase-3-gui-decisions-and-behavior), and [planned containment](../../../ux-information-architecture.md#planned-phase-3-containment).
 2. Review the [scenario trace](milestone-04-overview.md#scenario-trace) against P3-M5 through P3-M10 and leave genuinely unresolved interaction details open rather than attributing assumptions to the owner.
 3. Run the repository gate, record evidence beside completed checklist items, and mark the milestone Done only when every checklist item is satisfied.

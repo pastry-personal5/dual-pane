@@ -684,7 +684,7 @@ fn a_cleared_selection_stays_without_a_cursor_row_after_a_reload() {
 fn restoration_discards_only_conclusive_first_read_failures() {
     let left = location("restored-left");
     let right = location("restored-right");
-    let layout = WindowLayout { frame: WindowFrame { x: 1, y: 2, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 };
+    let layout = WindowLayout { frame: WindowFrame { x: 1, y: 2, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400, left_preview_height: 0, right_preview_height: 0 };
     let session = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: left.clone() }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: right }], active_tab: Some(0) }, active_browser: BrowserSide::Left, layout };
     let mut workspace = Workspace::with_home(location("home"));
     let restored = workspace.handle(Event::SettingsLoadedWithSession { snapshot: SettingsSnapshot::default(), session: SessionSnapshot::Saved(session) }.into());
@@ -719,7 +719,7 @@ fn restoration_discards_only_conclusive_first_read_failures() {
 #[test]
 fn restoration_dispatches_active_tabs_before_remaining_tabs_in_strip_order() {
     let location = |name| location(name);
-    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 };
+    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400, left_preview_height: 0, right_preview_height: 0 };
     let saved = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("left-first") }, TabSnapshot { location: location("left-active") }], active_tab: Some(1) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("right-active") }, TabSnapshot { location: location("right-second") }], active_tab: Some(0) }, active_browser: BrowserSide::Right, layout };
     let mut workspace = Workspace::with_home(location("home"));
     let restored = workspace.handle(Event::SettingsLoadedWithSession { snapshot: SettingsSnapshot::default(), session: SessionSnapshot::Saved(saved) }.into());
@@ -736,7 +736,7 @@ fn restoration_dispatches_active_tabs_before_remaining_tabs_in_strip_order() {
 
 #[test]
 fn a_late_settings_answer_after_timeout_never_restores_or_saves_the_prior_session() {
-    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400 };
+    let layout = WindowLayout { frame: WindowFrame { x: 0, y: 0, width: 800, height: 600 }, state: WindowState::Normal, sidebar_splitter: 200, browser_splitter: 400, left_preview_height: 0, right_preview_height: 0 };
     let saved = WorkspaceSnapshot { left: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("saved-left") }], active_tab: Some(0) }, right: BrowserSnapshot { tabs: vec![TabSnapshot { location: location("saved-right") }], active_tab: Some(0) }, active_browser: BrowserSide::Right, layout };
     let mut workspace = Workspace::with_home(location("home"));
     let timed_out = workspace.handle(Event::SettingsLoadTimedOut.into());
@@ -770,7 +770,7 @@ fn late_stricter_settings_clear_loaded_fallback_rows_without_replacing_tabs() {
 
 #[test]
 fn first_settings_answer_saves_a_layout_reported_while_loading() {
-    let layout = WindowLayout { frame: WindowFrame { x: 40, y: 50, width: 900, height: 700 }, state: WindowState::Normal, sidebar_splitter: 240, browser_splitter: 430 };
+    let layout = WindowLayout { frame: WindowFrame { x: 40, y: 50, width: 900, height: 700 }, state: WindowState::Normal, sidebar_splitter: 240, browser_splitter: 430, left_preview_height: 0, right_preview_height: 0 };
     let mut workspace = Workspace::with_home(location("home"));
     assert!(workspace.handle(Command::UpdateWindowLayout { layout }.into()).work.is_empty());
 

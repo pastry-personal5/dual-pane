@@ -2,7 +2,7 @@
 
 Status: Active
 
-This note identifies the different reasons an item can be absent from a macOS file manager and records the evidence behind P3-M15's three visibility settings. The [P3-M15 overview](../phase-3/milestone-15-overview.md#owner-decisions) owns the approved product behavior; this note explains the research and limits of the name list.
+This note identifies the different reasons an item can be absent from a macOS file manager and records the evidence behind P3-M15's three visibility settings. The [P3-M15 overview](../archive/phases/phase-3/milestone-15-overview.md#owner-decisions) owns the approved product behavior; this note explains the research and limits of the name list.
 
 ## Three different mechanisms
 

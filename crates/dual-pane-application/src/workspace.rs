@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
-use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
+use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
+use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
 pub const NOTICE_LIMIT: usize = 200;
@@ -89,6 +89,25 @@ pub struct Workspace {
     watch_visible: HashSet<Location>,
     visibility_generation: u64,
     visibility_retries: HashMap<(BrowserSide, TabId), (Location, Option<usize>)>,
+    left_preview: PreviewSlot,
+    right_preview: PreviewSlot,
+}
+#[derive(Debug)]
+struct PreviewSlot {
+    target_width: u32,
+    target_height: u32,
+    current: Option<PreviewRequest>,
+    view: PreviewView,
+    next_token: u64,
+}
+
+impl Default for PreviewSlot {
+    fn default() -> Self {
+        Self { target_width: 0, target_height: 0, current: None, view: PreviewView::Collapsed, next_token: 0 }
+    }
+}
+fn same_preview_target(left: &PreviewRequest, right: &PreviewRequest) -> bool {
+    left.browser == right.browser && left.tab == right.tab && left.listing == right.listing && left.name == right.name && left.location == right.location && left.target_width == right.target_width && left.target_height == right.target_height
 }
 #[derive(Debug, Clone)]
 struct PendingSelection {
@@ -129,6 +148,7 @@ struct TabState {
 struct FolderItems {
     location: Location,
     entries: Arc<[Entry]>,
+    listing: RequestToken,
 }
 #[derive(Debug)]
 struct PendingRead {
@@ -157,7 +177,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
@@ -172,6 +192,7 @@ impl Workspace {
             }
         }
         self.reconcile_watches(&mut transition);
+        self.reconcile_previews(&mut transition);
         transition.append(self.flush_startup_notice_open());
         transition
     }
@@ -208,6 +229,7 @@ impl Workspace {
             Command::SetActionShortcuts { action, shortcuts } => self.set_action_shortcuts(action, shortcuts),
             Command::RestoreActionShortcuts { action } => self.restore_action_shortcuts(action),
             Command::UpdateWindowLayout { layout } => self.update_window_layout(layout),
+            Command::SetPreviewTarget { browser, tab, width, height } => self.set_preview_target(browser, tab, width, height),
             Command::GoBack { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, false)),
             Command::GoForward { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, true)),
             Command::Refresh { browser, tab } => self.on_active(browser, tab, |workspace| workspace.refresh_tab(browser, tab)),
@@ -225,6 +247,7 @@ impl Workspace {
     }
     fn event(&mut self, event: Event) -> Transition {
         match event {
+            Event::PreviewFinished { request, result } => self.preview_finished(request, result),
             Event::OperationScanned { id, generation, plan } => self.operation_transition(id, |operations| operations.scanned(id, generation, plan)),
             Event::OperationStepped { id, generation, result } => self.operation_transition(id, |operations| operations.step_result(id, generation, result)),
             Event::OperationFinalized { id, generation, result } => self.operation_transition(id, |operations| operations.finalized(id, generation, result)),
@@ -1136,6 +1159,92 @@ impl Workspace {
         self.session_revision += 1;
         Transition { outputs: vec![], work: self.session_snapshot().map(|session| WorkRequest::SaveSession { revision: self.session_revision, session }).into_iter().collect() }
     }
+    fn preview_slot(&self, browser: BrowserSide) -> &PreviewSlot {
+        match browser {
+            BrowserSide::Left => &self.left_preview,
+            BrowserSide::Right => &self.right_preview,
+        }
+    }
+    fn preview_slot_mut(&mut self, browser: BrowserSide) -> &mut PreviewSlot {
+        match browser {
+            BrowserSide::Left => &mut self.left_preview,
+            BrowserSide::Right => &mut self.right_preview,
+        }
+    }
+    fn set_preview_target(&mut self, browser: BrowserSide, tab: TabId, width: u32, height: u32) -> Transition {
+        if self.active_tab(browser) == tab {
+            let slot = self.preview_slot_mut(browser);
+            slot.target_width = width.min(8192);
+            slot.target_height = height.min(8192);
+        }
+        Transition::default()
+    }
+    fn preview_candidate(&self, browser: BrowserSide, width: u32, height: u32) -> (Option<PreviewRequest>, PreviewView) {
+        if width == 0 || height == 0 {
+            return (None, PreviewView::Collapsed);
+        }
+        let tab = self.active_tab(browser);
+        let Some(state) = self.tab(browser, tab) else { return (None, PreviewView::NoSelection) };
+        let Some(items) = state.folder_items.as_ref().filter(|_| state.pending.is_none() && state.error.is_none()) else { return (None, PreviewView::NoSelection) };
+        let selected = state.history.current().map(|visit| visit.state().selection().entries()).unwrap_or(&[]);
+        let [name] = selected else {
+            return (None, if selected.is_empty() { PreviewView::NoSelection } else { PreviewView::MultipleSelection });
+        };
+        let Some(entry) = items.entries.iter().find(|entry| entry.name() == name) else { return (None, PreviewView::Unavailable { name: name.clone() }) };
+        if entry.kind() != EntryKind::File {
+            return (None, PreviewView::UnsupportedSelection { name: name.clone() });
+        }
+        (Some(PreviewRequest { browser, tab, listing: items.listing, name: name.clone(), location: items.location.join(name), target_width: width, target_height: height, token: 0 }), PreviewView::Loading { name: name.clone() })
+    }
+    fn reconcile_previews(&mut self, transition: &mut Transition) {
+        for browser in [BrowserSide::Left, BrowserSide::Right] {
+            let slot = self.preview_slot(browser);
+            let (candidate, empty_view) = self.preview_candidate(browser, slot.target_width, slot.target_height);
+            let slot = self.preview_slot_mut(browser);
+            if candidate.as_ref().is_some_and(|candidate| slot.current.as_ref().is_some_and(|current| same_preview_target(candidate, current))) {
+                continue;
+            }
+            if let Some(current) = slot.current.take() {
+                transition.work.push(WorkRequest::CancelPreview { browser, token: current.token });
+            }
+            let view = if let Some(mut request) = candidate {
+                slot.next_token = slot.next_token.wrapping_add(1).max(1);
+                request.token = slot.next_token;
+                let view = PreviewView::Loading { name: request.name.clone() };
+                slot.current = Some(request.clone());
+                transition.work.push(WorkRequest::ReadPreview { request });
+                view
+            } else {
+                empty_view
+            };
+            if slot.view != view {
+                slot.view = view.clone();
+                transition.outputs.push(Output::PreviewChanged { browser, view });
+            }
+        }
+    }
+    fn preview_finished(&mut self, request: PreviewRequest, result: PreviewResult) -> Transition {
+        let slot = self.preview_slot(request.browser);
+        if slot.current.as_ref() != Some(&request) {
+            return Transition::default();
+        }
+        let (candidate, _) = self.preview_candidate(request.browser, slot.target_width, slot.target_height);
+        if !candidate.as_ref().is_some_and(|candidate| same_preview_target(candidate, &request)) {
+            return Transition::default();
+        }
+        let view = match result {
+            PreviewResult::Image { pixels, width, height, source_width, source_height, byte_size, modified_unix_seconds } if width > 0 && height > 0 && usize::try_from(width).ok().and_then(|width| usize::try_from(height).ok().and_then(|height| width.checked_mul(height))).and_then(|pixels| pixels.checked_mul(4)) == Some(pixels.len()) => PreviewView::Image { name: request.name.clone(), pixels, width, height, source_width, source_height, byte_size, modified_unix_seconds },
+            PreviewResult::Image { .. } | PreviewResult::DecodeFailed => PreviewView::DecodeFailed { name: request.name.clone() },
+            PreviewResult::Unsupported => PreviewView::UnsupportedSelection { name: request.name.clone() },
+            PreviewResult::Unavailable | PreviewResult::Cancelled => PreviewView::Unavailable { name: request.name.clone() },
+        };
+        let slot = self.preview_slot_mut(request.browser);
+        if slot.view == view {
+            return Transition::default();
+        }
+        slot.view = view.clone();
+        Transition::output(Output::PreviewChanged { browser: request.browser, view })
+    }
     pub fn session_snapshot(&self) -> Option<WorkspaceSnapshot> {
         if self.settings_status != SettingsStatus::Loaded || !self.launch_completed || self.session_write_protected {
             return None;
@@ -1508,7 +1617,7 @@ impl Workspace {
             (Some(old), Some(base), Some(changes)) if Arc::ptr_eq(&old.entries, base) && changes_fit(&changes, old.entries.len(), entries.len()) => Some(changes),
             _ => None,
         };
-        state.folder_items = Some(FolderItems { location: pending.location.clone(), entries: Arc::clone(&entries) });
+        state.folder_items = Some(FolderItems { location: pending.location.clone(), entries: Arc::clone(&entries), listing: token });
         state.error = None;
         state.restoring = false;
         state.visibility_cleared = false;

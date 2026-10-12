@@ -24,6 +24,8 @@ pub mod ffi {
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+        include!("cxx-qt-lib/qbytearray.h");
+        type QByteArray = cxx_qt_lib::QByteArray;
     }
     extern "Rust" {
         type BrowserStartup;
@@ -34,6 +36,8 @@ pub mod ffi {
         include!("dual_pane_desktop/desktop_window.hpp");
         fn run_desktop(startup: Box<BrowserStartup>) -> i32;
         fn schedule_gui_drain();
+        include!("dual_pane_desktop/preview_reader.hpp");
+        fn decode_preview(fd: i32, target_width: i32, target_height: i32) -> QByteArray;
         include!("dual_pane_desktop/quick_look_preview.hpp");
         #[allow(dead_code)] // Called by the desktop-only Rust seam test below.
         fn quick_look_seam_tests() -> bool;
@@ -61,6 +65,8 @@ pub mod ffi {
         #[qproperty(i32, saved_layout_state, cxx_name = "savedLayoutState", READ, NOTIFY)]
         #[qproperty(i32, saved_sidebar_splitter, cxx_name = "savedSidebarSplitter", READ, NOTIFY)]
         #[qproperty(i32, saved_browser_splitter, cxx_name = "savedBrowserSplitter", READ, NOTIFY)]
+        #[qproperty(i32, saved_left_preview_height, cxx_name = "savedLeftPreviewHeight", READ, NOTIFY)]
+        #[qproperty(i32, saved_right_preview_height, cxx_name = "savedRightPreviewHeight", READ, NOTIFY)]
         #[qproperty(i32, bindings_revision, cxx_name = "bindingsRevision", READ, NOTIFY)]
         #[qproperty(QString, startup_failure, cxx_name = "startupFailure", READ, NOTIFY)]
         type WorkspaceBridge = super::WorkspaceBridgeRust;
@@ -139,7 +145,7 @@ pub mod ffi {
         /// Reports the workspace's current logical-point layout after a
         /// settled native layout change.
         #[cxx_name = "updateWindowLayout"]
-        fn update_window_layout(self: Pin<&mut WorkspaceBridge>, origin: i64, width: i32, height: i32, state: i32, sidebar_splitter: i32, browser_splitter: i32);
+        fn update_window_layout(self: Pin<&mut WorkspaceBridge>, origin: i64, width: i32, height: i32, state: i32, splitters: i64, previews: i64);
         /// Resets settings after the person confirmed it.
         #[cxx_name = "resetSettings"]
         fn reset_settings(self: Pin<&mut WorkspaceBridge>);
@@ -223,6 +229,8 @@ pub struct WorkspaceBridgeRust {
     saved_layout_state: i32,
     saved_sidebar_splitter: i32,
     saved_browser_splitter: i32,
+    saved_left_preview_height: i32,
+    saved_right_preview_height: i32,
     bindings_revision: i32,
     startup_failure: QString,
     shown: WorkspaceViewModel,
@@ -280,13 +288,13 @@ impl ffi::WorkspaceBridge {
         self.as_mut().set_notices_startup_ready(notices_ready);
         self.as_mut().set_settings_interaction_available(settings_available);
         if let Some(layout) = layout {
-            let values = layout.map_or((false, 0, 0, 0, 0, 0, 0, 0), |layout| {
+            let values = layout.map_or((false, 0, 0, 0, 0, 0, 0, 0, 0, 0), |layout| {
                 let state = match layout.state {
                     WindowState::Normal => 0,
                     WindowState::Zoomed => 1,
                     WindowState::FullScreen => 2,
                 };
-                (true, layout.frame.x, layout.frame.y, layout.frame.width, layout.frame.height, state, layout.sidebar_splitter, layout.browser_splitter)
+                (true, layout.frame.x, layout.frame.y, layout.frame.width, layout.frame.height, state, layout.sidebar_splitter, layout.browser_splitter, layout.left_preview_height, layout.right_preview_height)
             });
             let bridge = self.as_mut().rust_mut().get_mut();
             bridge.saved_layout_available = values.0;
@@ -297,6 +305,8 @@ impl ffi::WorkspaceBridge {
             bridge.saved_layout_state = values.5;
             bridge.saved_sidebar_splitter = values.6;
             bridge.saved_browser_splitter = values.7;
+            bridge.saved_left_preview_height = values.8;
+            bridge.saved_right_preview_height = values.9;
             self.as_mut().bump_layout_revision();
         }
     }
@@ -420,15 +430,19 @@ impl ffi::WorkspaceBridge {
         with_session(|session| session.submit(dual_pane_application::Event::ApplicationActivityChanged { active }));
         self.as_mut().session_changed();
     }
-    fn update_window_layout(mut self: Pin<&mut Self>, origin: i64, width: i32, height: i32, state: i32, sidebar_splitter: i32, browser_splitter: i32) {
+    fn update_window_layout(mut self: Pin<&mut Self>, origin: i64, width: i32, height: i32, state: i32, splitters: i64, previews: i64) {
         let x = (origin >> 32) as i32;
         let y = origin as i32;
+        let sidebar_splitter = (splitters >> 32) as i32;
+        let browser_splitter = splitters as i32;
+        let left_preview_height = (previews >> 32) as i32;
+        let right_preview_height = previews as i32;
         let state = match state {
             1 => WindowState::Zoomed,
             2 => WindowState::FullScreen,
             _ => WindowState::Normal,
         };
-        let layout = WindowLayout { frame: WindowFrame { x, y, width, height }, state, sidebar_splitter, browser_splitter };
+        let layout = WindowLayout { frame: WindowFrame { x, y, width, height }, state, sidebar_splitter, browser_splitter, left_preview_height, right_preview_height };
         with_session(|session| session.submit(dual_pane_application::Command::UpdateWindowLayout { layout }));
         self.as_mut().session_changed();
     }

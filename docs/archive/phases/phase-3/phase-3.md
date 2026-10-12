@@ -1,17 +1,17 @@
 # Phase 3: Tabbed File Management and Durable Workspace
 
-Status: Active
+Status: Done
 Goal: Make each Browser a durable, independently tabbed workspace that can safely manage files between Browsers and stay current with file-system changes.
 
 ## Exit criteria
 
 - Both Browsers support independent tab sets, active tabs, tab history, and tab-local browsing state.
 - One level of Favorite Groups and Favorite Items can be edited in the Sidebar and retains its hierarchy and order during the session and across relaunches.
-- Copy, move, rename, directory creation, Trash, permanent deletion, and default-application opening work with every safeguard in [product-behavior.md](../product-behavior.md#file-operation-safeguards).
+- Copy, move, rename, directory creation, Trash, permanent deletion, and default-application opening work with every safeguard in [product-behavior.md](../../../product-behavior.md#file-operation-safeguards).
 - A Folder Pane cursor item previews through native macOS Quick Look without creating a built-in viewer.
 - Relaunch restores each Browser's tabs, active tab, locations, location-shared folder sort, the active Browser, and the workspace window's frame, zoomed or full-screen state, and splitter positions; a tab whose saved location cannot be restored is discarded without preventing the remaining session from restoring. Text filtering is outside Phase 3.
 - Open locations are watched; changed Folder Items refresh automatically and retain matching selection and cursor state.
-- Directory loading, watching, persistence, and file operations keep the interface responsive as required by [architecture.md](../architecture.md#51-threading-and-responsiveness).
+- Directory loading, watching, persistence, and file operations keep the interface responsive as required by [architecture.md](../../../architecture.md#51-threading-and-responsiveness).
 
 ## Milestones
 
@@ -88,7 +88,7 @@ Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architec
 Status: Done
 Goal: Polish the existing workspace into a clearer, more consistent modern desktop interface without changing its file-management behavior.
 Plan: [overview](milestone-12-overview.md), [architecture](milestone-12-architecture.md)
-Notes: The automated gate and native macOS visual/accessibility verification passed.
+Notes: Automated gates pass. See the [P3-M12 checklist](milestone-12-overview.md#completion-checklist).
 
 ### P3-M13: Settings Window skeleton
 
@@ -111,6 +111,6 @@ Plan: [overview](milestone-15-overview.md), [architecture](milestone-15-architec
 
 ### P3-M16: GUI polish and Preview Pane
 
-Status: Planned
+Status: Done
 Goal: Refine Favorite Group controls and add an expandable per-Browser Preview Pane for selected images and their details.
 Plan: [overview](milestone-16-overview.md), [architecture](milestone-16-architecture.md)

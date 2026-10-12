@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ActionId, ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, MonitoringStatus, PlannedItem, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, VisibilityPolicy, WindowLayout};
+use crate::{ActionId, ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, VisibilityPolicy, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +218,14 @@ pub enum Command {
     UpdateWindowLayout {
         layout: WindowLayout,
     },
+    /// Reports usable Preview Pane content dimensions for the active tab;
+    /// zero collapses it. A stale tab cannot start preview work.
+    SetPreviewTarget {
+        browser: BrowserSide,
+        tab: TabId,
+        width: u32,
+        height: u32,
+    },
 }
 
 /// Externally observed facts, usually the results of work requests.
@@ -238,6 +246,10 @@ pub enum Command {
 /// sweep of temporaries left by earlier launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    PreviewFinished {
+        request: PreviewRequest,
+        result: PreviewResult,
+    },
     OperationScanned {
         id: OperationId,
         generation: u64,

@@ -81,6 +81,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <iterator>
@@ -207,7 +208,13 @@ auto style_sheet() -> QString {
       QTreeView::item:hover:!selected { background:%11; }
       QToolButton { background:%2; color:%3; border:1px solid %4; padding:4px; }
       QToolButton:disabled { color:%7; }
-      QToolButton#backButton:hover:enabled, QToolButton#forwardButton:hover:enabled, QToolButton#upButton:hover:enabled, QToolButton#favoriteGroupMenuButton:hover:enabled, QToolButton#addFavoriteItemButton:hover:enabled, QToolButton#settings:hover:enabled, QToolButton#noticesButton:hover:enabled { background:%5; }
+      QToolButton#backButton:hover:enabled, QToolButton#forwardButton:hover:enabled, QToolButton#upButton:hover:enabled, QToolButton#settings:hover:enabled, QToolButton#noticesButton:hover:enabled { background:%5; }
+      QToolButton#favoriteGroupMenuButton, QToolButton#addFavoriteItemButton { color:#A7ADB5; background:#24282E; }
+      QToolButton#favoriteGroupMenuButton:hover:enabled, QToolButton#addFavoriteItemButton:hover:enabled { color:#FFFFFF; background:#2F6D9A; }
+      QToolButton#favoriteGroupMenuButton:pressed:enabled, QToolButton#addFavoriteItemButton:pressed:enabled { color:#FFFFFF; background:#245878; }
+      QToolButton#favoriteGroupMenuButton:disabled, QToolButton#addFavoriteItemButton:disabled { color:#6F757D; background:transparent; }
+      QWidget#sidebar[windowActive="false"] QToolButton#favoriteGroupMenuButton, QWidget#sidebar[windowActive="false"] QToolButton#addFavoriteItemButton { color:#8A9099; background:#1B1D21; }
+      QLabel#applicationTitle { background:transparent; color:%3; font-size:24px; font-weight:600; padding:10px 16px; }
       QToolButton#sortControl:hover:enabled:!checked, QToolButton#newTabButton:hover:enabled, QToolButton#closeTabButton:hover:enabled, QToolButton#newGroupButton:hover:enabled, QFrame#operationPanel QToolButton:hover:enabled, QFrame#operationDecisionCard QPushButton:hover:enabled { background:%11; }
       QLabel#folderPaneToolbarRow1, QWidget#folderPaneToolbarRow2, QWidget#folderPaneToolbarRow3, QWidget#folderPaneToolbarRow2 QLabel, QWidget#folderPaneToolbarRow2 QLineEdit, QWidget#folderPaneToolbarRow2 QToolButton, QWidget#folderPaneToolbarRow3 QLabel, QWidget#folderPaneToolbarRow3 QLineEdit, QWidget#folderPaneToolbarRow3 QToolButton { background:%1; }
       QLabel#folderPaneToolbarRow1[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QToolButton { background:%2; }
@@ -220,6 +227,10 @@ auto style_sheet() -> QString {
       QWidget#browser[browserActive="true"][windowActive="true"], QWidget#browserTabsStrip[browserActive="true"][windowActive="true"], QLineEdit#pathEditControl[browserActive="true"][windowActive="true"] { background:%2; }
       QWidget#browser[browserActive="false"][windowActive="true"], QLineEdit#pathEditControl[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
       QWidget#browserTabsStrip[browserActive="false"][windowActive="true"] { background:%9; }
+      QWidget#previewPane { background:%1; color:%3; }
+      QWidget#previewPane[browserActive="true"][windowActive="true"] { background:%2; color:%3; }
+      QWidget#previewPane[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
+      QWidget#previewPane[browserActive="false"][windowActive="true"] QLabel { background:%9; color:%10; }
       QFrame#favoriteGroupBox { background:%12; border:0; border-radius:6px; }
       QWidget#favoriteGroup, QLabel#favoriteGroupName, QLabel#favoriteItem { background:transparent; border:0; border-radius:0; }
       QLabel#favoriteGroupName { font-size:13px; font-weight:bold; }
@@ -248,6 +259,9 @@ auto style_sheet() -> QString {
       QListWidget#settingsCategoryList::item:selected { background:%5; color:white; }
       QWidget#settingsContent, QStackedWidget#settingsPages { background:%2; border:0; }
       QWidget#settingsPage { background:%2; color:%3; }
+      QFrame#settingsCard { background:%1; border:1px solid %4; border-radius:6px; }
+      QLabel#settingsCardHeading { background:transparent; color:%3; font-size:14px; font-weight:600; }
+      QLabel#settingsCardDescription { background:transparent; color:#B7C0CA; }
       QWidget#settingsShortcutPage { background:%2; color:%3; }
       QWidget#settingsShortcutPage QLabel, QWidget#settingsShortcutPage QToolButton, QWidget#settingsShortcutPage QPushButton { color:%3; font-size:10px; }
       QWidget#shortcutTableHeader { background:%1; border-bottom:1px solid %4; }
@@ -305,7 +319,10 @@ void repolish(QWidget *widget) {
 
 class ThinSplitterHandle final : public QSplitterHandle {
   public:
-    ThinSplitterHandle(Qt::Orientation orientation, QSplitter *parent, const QString &accessible_name) : QSplitterHandle(orientation, parent) { setAccessibleName(accessible_name); }
+    ThinSplitterHandle(Qt::Orientation orientation, QSplitter *parent, const QString &accessible_name, std::function<void()> settled) : QSplitterHandle(orientation, parent), settled_(std::move(settled)) {
+        setAccessibleName(accessible_name);
+        setFocusPolicy(orientation == Qt::Vertical ? Qt::TabFocus : Qt::NoFocus);
+    }
 
   protected:
     void enterEvent(QEnterEvent *event) override {
@@ -333,7 +350,22 @@ class ThinSplitterHandle final : public QSplitterHandle {
         if (event->button() == Qt::LeftButton) {
             dragging_ = false;
             update();
+            if (settled_)
+                settled_();
         }
+    }
+
+    void keyPressEvent(QKeyEvent *event) override {
+        if (orientation() != Qt::Vertical || (event->key() != Qt::Key_Up && event->key() != Qt::Key_Down)) {
+            QSplitterHandle::keyPressEvent(event);
+            return;
+        }
+        const int step = event->modifiers().testFlag(Qt::ShiftModifier) ? 1 : 10;
+        const int direction = event->key() == Qt::Key_Up ? -1 : 1;
+        moveSplitter(splitter()->sizes().value(0) + (direction * step));
+        if (settled_)
+            settled_();
+        event->accept();
     }
 
     void paintEvent(QPaintEvent *event) override {
@@ -348,25 +380,53 @@ class ThinSplitterHandle final : public QSplitterHandle {
   private:
     bool hovered_ = false;
     bool dragging_ = false;
+    std::function<void()> settled_;
 };
 
 enum class SplitterKind : std::uint8_t { Sidebar,
                                          Browser,
+                                         Preview,
 };
 
 class ThinSplitter final : public QSplitter {
   public:
-    explicit ThinSplitter(SplitterKind kind, QWidget *parent = nullptr) : QSplitter(Qt::Horizontal, parent), handle_accessible_name_(kind == SplitterKind::Sidebar ? QStringLiteral("Sidebar Splitter") : QStringLiteral("Browser Divider")) {
-        setObjectName(kind == SplitterKind::Sidebar ? QStringLiteral("sidebarSplitter") : QStringLiteral("browserDivider"));
+    explicit ThinSplitter(SplitterKind kind, QWidget *parent = nullptr) : QSplitter(kind == SplitterKind::Preview ? Qt::Vertical : Qt::Horizontal, parent), handle_accessible_name_(accessible_name(kind)) {
+        setObjectName(object_name(kind));
         setHandleWidth(splitter_width);
         setChildrenCollapsible(false);
     }
+    void set_settled_handler(std::function<void()> handler) { settled_ = std::move(handler); }
 
   protected:
-    auto createHandle() -> QSplitterHandle * override { return new ThinSplitterHandle(orientation(), this, handle_accessible_name_); }
+    auto createHandle() -> QSplitterHandle * override {
+        return new ThinSplitterHandle(orientation(), this, handle_accessible_name_, [this] { if (settled_) settled_(); });
+    }
 
   private:
+    static auto accessible_name(SplitterKind kind) -> QString {
+        switch (kind) {
+        case SplitterKind::Sidebar:
+            return QStringLiteral("Sidebar Splitter");
+        case SplitterKind::Browser:
+            return QStringLiteral("Browser Divider");
+        case SplitterKind::Preview:
+            return QStringLiteral("Preview Pane Splitter");
+        }
+        return {};
+    }
+    static auto object_name(SplitterKind kind) -> QString {
+        switch (kind) {
+        case SplitterKind::Sidebar:
+            return QStringLiteral("sidebarSplitter");
+        case SplitterKind::Browser:
+            return QStringLiteral("browserDivider");
+        case SplitterKind::Preview:
+            return QStringLiteral("previewPaneSplitter");
+        }
+        return {};
+    }
     QString handle_accessible_name_;
+    std::function<void()> settled_;
 };
 
 /// Loads native item icons on one low-priority worker thread. Results return
@@ -1102,6 +1162,41 @@ auto navigation_icon(const NavigationIcon direction, const bool focused) -> cons
     return (focused ? active : inactive).at(static_cast<std::size_t>(direction));
 }
 
+class ElidedStatusLabel final : public QLabel {
+  public:
+    explicit ElidedStatusLabel(QWidget *parent) : QLabel(parent) {
+        setObjectName(QStringLiteral("browserStatusBar"));
+        setAccessibleName(QStringLiteral("Browser Status Bar"));
+        setWordWrap(false);
+        setContentsMargins(4, 2, 4, 2);
+        setFixedHeight(fontMetrics().height() + 4);
+    }
+
+    void set_full_text(const QString &text) {
+        full_text_ = text;
+        setAccessibleDescription(text);
+        update_elision();
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QLabel::resizeEvent(event);
+        update_elision();
+    }
+
+    void changeEvent(QEvent *event) override {
+        QLabel::changeEvent(event);
+        if (event->type() == QEvent::FontChange) {
+            setFixedHeight(fontMetrics().height() + 4);
+            update_elision();
+        }
+    }
+
+  private:
+    void update_elision() { QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, qMax(0, contentsRect().width()))); }
+    QString full_text_;
+};
+
 class FolderPane final : public QFrame {
   public:
     FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)) {
@@ -1192,9 +1287,7 @@ class FolderPane final : public QFrame {
         command_layout->addWidget(sort_groups.at(3));
         view_->setObjectName(QStringLiteral("folderItemsList"));
         view_->setAccessibleName(QStringLiteral("Folder Items List"));
-        auto *status = new QLabel(this);
-        status->setObjectName(QStringLiteral("browserStatusBar"));
-        status->setAccessibleName(QStringLiteral("Browser Status Bar"));
+        auto *status = new ElidedStatusLabel(this);
         status_ = status;
         // The New Folder Name Editor is a temporary row pinned at the top of
         // the listing.
@@ -1209,7 +1302,6 @@ class FolderPane final : public QFrame {
         layout->addWidget(commands);
         layout->addWidget(new_folder_row_);
         layout->addWidget(view_, 1);
-        layout->addWidget(status);
         QObject::connect(model, &FolderItemsListModel::folderNameChanged, this, [title, model] { title->setText(model->getFolderName()); });
         auto *quick_look_failure_timer = new QTimer(this);
         quick_look_failure_timer->setSingleShot(true);
@@ -1222,11 +1314,11 @@ class FolderPane final : public QFrame {
             // A location path was the old steady-state status. Mirror the
             // concise summary there, but leave loading and error feedback.
             if (status_text != model->getPathText()) {
-                status->setText(status_text);
+                status->set_full_text(status_text);
             } else if (count.isEmpty()) {
-                status->setText(QString());
+                status->set_full_text(QString());
             } else {
-                status->setText(QStringLiteral("%1 %2").arg(count, selected));
+                status->set_full_text(QStringLiteral("%1 %2").arg(count, selected));
             }
         };
         QObject::connect(model, &FolderItemsListModel::summaryCountTextChanged, this, [summary_count, update_status, model] {
@@ -1241,7 +1333,7 @@ class FolderPane final : public QFrame {
         QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, update_status);
         QObject::connect(quick_look_failure_timer, &QTimer::timeout, this, update_status);
         view_->setQuickLookFailureHandler([status, quick_look_failure_timer] {
-            status->setText(QStringLiteral("Quick Look couldn’t open this item."));
+            status->set_full_text(QStringLiteral("Quick Look couldn’t open this item."));
             quick_look_failure_timer->start(status_reason_milliseconds);
         });
         update_status();
@@ -1283,7 +1375,7 @@ class FolderPane final : public QFrame {
     }
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return view_; }
-    [[nodiscard]] auto status() const -> QLabel * { return status_; }
+    [[nodiscard]] auto status() const -> ElidedStatusLabel * { return status_; }
     [[nodiscard]] auto new_folder_row() const -> QWidget * { return new_folder_row_; }
 
   private:
@@ -1296,7 +1388,7 @@ class FolderPane final : public QFrame {
     }
 
     FolderItemsList *view_;
-    QLabel *status_ = nullptr;
+    ElidedStatusLabel *status_ = nullptr;
     QWidget *new_folder_row_ = nullptr;
     std::array<QWidget *, 4> sort_groups_{};
     std::array<QToolButton *, 8> sorts_{};
@@ -1471,9 +1563,101 @@ class NameEditController final : public QObject {
     std::int64_t rejected_ = -1;
 };
 
+class PreviewPane final : public QWidget {
+  public:
+    explicit PreviewPane(QWidget *parent) : QWidget(parent), split_(new QSplitter(Qt::Horizontal, this)), content_(new QLabel(split_)), details_(new QLabel(split_)) {
+        setObjectName(QStringLiteral("previewPane"));
+        setMinimumHeight(0);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        split_->setObjectName(QStringLiteral("previewContentDivider"));
+        split_->setHandleWidth(splitter_width);
+        content_->setObjectName(QStringLiteral("itemContentPreview"));
+        content_->setAccessibleName(QStringLiteral("Item Content Preview"));
+        content_->setAlignment(Qt::AlignCenter);
+        content_->setMinimumSize(0, 0);
+        content_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        content_->installEventFilter(this);
+        details_->setObjectName(QStringLiteral("itemDetailsPreview"));
+        details_->setAccessibleName(QStringLiteral("Item Details Preview"));
+        details_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        details_->setMargin(8);
+        details_->setMinimumSize(0, 0);
+        details_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        details_->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        details_->setWordWrap(true);
+        details_->setText(QStringLiteral("Select one item to see its details."));
+        split_->addWidget(content_);
+        split_->addWidget(details_);
+        split_->setStretchFactor(0, 2);
+        split_->setStretchFactor(1, 1);
+        split_->setSizes({2, 1});
+        layout->addWidget(split_);
+        QObject::connect(split_, &QSplitter::splitterMoved, this, [this](int, int) { queue_target_change(); });
+    }
+
+    [[nodiscard]] auto content_size() const -> QSize { return content_->size(); }
+    void set_target_changed_handler(std::function<void()> handler) { target_changed_ = std::move(handler); }
+    void refresh(FolderItemsListModel *model) {
+        details_->setText(model->previewDetails());
+        image_ = QImage();
+        if (model->previewKind() == 7) {
+            const auto bytes = model->previewImagePixels();
+            const int width = model->previewImageWidth();
+            const int height = model->previewImageHeight();
+            if (width > 0 && height > 0 && bytes.size() == static_cast<qsizetype>(width) * height * 4) {
+                QImage decoded(width, height, QImage::Format_RGBA8888_Premultiplied);
+                if (!decoded.isNull() && decoded.sizeInBytes() == bytes.size()) {
+                    std::memcpy(decoded.bits(), bytes.constData(), static_cast<std::size_t>(bytes.size()));
+                    image_ = std::move(decoded);
+                }
+            }
+        }
+        render_image();
+    }
+
+  protected:
+    auto eventFilter(QObject *watched, QEvent *event) -> bool override {
+        if (watched == content_ && event->type() == QEvent::Resize) {
+            queue_target_change();
+            QTimer::singleShot(0, this, [this] { render_image(); });
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
+  private:
+    void queue_target_change() {
+        if (target_changed_ && !target_change_queued_) {
+            target_change_queued_ = true;
+            QTimer::singleShot(0, this, [this] {
+                target_change_queued_ = false;
+                if (target_changed_)
+                    target_changed_();
+            });
+        }
+    }
+    void render_image() {
+        if (image_.isNull()) {
+            content_->clear();
+            return;
+        }
+        const QSize target = image_.size().scaled(content_->size(), Qt::KeepAspectRatio);
+        const QSize display = target.width() < image_.width() || target.height() < image_.height() ? target : image_.size();
+        content_->setPixmap(QPixmap::fromImage(display == image_.size() ? image_ : image_.scaled(display, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    }
+    QSplitter *split_;
+    QLabel *content_;
+    QLabel *details_;
+    QImage image_;
+    std::function<void()> target_changed_;
+    bool target_change_queued_ = false;
+};
+
 class Browser final : public QWidget {
   public:
-    Browser(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QWidget(parent), model_(model), folder_(new FolderPane(model, icons, this)), overlay_(new QLabel(QStringLiteral("Expand"), this)), missing_(new QLabel(QStringLiteral("Command+R to Refresh"), this)), editors_(new NameEditController(model, folder_->view(), folder_->new_folder_row())) {
+    Browser(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QWidget(parent), model_(model), folder_(new FolderPane(model, icons, this)), preview_splitter_(new ThinSplitter(SplitterKind::Preview, this)), preview_(new PreviewPane(preview_splitter_)), overlay_(new QLabel(QStringLiteral("Expand"), this)), missing_(new QLabel(QStringLiteral("Command+R to Refresh"), this)), editors_(new NameEditController(model, folder_->view(), folder_->new_folder_row())), preview_settle_(this) {
         editors_->setParent(this);
         setObjectName(QStringLiteral("browser"));
         auto *layout = new QVBoxLayout(this);
@@ -1487,7 +1671,34 @@ class Browser final : public QWidget {
         path->setAttribute(Qt::WA_TransparentForMouseEvents);
         path->setAccessibleName(QStringLiteral("Path Edit Control"));
         layout->addWidget(path);
-        layout->addWidget(folder_, 1);
+        preview_splitter_->addWidget(folder_);
+        preview_splitter_->addWidget(preview_);
+        preview_splitter_->setCollapsible(0, false);
+        preview_splitter_->setCollapsible(1, true);
+        layout->addWidget(preview_splitter_, 1);
+        auto *status = folder_->status();
+        status->setParent(this);
+        layout->addWidget(status);
+        preview_splitter_->setSizes({1, 0});
+        preview_settle_.setSingleShot(true);
+        preview_splitter_->set_settled_handler([this] {
+            if (!applying_preview_height_)
+                preview_settle_.start(0);
+        });
+        QObject::connect(&preview_settle_, &QTimer::timeout, this, [this] {
+            const int moved = preview_splitter_->sizes().value(1);
+            chosen_preview_height_ = moved > 0 && moved < qMax(80, fontMetrics().height() * 5) ? qMax(80, fontMetrics().height() * 5) : moved;
+            apply_preview_height();
+            if (preview_changed_)
+                preview_changed_();
+        });
+        preview_->set_target_changed_handler([this] { send_preview_target(); });
+        QObject::connect(model, &FolderItemsListModel::previewRevisionChanged, this, [this, model] { preview_->refresh(model); });
+        QObject::connect(model, &FolderItemsListModel::tabsRevisionChanged, this, [this] {
+            last_preview_target_ = QSize(-1, -1);
+            QTimer::singleShot(0, this, [this] { send_preview_target(); });
+        });
+        preview_->refresh(model);
         QObject::connect(model, &FolderItemsListModel::pathTextChanged, this, [path, model] { path->setText(model->getPathText()); });
         overlay_->setObjectName(QStringLiteral("expandOverlay"));
         overlay_->setAccessibleName(QStringLiteral("Expand"));
@@ -1520,16 +1731,46 @@ class Browser final : public QWidget {
     [[nodiscard]] auto view() const -> FolderItemsList * { return folder_->view(); }
     [[nodiscard]] auto folder() const -> FolderPane * { return folder_; }
     [[nodiscard]] auto editors() const -> NameEditController * { return editors_; }
+    [[nodiscard]] auto preview_splitter() const -> ThinSplitter * { return preview_splitter_; }
+    [[nodiscard]] auto preview_height() const -> int { return chosen_preview_height_; }
+    void set_preview_changed_handler(std::function<void()> handler) { preview_changed_ = std::move(handler); }
+    void set_preview_height(int height) {
+        preview_settle_.stop();
+        chosen_preview_height_ = qBound(0, height, 32'767);
+        apply_preview_height();
+    }
 
   protected:
     /// Below the usable width, an instruction covers only this Browser; it
     /// passes pointer input through and takes no keyboard commands.
     void resizeEvent(QResizeEvent *event) override {
         QWidget::resizeEvent(event);
+        QTimer::singleShot(0, this, [this] { apply_preview_height(); });
         update_overlays();
     }
 
   private:
+    void apply_preview_height() {
+        if (preview_splitter_->height() <= 0)
+            return;
+        const int minimum_folder = folder_->minimumSizeHint().height() + folder_->view()->fontMetrics().height();
+        const int available = qMax(0, preview_splitter_->height() - preview_splitter_->handleWidth() - minimum_folder);
+        const int useful = qMax(80, fontMetrics().height() * 5);
+        const int effective = chosen_preview_height_ > 0 && available >= useful ? qMin(available, qMax(useful, chosen_preview_height_)) : 0;
+        const int upper = qMax(0, preview_splitter_->height() - preview_splitter_->handleWidth() - effective);
+        applying_preview_height_ = true;
+        preview_splitter_->setSizes({upper, effective});
+        applying_preview_height_ = false;
+        QTimer::singleShot(0, this, [this] { send_preview_target(); });
+    }
+    void send_preview_target() {
+        const int useful = qMax(80, fontMetrics().height() * 5);
+        const QSize target = preview_->height() >= useful ? preview_->content_size() : QSize(0, 0);
+        if (target == last_preview_target_)
+            return;
+        last_preview_target_ = target;
+        model_->setPreviewTarget(qMax(0, target.width()), qMax(0, target.height()));
+    }
     /// The narrow-Browser Expand overlay takes precedence over the Missing
     /// Folder Overlay, which covers only the dimmed Folder Items.
     void update_overlays() {
@@ -1581,6 +1822,13 @@ class Browser final : public QWidget {
 
     FolderItemsListModel *model_;
     FolderPane *folder_;
+    ThinSplitter *preview_splitter_;
+    PreviewPane *preview_;
+    int chosen_preview_height_ = 0;
+    bool applying_preview_height_ = false;
+    QTimer preview_settle_;
+    std::function<void()> preview_changed_;
+    QSize last_preview_target_;
     QLabel *overlay_;
     QLabel *missing_;
     NameEditController *editors_;
@@ -2494,6 +2742,7 @@ class DeleteConfirmations final : public QObject {
 /// close button, asks `handler` whether to proceed.
 class WorkspaceWindow final : public QMainWindow {
   public:
+    WorkspaceWindow() { setWindowFlags(Qt::Window | Qt::FramelessWindowHint); }
     void setCloseHandler(std::function<void(QCloseEvent *)> handler) { close_ = std::move(handler); }
     void setBeforeCloseHandler(std::function<void()> handler) { before_close_ = std::move(handler); }
     /// The enclosing desktop code debounces these notifications before it
@@ -2861,7 +3110,7 @@ class SettingsWindow final : public QDialog {
         title_row->setObjectName(QStringLiteral("settingsTitleRow"));
         title_row->setFixedHeight(48);
         auto *title_layout = new QHBoxLayout(title_row);
-        title_layout->setContentsMargins(32, 8, 24, 8);
+        title_layout->setContentsMargins(24, 8, 24, 8);
         title_layout->setSpacing(0);
         auto *heading = new QLabel(QStringLiteral("Settings"), title_row);
         heading->setObjectName(QStringLiteral("settingsHeading"));
@@ -2870,8 +3119,6 @@ class SettingsWindow final : public QDialog {
         heading_font.setPointSize(20);
         heading_font.setBold(true);
         heading->setFont(heading_font);
-        title_layout->addWidget(heading);
-        title_layout->addStretch();
         auto *close = new QToolButton(title_row);
         close->setObjectName(QStringLiteral("settingsCloseButton"));
         QPixmap close_bitmap(18, 18);
@@ -2890,6 +3137,9 @@ class SettingsWindow final : public QDialog {
         close->setFocusPolicy(Qt::TabFocus);
         QObject::connect(close, &QToolButton::clicked, this, &QDialog::reject);
         title_layout->addWidget(close);
+        title_layout->addSpacing(12);
+        title_layout->addWidget(heading);
+        title_layout->addStretch();
         layout->addWidget(title_row);
         auto *body = new QHBoxLayout();
         body->setContentsMargins(0, 0, 0, 0);
@@ -3000,8 +3250,29 @@ class SettingsWindow final : public QDialog {
         page->setAccessibleName(QStringLiteral("General Settings"));
         auto *layout = new QVBoxLayout(page);
         layout->setContentsMargins(24, 20, 24, 20);
+        layout->setSpacing(14);
         auto *title = new QLabel(QStringLiteral("General"), page);
         layout->addWidget(title);
+        auto make_card = [page, layout](const QString &name, const QString &heading, const QString &description) {
+            auto *card = new QFrame(page);
+            card->setObjectName(QStringLiteral("settingsCard"));
+            auto *card_layout = new QVBoxLayout(card);
+            card_layout->setContentsMargins(16, 14, 16, 14);
+            card_layout->setSpacing(8);
+            auto *card_heading = new QLabel(heading, card);
+            card_heading->setObjectName(QStringLiteral("settingsCardHeading"));
+            card->setAccessibleName(name);
+            card_layout->addWidget(card_heading);
+            if (!description.isEmpty()) {
+                auto *card_description = new QLabel(description, card);
+                card_description->setObjectName(QStringLiteral("settingsCardDescription"));
+                card_description->setWordWrap(true);
+                card_layout->addWidget(card_description);
+            }
+            layout->addWidget(card);
+            return card_layout;
+        };
+        auto *startup_card = make_card(QStringLiteral("Startup Notices"), QStringLiteral("Startup Notices"), QStringLiteral("Choose which notices open automatically when the app starts."));
         auto *notices = new QHBoxLayout();
         auto *check = new QCheckBox(QStringLiteral("Don’t show notices at startup"), page);
         check->setObjectName(QStringLiteral("settingsHideNotices"));
@@ -3015,12 +3286,13 @@ class SettingsWindow final : public QDialog {
         notices->addWidget(check);
         notices->addWidget(info_button(page, QStringLiteral("Startup notices"), QStringLiteral("When selected, routine notices stay in Notices at startup. Important errors still open Notices so you can act on them.")));
         notices->addStretch();
-        layout->addLayout(notices);
+        startup_card->addLayout(notices);
+        auto *visibility_card = make_card(QStringLiteral("Item Visibility"), QStringLiteral("Item Visibility"), QStringLiteral("Choose which hidden item classes appear in both Browsers."));
         auto *visibility_help = new QLabel(QStringLiteral("An item matching more than one rule appears only when every matching Show control is selected."), page);
         visibility_help->setObjectName(QStringLiteral("settingsVisibilityHelp"));
         visibility_help->setAccessibleName(QStringLiteral("Visibility settings help"));
         visibility_help->setWordWrap(true);
-        layout->addWidget(visibility_help);
+        visibility_card->addWidget(visibility_help);
         auto *macos_items = new QCheckBox(QStringLiteral("Show macOS metadata and service items"), page);
         auto *dotfiles = new QCheckBox(QStringLiteral("Show dotfiles"), page);
         auto *macos_invisible = new QCheckBox(QStringLiteral("Show items marked invisible by macOS"), page);
@@ -3054,9 +3326,10 @@ class SettingsWindow final : public QDialog {
             QObject::connect(bridge_, &WorkspaceBridge::showDotfilesChanged, page, synchronize_visibility);
             QObject::connect(bridge_, &WorkspaceBridge::showMacosInvisibleChanged, page, synchronize_visibility);
         }
-        layout->addWidget(macos_items);
-        layout->addWidget(dotfiles);
-        layout->addWidget(macos_invisible);
+        visibility_card->addWidget(macos_items);
+        visibility_card->addWidget(dotfiles);
+        visibility_card->addWidget(macos_invisible);
+        auto *reset_card = make_card(QStringLiteral("Reset Settings"), QStringLiteral("Reset Settings"), QStringLiteral("Restore defaults for settings, Favorites, open tabs, and workspace layout."));
         auto *reset_row = new QHBoxLayout();
         auto *reset = new QPushButton(QStringLiteral("Reset Settings"), page);
         reset->setObjectName(QStringLiteral("settingsReset"));
@@ -3078,7 +3351,7 @@ class SettingsWindow final : public QDialog {
         reset_row->addWidget(reset);
         reset_row->addWidget(info_button(page, QStringLiteral("Reset Settings"), QStringLiteral("Reset restores all compiled settings and shortcuts, removes Favorites, closes open tabs, and returns the workspace layout to its defaults. The current database is kept as a backup.")));
         reset_row->addStretch();
-        layout->addLayout(reset_row);
+        reset_card->addLayout(reset_row);
         layout->addStretch();
         return page;
     }
@@ -3526,6 +3799,8 @@ class Sidebar final : public QWidget {
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
+        auto *title = new SidebarTitleRow(this);
+        layout->addWidget(title);
         auto *scroll = new QScrollArea(this);
         scroll->setWidgetResizable(true);
         scroll->setFrameShape(QFrame::NoFrame);
@@ -3543,12 +3818,42 @@ class Sidebar final : public QWidget {
     void set_settings_available(bool available) { toolbar_->set_settings_available(available); }
 
   private:
+    class SidebarTitleRow final : public QLabel {
+      public:
+        explicit SidebarTitleRow(QWidget *parent) : QLabel(QStringLiteral("Dual Pane"), parent) {
+            setObjectName(QStringLiteral("applicationTitle"));
+            setAccessibleName(QStringLiteral("Dual Pane"));
+            setMinimumHeight(54);
+            setAttribute(Qt::WA_StyledBackground);
+        }
+
+      protected:
+        void mousePressEvent(QMouseEvent *event) override {
+            if (event->button() == Qt::LeftButton && window()->windowHandle() != nullptr && window()->windowHandle()->startSystemMove()) {
+                moving_window_ = true;
+                event->accept();
+                return;
+            }
+            QLabel::mousePressEvent(event);
+        }
+        void mouseReleaseEvent(QMouseEvent *event) override {
+            if (moving_window_) {
+                moving_window_ = false;
+                event->accept();
+                return;
+            }
+            QLabel::mouseReleaseEvent(event);
+        }
+
+      private:
+        bool moving_window_ = false;
+    };
     MainToolbar *toolbar_;
 };
 
 class BrowserHighlightController final : public QObject {
   public:
-    BrowserHighlightController(QWidget *window, std::array<Browser *, 2> browsers) : window_(window), browsers_(browsers) {
+    BrowserHighlightController(QWidget *window, std::array<Browser *, 2> browsers, QWidget *sidebar) : window_(window), browsers_(browsers), sidebar_(sidebar) {
         window_->installEventFilter(this);
         apply(window_->isActiveWindow());
     }
@@ -3568,6 +3873,10 @@ class BrowserHighlightController final : public QObject {
     }
 
     void apply(bool window_active) {
+        sidebar_->setProperty("windowActive", window_active);
+        repolish(sidebar_);
+        for (QWidget *child : sidebar_->findChildren<QWidget *>())
+            repolish(child);
         for (int browser = 0; browser < 2; ++browser) {
             const auto apply_state = [this, browser, window_active](QWidget *widget) {
                 widget->setProperty("browserActive", browser == active_);
@@ -3592,6 +3901,7 @@ class BrowserHighlightController final : public QObject {
 
     QWidget *window_;
     std::array<Browser *, 2> browsers_;
+    QWidget *sidebar_;
     int active_ = 0;
 };
 
@@ -3870,7 +4180,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     waiting_delay.setSingleShot(true);
     QTimer settings_load_timeout;
     settings_load_timeout.setSingleShot(true);
-    const auto report_layout = [&bridge, &window, &standard_layout, split] {
+    const auto report_layout = [&bridge, &window, &standard_layout, split, browsers] {
         const auto normal = (window.isMaximized() || window.isFullScreen()) ? window.normalGeometry() : window.geometry();
         int state = 0;
         if (window.isFullScreen())
@@ -3881,13 +4191,17 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         const auto browser_sizes = split->sizes();
         const auto packed_origin = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(normal.x())) << static_cast<unsigned>(32)) | static_cast<std::uint64_t>(static_cast<std::uint32_t>(normal.y()));
         const auto origin = static_cast<qint64>(packed_origin);
-        bridge.updateWindowLayout(origin, normal.width(), normal.height(), state, sidebar_sizes.value(0), browser_sizes.value(0));
+        const auto packed_splitters = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(sidebar_sizes.value(0))) << static_cast<unsigned>(32)) | static_cast<std::uint64_t>(static_cast<std::uint32_t>(browser_sizes.value(0)));
+        const auto packed_previews = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(browsers.at(0)->preview_height())) << static_cast<unsigned>(32)) | static_cast<std::uint64_t>(static_cast<std::uint32_t>(browsers.at(1)->preview_height()));
+        bridge.updateWindowLayout(origin, normal.width(), normal.height(), state, static_cast<qint64>(packed_splitters), static_cast<qint64>(packed_previews));
     };
     window.setBeforeCloseHandler(report_layout);
     QObject::connect(&layout_report, &QTimer::timeout, &window, report_layout);
     window.setLayoutChangeHandler([&layout_report] { layout_report.start(120); });
     QObject::connect(&standard_layout, &QSplitter::splitterMoved, &window, [&layout_report](int, int) { layout_report.start(120); });
     QObject::connect(split, &QSplitter::splitterMoved, &window, [&layout_report](int, int) { layout_report.start(120); });
+    for (auto *browser : browsers)
+        browser->set_preview_changed_handler([&layout_report] { layout_report.start(120); });
     bool workspace_revealed = false;
     QObject::connect(&waiting_delay, &QTimer::timeout, &window, [&window, waiting, &workspace_revealed] {
         if (!workspace_revealed) {
@@ -3903,7 +4217,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     QObject::connect(&startup_period_timer, &QTimer::timeout, &window, [&bridge] { bridge.startupPeriodElapsed(); });
     QObject::connect(&bridge, &WorkspaceBridge::layoutRevisionChanged, &window, [&bridge, &window, &standard_layout, split, browsers, waiting, &waiting_delay, &settings_load_timeout, &workspace_revealed, &startup_period_timer, report_layout] {
         const bool saved_layout = bridge.getSavedLayoutAvailable();
-        const auto apply_saved_splitters = [&bridge, &standard_layout, split] {
+        const auto apply_saved_splitters = [&bridge, &standard_layout, split, browsers] {
             // The window must have been shown and laid out before these
             // pixel sizes are meaningful. Applying them while the workspace
             // is hidden lets QSplitter redistribute the sizes again during
@@ -3912,8 +4226,12 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
                 standard_layout.setSizes({bridge.getSavedSidebarSplitter(), qMax(0, standard_layout.width() - bridge.getSavedSidebarSplitter())});
             if (split->width() > 0)
                 split->setSizes({bridge.getSavedBrowserSplitter(), qMax(0, split->width() - bridge.getSavedBrowserSplitter())});
+            browsers.at(0)->set_preview_height(bridge.getSavedLeftPreviewHeight());
+            browsers.at(1)->set_preview_height(bridge.getSavedRightPreviewHeight());
         };
         if (!bridge.getSavedLayoutAvailable()) {
+            for (auto *browser : browsers)
+                browser->set_preview_height(0);
             window.showNormal();
             window.resize(initial_window_width, initial_window_height);
             const auto available = window.screen()->availableGeometry();
@@ -3948,11 +4266,11 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
             startup_period_timer.start(5000);
         }
     });
-    BrowserHighlightController browser_highlighter(&window, browsers);
+    BrowserHighlightController browser_highlighter(&window, browsers, sidebar);
     QObject::connect(&bridge, &WorkspaceBridge::activeBrowserChanged, &window, [&bridge, &browser_highlighter] { browser_highlighter.activate(bridge.getActiveBrowser()); });
     QObject::connect(&bridge, &WorkspaceBridge::startupFailureChanged, &window, [&bridge, browsers] {
         for (auto *browser : browsers)
-            browser->folder()->status()->setText(bridge.getStartupFailure());
+            browser->folder()->status()->set_full_text(bridge.getStartupFailure());
     });
     // An actionable storage error opens Notices, even at launch, without
     // taking focus from browsing.
@@ -3977,6 +4295,12 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     handlers.insert(QStringLiteral("FocusOtherBrowser"), [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 1 : 0)->view()->focusList(); });
     handlers.insert(QStringLiteral("NavigateParent"), [active_model] { active_model()->goToParent(); });
     handlers.insert(QStringLiteral("CloseWindow"), [&window] { window.close(); });
+    handlers.insert(QStringLiteral("ToggleFullScreen"), [&window] {
+        if (window.isFullScreen())
+            window.showNormal();
+        else
+            window.showFullScreen();
+    });
     // The workspace window decides first, before any other window is asked.
     handlers.insert(QStringLiteral("QuitApplication"), [&window] { window.close(); });
     handlers.insert(QStringLiteral("NewTab"), [active_model] { active_model()->newTab(); });
@@ -4005,6 +4329,15 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     ShortcutBinder shortcuts(&window, &bridge, handlers, {left_browser->view(), right_browser->view()}, list_handlers);
     settings_controller->set_capture_handler([&shortcuts](bool active) { shortcuts.setCapture(active); });
     QObject::connect(&bridge, &WorkspaceBridge::bindingsRevisionChanged, &window, [&shortcuts] { shortcuts.rebind(); });
+
+    auto *toggle_full_screen = new QShortcut(QKeySequence(QStringLiteral("Meta+Ctrl+F")), &window);
+    toggle_full_screen->setContext(Qt::WindowShortcut);
+    QObject::connect(toggle_full_screen, &QShortcut::activated, &window, [&window] {
+        if (window.isFullScreen())
+            window.showNormal();
+        else
+            window.showFullScreen();
+    });
 
     // Focus entering any control inside a Browser activates that Browser.
     QObject::connect(&app, &QApplication::focusChanged, &window, [browsers, models, &shortcuts](QWidget *, QWidget *now) {

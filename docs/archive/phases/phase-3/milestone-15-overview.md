@@ -6,7 +6,7 @@ This milestone adds three persistent General Settings controls for macOS metadat
 
 ## Owner decisions
 
-The owner approved the visibility rules on 2026-10-10 after review of the [research](../research/hidden-files-research.md), and confirmed the uncertain-classification behavior on 2026-10-12:
+The owner approved the visibility rules on 2026-10-10 after review of the [research](../../../research/hidden-files-research.md), and confirmed the uncertain-classification behavior on 2026-10-12:
 
 | Decision | Approved behavior |
 |---|---|
@@ -24,7 +24,7 @@ The current-launch operation-temporary exclusion remains unconditional. Earlier-
 
 ## Scope and sequencing
 
-Use the [P3-M2 settings boundary](milestone-02-architecture.md#configuration-and-ownership), [P3-M14 General Settings page](milestone-14-overview.md), [automatic refresh](../ux-gui.md#automatic-refresh), [operation safeguards](../product-behavior.md#file-operation-safeguards), and the [architecture plan](milestone-15-architecture.md). P3-M13 and P3-M14 precede implementation. P3-M14 does not own these three controls or their database migration.
+Use the [P3-M2 settings boundary](milestone-02-architecture.md#configuration-and-ownership), [P3-M14 General Settings page](milestone-14-overview.md), [automatic refresh](../../../ux-gui.md#automatic-refresh), [operation safeguards](../../../product-behavior.md#file-operation-safeguards), and the [architecture plan](milestone-15-architecture.md). P3-M13 and P3-M14 precede implementation. P3-M14 does not own these three controls or their database migration.
 
 In scope: typed settings/defaults, SQLite migration and reset, three accessible controls with explanatory text, worker-side filtering, native macOS invisibility detection, active/inactive tab refresh, stale-result rejection, selection/cursor behavior, and verification.
 
@@ -44,4 +44,4 @@ Out of scope: automatic cleanup; user-defined patterns; per-folder or per-tab ov
 - [x] Native macOS verification in disposable locations covers the three defaults, independent live toggles in both Browsers, an actual macOS-invisible item, relaunch persistence, and a visible `.git`/`.env` with default settings. Injected mount-root tests cover volume service names without touching a real volume's system folders.
 - [x] Affected product/UX/README documentation and acceptance evidence are updated. `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make check` pass before P3-M15 is marked Done.
 
-Acceptance evidence: the [native probe record](../research/hidden-files-research.md#native-verification-on-2026-10-12), focused Rust application/desktop tests, `scripts/check-settings-window.sh`, and the full `make check` plus direct Rust commands passed on 2026-10-12. A disposable native app profile showed the three defaults, `.git` and `.env` in both Browsers, `.DS_Store` and a `UF_HIDDEN` file omitted, each independent toggle updating both Browsers, and the chosen settings and Browser paths surviving a confirmed quit and relaunch. The disposable profile and app wrapper were removed after verification.
+Acceptance evidence: the [native probe record](../../../research/hidden-files-research.md#native-verification-on-2026-10-12), focused Rust application/desktop tests, `scripts/check-settings-window.sh`, and the full `make check` plus direct Rust commands passed on 2026-10-12. A disposable native app profile showed the three defaults, `.git` and `.env` in both Browsers, `.DS_Store` and a `UF_HIDDEN` file omitted, each independent toggle updating both Browsers, and the chosen settings and Browser paths surviving a confirmed quit and relaunch. The disposable profile and app wrapper were removed after verification.
