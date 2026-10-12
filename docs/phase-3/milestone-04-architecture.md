@@ -35,6 +35,6 @@ The agreed interactions should describe commands, events, state, and output at t
 
 ## Verification and sequence
 
-1. Trace the interview decisions to [product behavior](../product-behavior.md), [GUI rules](../ux-gui.md#planned-phase-3-gui-decisions), and [planned containment](../ux-information-architecture.md#planned-phase-3-containment).
+1. Trace the interview decisions to [product behavior](../product-behavior.md), [GUI rules](../ux-gui.md#phase-3-gui-decisions-and-behavior), and [planned containment](../ux-information-architecture.md#planned-phase-3-containment).
 2. Review the [scenario trace](milestone-04-overview.md#scenario-trace) against P3-M5 through P3-M10 and leave genuinely unresolved interaction details open rather than attributing assumptions to the owner.
 3. Run the repository gate, record evidence beside completed checklist items, and mark the milestone Done only when every checklist item is satisfied.

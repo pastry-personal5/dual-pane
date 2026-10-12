@@ -7,7 +7,7 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{Event, FavoriteProbeOutcome, ResolvedTarget, RowChange, SettingsFailure, WorkRequest, listing_changes};
+use dual_pane_application::{Event, FavoriteProbeOutcome, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes};
 use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, OperationId, RequestToken, SortSpec, TabId};
 
 use crate::location_probe::resolve_item;
@@ -15,7 +15,7 @@ use crate::location_watcher::WatcherHandle;
 use crate::operation_lane::{OperationLane, Publisher, Services};
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
-pub type FolderItemsSource = Box<dyn Fn(&Location, SortSpec, &AtomicBool) -> FolderItemsOutcome + Send>;
+pub type FolderItemsSource = Box<dyn Fn(&Location, SortSpec, VisibilityPolicy, &AtomicBool) -> FolderItemsOutcome + Send>;
 pub type FolderItemsSourceFactory = Arc<dyn Fn() -> FolderItemsSource + Send + Sync>;
 pub type Wake = Box<dyn Fn() + Send>;
 /// Checks one location on the probe worker, never on the GUI thread.
@@ -62,6 +62,7 @@ struct Job {
     token: RequestToken,
     location: Location,
     sort: SortSpec,
+    visibility: VisibilityPolicy,
     /// The shown Folder Items this read's result is diffed against.
     previous: Option<Arc<[Entry]>>,
     state: Arc<JobState>,
@@ -311,7 +312,7 @@ impl WorkRunner for Runtime {
                 self.watcher.read_completed(location, succeeded);
                 None
             }
-            WorkRequest::ReadDirectory { browser, tab, token, location, sort, previous } => {
+            WorkRequest::ReadDirectory { browser, tab, token, location, sort, visibility, previous } => {
                 if self.outstanding.values().filter(|(owner, _, _)| *owner == browser).count() >= self.read_capacity {
                     return Some(Event::FolderItemsFailed { browser, tab, token, kind: ListingErrorKind::Busy });
                 }
@@ -321,7 +322,7 @@ impl WorkRunner for Runtime {
                     BrowserSide::Left => &self.left_jobs,
                     BrowserSide::Right => &self.right_jobs,
                 };
-                if let Err((job, closed)) = jobs.send(Job { browser, tab, token, location, sort, previous, state })
+                if let Err((job, closed)) = jobs.send(Job { browser, tab, token, location, sort, visibility, previous, state })
                     && job.state.claim_terminal()
                 {
                     self.outstanding.remove(&job.token);
@@ -446,7 +447,7 @@ fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factory: FolderIt
         let worker: WorkerTask = Box::new(move || {
             let outcome = match catch_unwind(AssertUnwindSafe(|| {
                 let source = worker_source_factory();
-                let entries = source(&worker_job.location, worker_job.sort, &worker_job.state.cancelled)?;
+                let entries = source(&worker_job.location, worker_job.sort, worker_job.visibility, &worker_job.state.cancelled)?;
                 Some(entries.map(|entries| {
                     let changes = worker_job.previous.as_deref().map(|previous| listing_changes(previous, &entries));
                     (entries, changes)
@@ -517,7 +518,7 @@ fn wake(delivery: &Delivery) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
+        Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
@@ -545,7 +546,7 @@ mod tests {
         browser_read(BrowserSide::Left, index, name)
     }
     fn browser_read(browser: BrowserSide, index: usize, name: &str) -> WorkRequest {
-        WorkRequest::ReadDirectory { browser, tab: TabId::new(index as u64), token: token(index), location: location(name), sort: SortSpec::default(), previous: None }
+        WorkRequest::ReadDirectory { browser, tab: TabId::new(index as u64), token: token(index), location: location(name), sort: SortSpec::default(), visibility: Default::default(), previous: None }
     }
     #[test]
     fn byte_progress_keeps_only_the_newest_report_per_operation_after_results() {
@@ -616,7 +617,7 @@ mod tests {
         let source = Arc::new(source);
         Arc::new(move || {
             let source = Arc::clone(&source);
-            Box::new(move |location, _, cancelled| source(location, cancelled))
+            Box::new(move |location, _, _, cancelled| source(location, cancelled))
         })
     }
     fn runtime(source_factory: FolderItemsSourceFactory) -> (Runtime, Receiver<()>) {
@@ -678,7 +679,7 @@ mod tests {
         let source_factory: FolderItemsSourceFactory = Arc::new(move || {
             let call_sender = call_sender.clone();
             let gate_receiver = Arc::clone(&gate_receiver);
-            Box::new(move |location, _, _cancelled| {
+            Box::new(move |location, _, _, _cancelled| {
                 call_sender.send((location.clone(), thread::current().name().map(str::to_owned))).unwrap();
                 if *location == self::location(blocked) {
                     gate_receiver.lock().unwrap().recv_timeout(TIMEOUT).unwrap();
@@ -720,7 +721,7 @@ mod tests {
         let source_rows = Arc::clone(&listed);
         let (mut runner, wakes) = runtime(source_factory(move |_, _| Some(Ok(Arc::clone(&source_rows)))));
         let previous: Arc<[Entry]> = Arc::from(vec![file("a"), file("c")]);
-        let reload = WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), location: location("folder"), sort: SortSpec::default(), previous: Some(previous) };
+        let reload = WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), location: location("folder"), sort: SortSpec::default(), visibility: Default::default(), previous: Some(previous) };
         assert_eq!(runner.dispatch(reload), None);
         assert_eq!(wait(&mut runner, &wakes), vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::clone(&listed), changes: Some(vec![RowChange { row: 1, removed: 0, inserted: 1 }]) }]);
         assert_eq!(runner.dispatch(read(1, "folder")), None);
@@ -1086,7 +1087,7 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..3 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), previous: None, state }).unwrap();
+            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), visibility: Default::default(), previous: None, state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));
@@ -1123,7 +1124,7 @@ mod tests {
             let created = Arc::clone(&created);
             move || {
                 let instance = created.fetch_add(1, Ordering::SeqCst);
-                Box::new(move |_, _, _| {
+                Box::new(move |_, _, _, _| {
                     if instance == 0 {
                         panic!("secret")
                     }
@@ -1148,7 +1149,7 @@ mod tests {
                 if created.fetch_add(1, Ordering::SeqCst) == 0 {
                     panic!("factory secret")
                 }
-                Box::new(|_, _, _| Some(Ok(Arc::from([]))))
+                Box::new(|_, _, _, _| Some(Ok(Arc::from([]))))
             }
         });
         let (mut runner, wakes) = runtime(source_factory);
@@ -1173,7 +1174,7 @@ mod tests {
             let created = Arc::clone(&created);
             move || {
                 let instance = created.fetch_add(1, Ordering::SeqCst);
-                Box::new(move |_, _, _| {
+                Box::new(move |_, _, _, _| {
                     if instance == 0 {
                         panic::panic_any(PanicsOnDrop);
                     }
@@ -1204,7 +1205,7 @@ mod tests {
         let (jobs, queue) = mpsc::channel();
         for index in 0..11 {
             let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
-            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), previous: None, state }).unwrap();
+            jobs.send(Job { browser: BrowserSide::Left, tab: TabId::new(index as u64), token: token(index), location: location("item"), sort: SortSpec::default(), visibility: Default::default(), previous: None, state }).unwrap();
         }
         drop(jobs);
         let source_factory = source_factory(|_, _| Some(Ok(Arc::from([]))));

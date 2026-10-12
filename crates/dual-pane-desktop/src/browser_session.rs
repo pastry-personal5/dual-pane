@@ -121,6 +121,21 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     pub fn submit(&mut self, input: impl Into<Input>) {
         self.handle_all(input.into());
     }
+    pub fn submit_shortcuts(&mut self, action: dual_pane_application::ActionId, shortcuts: Vec<dual_pane_application::Shortcut>) -> Option<dual_pane_application::ShortcutRejection> {
+        self.handle_all(Command::SetActionShortcuts { action, shortcuts }.into()).iter().find_map(|output| match output {
+            Output::ShortcutEditRejected { reason, .. } => Some(*reason),
+            _ => None,
+        })
+    }
+    pub fn restore_shortcuts(&mut self, action: dual_pane_application::ActionId) -> Option<dual_pane_application::ShortcutRejection> {
+        self.handle_all(Command::RestoreActionShortcuts { action }.into()).iter().find_map(|output| match output {
+            Output::ShortcutEditRejected { reason, .. } => Some(*reason),
+            _ => None,
+        })
+    }
+    pub fn shortcuts(&self, action: dual_pane_application::ActionId) -> Vec<dual_pane_application::Shortcut> {
+        self.workspace.shortcuts(action).to_vec()
+    }
 
     /// Handles `input` and every terminal event its work returns at once, and
     /// reports a Favorites rejection among the results.
@@ -333,6 +348,9 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                 handled += 1;
             }
         }
+        if handled > 0 {
+            self.submit(Event::ReadCapacityAvailable);
+        }
         if self.buffered_events.is_empty() {
             let (events, more) = self.runner.take_events(self.drain_slice);
             self.buffered_events.extend(events);
@@ -468,7 +486,7 @@ mod tests {
         let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
         session.start(Location::root());
         let reads = session.runner.dispatched.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).cloned().collect::<Vec<_>>();
-        assert_eq!(reads, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), location: Location::root(), sort: SortSpec::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), location: Location::root(), sort: SortSpec::default(), previous: None }]);
+        assert_eq!(reads, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), location: Location::root(), sort: SortSpec::default(), visibility: Default::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), location: Location::root(), sort: SortSpec::default(), visibility: Default::default(), previous: None }]);
     }
 
     #[test]
@@ -535,7 +553,7 @@ mod tests {
         session.submit_ui(BrowserSide::Right, UiEvent::ActivateSelection);
 
         let reads = session.runner.dispatched.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).cloned().collect::<Vec<_>>();
-        assert_eq!(reads, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first().next().next(), location: Location::root(), sort: SortSpec::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next().next().next(), location: location.join(&folder), sort: SortSpec::default(), previous: None }]);
+        assert_eq!(reads, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first().next().next(), location: Location::root(), sort: SortSpec::default(), visibility: Default::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next().next().next(), location: location.join(&folder), sort: SortSpec::default(), visibility: Default::default(), previous: None }]);
     }
 
     #[test]

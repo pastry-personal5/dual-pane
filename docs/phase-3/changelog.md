@@ -4,6 +4,31 @@ Status: Active
 
 Chronological record of decisions and plan changes for Phase 3, newest entry first.
 
+## 2026-10-12 — P3-M15 Done
+
+- The full `make check` gate, direct Rust formatting/lint/test commands, and offscreen Settings lifecycle check passed. A disposable native app profile confirmed the three default controls, visible `.git` and `.env` in both Browsers, independent live toggles, a real `UF_HIDDEN` item, and settings and tab restoration after a confirmed quit and relaunch. All [P3-M15 completion items](milestone-15-overview.md#completion-checklist) are checked.
+
+## 2026-10-12 — P3-M15 implementation started
+
+- P3-M15 is Active. The application now owns the three-value visibility policy, schema version 7 preserves older profiles with the approved defaults, and each directory read captures the policy. The desktop filters exact name and type rules, dotfiles, volume-root service folders, `UF_HIDDEN`, and Finder `kIsInvisible` without following links; the native UI acceptance check remains outstanding.
+- Code review retained selection, cursor, and scroll as private reconciliation hints while clearing actionable rows, kept the requested path visible, and stopped inactive-tab resets from activating those tabs. Visibility reads now carry a generation and retry bounded-runtime `Busy` admission after a later completion. The worker skips an entry that disappears during its own metadata check; mount-root classification resolves aliases before comparing parent identity. Schema 7 now writes the new defaults transactionally into migrated profiles. Focused application, worker, and native metadata tests cover these paths; the [research note](../research/hidden-files-research.md#native-verification-on-2026-10-12) records the disposable macOS probe and its filesystem limit.
+
+## 2026-10-12 — P3-M15 plan review
+
+- The owner confirmed that a required native invisibility or volume-root check with an uncertain result fails the listing visibly. The plan now limits those checks to entries and switch states that need them, defines safe row and selection clearing for a stricter policy, keeps saved tabs after child-classification failures, and requires bounded retry when read admission is busy. Corrected the moved [research note](../research/hidden-files-research.md) links.
+
+## 2026-10-11 — Settings presentation follow-up
+
+- The owner moved the Settings heading into a full-width draggable title row with a small bitmap Close button. Keyboard Shortcuts now uses smaller table text and boxed Navigation, Tabs and Windows, File Actions, and Sorting groups. A further refinement uses borderless bitmap information, Add, Remove, and Restore Default controls with gray and hover-blue glyphs. Stored action identities and shortcut policy remain as approved in [P3-M14](milestone-14-overview.md#owner-decisions).
+
+## 2026-10-11 — P3-M16 planning
+
+- Added planned P3-M16 for Favorite Group control color polish and a per-Browser Preview Pane. The owner chose a one-line collapsed status presentation, an approximately 2:1 expanded content/details split, and selected-image preview with image dimensions and byte size. The plan retains decoding and metadata work off the GUI thread, rejects stale selections, and persists both Preview Pane splitter positions in the existing window layout.
+
+## 2026-10-11 — P3-M14 Done
+
+- Added application-owned ordered shortcut lists, typed edit rejection, a transactional SQLite migration, live bridge dispatch, and the Settings General and Keyboard Shortcuts pages. Native review corrected Command/Control binding, checked layout-aware shifted-key capture, and verified persistence and reset in a disposable profile. The full acceptance evidence is in the [milestone overview](milestone-14-overview.md#acceptance-evidence).
+
 ## 2026-10-11 — P3-M13 Done
 
 - Native review confirmed Settings entry, category switching, and Escape on macOS 26.7.1. A parented Qt window-modal dialog appears as a macOS sheet without a title-bar close control. The owner chose an in-window Close control at the upper right while retaining window modality and no footer.
@@ -16,7 +41,7 @@ Chronological record of decisions and plan changes for Phase 3, newest entry fir
 
 ## 2026-10-10 — P3-M15 hidden-files research and planning
 
-- Added [hidden-file research](../hidden-files-research.md) and P3-M15’s [overview](milestone-15-overview.md) and [architecture plan](milestone-15-architecture.md).
+- Added [hidden-file research](../research/hidden-files-research.md) and P3-M15’s [overview](milestone-15-overview.md) and [architecture plan](milestone-15-architecture.md).
 - **Owner decisions:** General has three independent controls. Named macOS metadata/service items and macOS-invisible items start hidden; other dotfiles start shown. The owner approved exact typed matches for `.DS_Store`, `._*`, `Icon\r`, `.AppleDouble`, and `.localized` files; `.fseventsd`, `.Spotlight-V100`, `.Trashes`, `.TemporaryItems`, and `.DocumentRevisions-V100` directories match only at a volume root. The research and plan now record the complete precedence and safety behavior.
 
 ## 2026-10-10 — P3-M12 through P3-M14 planning
@@ -401,7 +426,7 @@ The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 c
 
 ## 2026-10-01 — P3-M4 workspace interview decisions
 
-- The owner settled the remaining [keyboard-focus and range-anchor rules](../ux-gui.md#planned-phase-3-gui-decisions): focus entering any control in a Browser activates that Browser before Browser-specific commands, and Shift-click or Shift-arrow does nothing until a plain selection establishes an anchor. The [scenario trace](milestone-04-overview.md#scenario-trace) records both cases.
+- The owner settled the remaining [keyboard-focus and range-anchor rules](../ux-gui.md#phase-3-gui-decisions-and-behavior): focus entering any control in a Browser activates that Browser before Browser-specific commands, and Shift-click or Shift-arrow does nothing until a plain selection establishes an anchor. The [scenario trace](milestone-04-overview.md#scenario-trace) records both cases.
 - The owner completed the [selection and file-command contract](../ux-gui.md#selection-and-file-commands): fixed range anchor and cursor behavior, confirmed-folder command availability, context-menu entry points, frozen destructive targets, and a Cancel-default Permanent Delete confirmation. Rename and New Folder reject whitespace-only names.
 - The owner corrected Permanent Delete Confirmation to show the frozen target count only, without names; Cancel remains the default and deletion requires explicit activation.
 - The owner completed [operation result behavior](../ux-gui.md#operation-panels-and-decisions): reveal panels for long work, decisions, and partial or failed results; hide successful and cleanly cancelled panels after about three seconds; close completed panels with `Command+W`; open Notices for quick failures and default-app opening failures. Tab reordering, Favorite Item movement, and panel docking remain drag-only by owner choice.
@@ -459,7 +484,7 @@ The owner asked for every finding of the Claude Code review of the P3-M2/P3-M5 c
 
 ## 2026-10-01 — Planned GUI owner decisions recorded
 
-- Recorded the owner's planned field order and display, direct sort buttons, responsive field hiding and `Expand` overlay, and future shortcut editor in [ux-gui.md](../ux-gui.md#planned-phase-3-gui-decisions). Current GUI behavior remains described separately.
+- Recorded the owner's planned field order and display, direct sort buttons, responsive field hiding and `Expand` overlay, and future shortcut editor in [ux-gui.md](../ux-gui.md#phase-3-gui-decisions-and-behavior). Current GUI behavior remains described separately.
 
 ## 2026-10-01 — P3-M2 scope clarified
 

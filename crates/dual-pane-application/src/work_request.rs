@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{OperationEffect, SettingsSnapshot, WorkspaceSnapshot};
+use crate::{OperationEffect, SettingsSnapshot, VisibilityPolicy, WorkspaceSnapshot};
 use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, TabId};
 
 /// Outside work the reducer needs, carried out by a runtime off the GUI thread.
@@ -48,6 +48,7 @@ pub enum WorkRequest {
         token: RequestToken,
         location: Location,
         sort: SortSpec,
+        visibility: VisibilityPolicy,
         previous: Option<Arc<[Entry]>>,
     },
     Cancel {

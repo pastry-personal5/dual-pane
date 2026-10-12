@@ -14,7 +14,7 @@ Out of scope: implementing or testing application, adapter, or desktop behavior;
 
 ## Decision sources and consumers
 
-Each rule lives in one active source: [product behavior](../product-behavior.md) for scope, safeguards, Favorites identity, and recovery; [GUI rules](../ux-gui.md#planned-phase-3-gui-decisions) for gestures, controls, panels, Notices, and refresh feedback; and [information architecture](../ux-information-architecture.md#planned-phase-3-containment) for containment. [UX terms](../ux-terms.md) supplies exact names. The [architecture handoff](milestone-04-architecture.md#contract-to-later-milestones) assigns P3-M5 through P3-M10 their consumers.
+Each rule lives in one active source: [product behavior](../product-behavior.md) for scope, safeguards, Favorites identity, and recovery; [GUI rules](../ux-gui.md#phase-3-gui-decisions-and-behavior) for gestures, controls, panels, Notices, and refresh feedback; and [information architecture](../ux-information-architecture.md#planned-phase-3-containment) for containment. [UX terms](../ux-terms.md) supplies exact names. The [architecture handoff](milestone-04-architecture.md#contract-to-later-milestones) assigns P3-M5 through P3-M10 their consumers.
 
 | Decision area | Canonical rule | Consumers |
 |---|---|---|

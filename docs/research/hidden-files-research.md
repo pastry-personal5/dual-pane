@@ -2,7 +2,7 @@
 
 Status: Active
 
-This note identifies the different reasons an item can be absent from a macOS file manager and records the evidence behind P3-M15's three visibility settings. The [P3-M15 overview](phase-3/milestone-15-overview.md#owner-decisions) owns the approved product behavior; this note explains the research and limits of the name list.
+This note identifies the different reasons an item can be absent from a macOS file manager and records the evidence behind P3-M15's three visibility settings. The [P3-M15 overview](../phase-3/milestone-15-overview.md#owner-decisions) owns the approved product behavior; this note explains the research and limits of the name list.
 
 ## Three different mechanisms
 
@@ -28,6 +28,12 @@ Other names were considered but are outside the approved first set. Apple's loca
 
 ## Approved visibility model
 
+### Native verification on 2026-10-12
+
+A disposable `/private/tmp` directory on the development Mac was probed with Foundation `NSURLIsHiddenKey`, `lstat` flags, and Finder information. Foundation reported `NSURLIsHiddenKey=true` for a plain `.env` whose `UF_HIDDEN` flag was clear, so that URL key cannot implement the independent macOS-invisible switch. A plain file reported false. Setting Finder information's big-endian `kIsInvisible` bit made Foundation report true and, on this APFS volume, also surfaced `UF_HIDDEN`; setting `UF_HIDDEN` directly likewise reported true. A symlink to the Finder-marked file reported false and had no own hidden flag. The worker therefore uses the entry's own `UF_HIDDEN` and `com.apple.FinderInfo` with `XATTR_NOFOLLOW`, and treats missing Finder information as no Finder flag. The Finder-information byte parser is covered separately because APFS mirrors the tested Finder bit into `UF_HIDDEN`.
+
+The same temporary volume rejected a filename containing invalid UTF-8 with `EILSEQ` (92), so native end-to-end behavior for such a name was unavailable there. The listing rule still compares `OsStr` bytes and its existing unit test covers byte-exact names; it does not rely on Foundation or Qt text conversion. Native mount-root detection now resolves path aliases before comparing a directory with its parent; a temporary alias to an ordinary subfolder was verified not to classify as a root. Actual volume service directories were not created or changed for this probe.
+
 P3-M15 has three independent, global General settings:
 
 | Setting | Compiled default | Matching rule |
@@ -47,7 +53,7 @@ The existing current-launch Dual Pane operation-temporary suppression is uncondi
 - Switching from shown to hidden cannot leave an actionable stale row on screen. The application should immediately mark affected listings as transitioning, clear their visible rows, and read again under the new policy. If a read fails, an old broader listing must not reappear under the stricter setting.
 - A change affects both Browsers and all open tabs. The request's captured policy and token, rather than mutable desktop state, decide which result can be applied. Rapid toggles and watch invalidations need the same cancellation and coalescing behavior as other listing restarts.
 - Match exact case-sensitive raw bytes and entry kind. Do not use lossy display names, glob rules, or prefix matches beyond `._`. A service folder is matched only when its parent is proven to be that volume's root; an uncertain mount-root result should not be guessed from `/Volumes` or a string prefix.
-- On the listing worker, check macOS invisibility on the entry itself without following a symlink to its target. Apple's `isHiddenKey` describes whether an item is normally displayed, which may include a leading-period name; P3-M15 must prove that its native check can identify the **separate metadata reason** before using it for the third switch. The native verification should compare the URL resource key, `UF_HIDDEN`, Finder information, links, and non-UTF-8 names. A metadata-read failure needs an explicit listing outcome; silently treating unknown as visible would contradict the default.
+- On the listing worker, check macOS invisibility on the entry itself without following a symlink to its target. Apple's `isHiddenKey` describes whether an item is normally displayed, which may include a leading-period name; P3-M15 must prove that its native check can identify the **separate metadata reason** before using it for the third switch. The native verification should compare the URL resource key, `UF_HIDDEN`, Finder information, links, and non-UTF-8 names. A required metadata-read failure fails the listing visibly; a check unnecessary under the current switches does not block the listing.
 
 ## Repository fit
 

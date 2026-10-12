@@ -3,13 +3,62 @@
 //! block outside the CXX-Qt bridges lives here; callers own the policy.
 
 use std::ffi::{CString, c_char, c_int, c_void};
+use std::fs;
 use std::io;
+use std::os::darwin::fs::MetadataExt;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt as UnixMetadataExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 /// `CLONE_NOFOLLOW` from `<sys/clonefile.h>`, which libc does not define.
 const CLONE_NOFOLLOW: u32 = 0x0001;
+/// `UF_HIDDEN` from `<sys/stat.h>`.
+const UF_HIDDEN: u32 = 0x0000_8000;
+/// Finder's `kIsInvisible` flag in the big-endian `FileInfo.fdFlags` field.
+const FINDER_INVISIBLE: u16 = 0x4000;
+const FINDER_INFO: &[u8] = b"com.apple.FinderInfo\0";
+
+/// Whether the entry itself has either supported macOS invisibility marker:
+/// `UF_HIDDEN` or Finder's `kIsInvisible`. Each read avoids following a
+/// symbolic link, so a target cannot hide its link.
+pub fn is_macos_invisible(path: &Path) -> io::Result<bool> {
+    if fs::symlink_metadata(path)?.st_flags() & UF_HIDDEN != 0 {
+        return Ok(true);
+    }
+    let path = c_path(path)?;
+    let mut info = [0_u8; 32];
+    // SAFETY: Both names are NUL-terminated, `info` is a valid writable
+    // buffer, and `XATTR_NOFOLLOW` asks macOS to inspect the link itself.
+    let length = unsafe { libc::getxattr(path.as_ptr(), FINDER_INFO.as_ptr().cast(), info.as_mut_ptr().cast(), info.len(), 0, libc::XATTR_NOFOLLOW) };
+    if length < 0 {
+        let error = io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(libc::ENOATTR) => Ok(false),
+            _ => Err(error),
+        };
+    }
+    let length = usize::try_from(length).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+    finder_info_invisible(&info[..length])
+}
+
+fn finder_info_invisible(info: &[u8]) -> io::Result<bool> {
+    if info.len() < 10 {
+        return Err(io::Error::from(io::ErrorKind::InvalidData));
+    }
+    Ok(u16::from_be_bytes([info[8], info[9]]) & FINDER_INVISIBLE != 0)
+}
+
+/// Whether `path` is a filesystem root. Resolve aliases before comparing the
+/// directory with its parent, so an alias to a subfolder on another volume is
+/// not mistaken for that volume's root.
+pub fn is_volume_root(path: &Path) -> io::Result<bool> {
+    let resolved = fs::canonicalize(path)?;
+    let metadata = fs::metadata(&resolved)?;
+    let parent = resolved.parent().unwrap_or(&resolved);
+    let parent_metadata = fs::metadata(parent)?;
+    Ok(metadata.dev() != parent_metadata.dev() || (metadata.dev() == parent_metadata.dev() && metadata.ino() == parent_metadata.ino()))
+}
 
 fn c_path(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
@@ -154,6 +203,46 @@ mod tests {
         rename_exclusive(&from, &to).unwrap();
         assert!(!from.exists());
         assert_eq!(fs::read(&to).unwrap(), b"new");
+    }
+
+    #[test]
+    fn invisibility_reads_finder_info_without_following_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let hidden = directory.path().join("hidden");
+        fs::write(&hidden, b"content").unwrap();
+        let path = c_path(&hidden).unwrap();
+        let mut finder_info = [0_u8; 32];
+        finder_info[8] = 0x40;
+        // SAFETY: Both names are NUL-terminated and `finder_info` stays live
+        // as the 32-byte Finder information payload for this call.
+        assert_eq!(unsafe { libc::setxattr(path.as_ptr(), FINDER_INFO.as_ptr().cast(), finder_info.as_ptr().cast(), finder_info.len(), 0, 0) }, 0);
+        assert!(is_macos_invisible(&hidden).unwrap());
+        let link = directory.path().join("link");
+        symlink(&hidden, &link).unwrap();
+        assert!(!is_macos_invisible(&link).unwrap());
+    }
+
+    #[test]
+    fn finder_information_uses_big_endian_invisible_bit() {
+        let mut info = [0_u8; 32];
+        assert!(!finder_info_invisible(&info).unwrap());
+        info[8] = 0x40;
+        assert!(finder_info_invisible(&info).unwrap());
+        info[8] = 0;
+        info[9] = 0x40;
+        assert!(!finder_info_invisible(&info).unwrap());
+        assert!(finder_info_invisible(&info[..9]).is_err());
+    }
+
+    #[test]
+    fn alias_to_an_ordinary_folder_is_not_a_volume_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        let alias = directory.path().join("alias");
+        symlink(&nested, &alias).unwrap();
+        assert!(!is_volume_root(&nested).unwrap());
+        assert!(!is_volume_root(&alias).unwrap());
     }
 
     #[test]

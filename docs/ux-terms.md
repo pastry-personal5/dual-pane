@@ -13,10 +13,20 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Main Toolbar | `main_toolbar` |
 | Settings | `settings` |
 | Settings Window | `settings_window` |
+| Settings Title Row | `settings_title_row` |
+| Settings Close Button | `settings_close_button` |
 | Settings Category List | `settings_category_list` |
 | General Settings | `general_settings` |
 | Keyboard Shortcuts Settings | `keyboard_shortcuts_settings` |
-| Restore Default Shortcut Button | `restore_default_shortcut_button` |
+| Shortcut Category Card | `shortcut_category_card` |
+| Shortcut Table Header | `shortcut_table_header` |
+| Original Shortcuts Column | `original_shortcuts_column` |
+| Shortcut Information Button | `shortcut_information_button` |
+| Add Shortcut Button | `add_shortcut_button` |
+| Remove Shortcut Button | `remove_shortcut_button` |
+| Reset to Default Shortcuts Button | `reset_to_default_shortcuts_button` |
+| Shortcut Capture Control | `shortcut_capture_control` |
+| Settings Information Overlay | `settings_information_overlay` |
 | Favorites Groups | `favorites_groups` |
 | Favorite Group | `favorite_group` |
 | Favorite Group Name | `favorite_group_name` |
@@ -113,6 +123,6 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Delete Permanently | `DeletePermanently` | Catalogued; current command |
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
 
-## Deferred components
+## Phase 3 rendered components
 
-Since P3-M6, the development build renders the Browser Tabs Strip, Browser Tabs, Sidebar Favorites, the six Folder Items columns, the eight sort buttons, the Notices Button, and Notices. Their accessible names use the terms above; each sort button's accessible name and tooltip read like "Sort items by type (A-Z)". Since P3-M8, it also renders the Folder Items Context Menu, Rename Item Editor, New Folder Name Editor, Missing Folder Overlay, Operation Panel components, Permanent Delete Confirmation Window, and Quit Confirmation Window under these names. The active P3-M9 development build also renders the Notices Startup Checkbox and Waiting Window; their behavior is in [ux-gui.md](ux-gui.md#planned-phase-3-gui-decisions). P3-M11 adds the system-owned Quick Look Panel.
+Since P3-M6, the development build renders the Browser Tabs Strip, Browser Tabs, Sidebar Favorites, the six Folder Items columns, the eight sort buttons, the Notices Button, and Notices. Their accessible names use the terms above; each sort button's accessible name and tooltip read like "Sort items by type (A-Z)". Since P3-M8, it also renders the Folder Items Context Menu, Rename Item Editor, New Folder Name Editor, Missing Folder Overlay, Operation Panel components, Permanent Delete Confirmation Window, and Quit Confirmation Window under these names. The active P3-M9 development build also renders the Notices Startup Checkbox and Waiting Window; their behavior is in [ux-gui.md](ux-gui.md#phase-3-gui-decisions-and-behavior). P3-M11 adds the system-owned Quick Look Panel. P3-M14 adds the Settings Window, shortcut category cards, shortcut controls, and item-specific Settings Information Overlay described above.

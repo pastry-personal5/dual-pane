@@ -1,4 +1,4 @@
-use dual_pane_application::{ActionBinding, FavoriteEdit, FavoriteRejection, Notice, NoticeKind, Output, SettingsFailure, WorkspaceChrome};
+use dual_pane_application::{ActionBinding, FavoriteEdit, FavoriteRejection, Notice, NoticeKind, Output, SettingsFailure, VisibilityPolicy, WorkspaceChrome};
 use dual_pane_domain::BrowserSide;
 
 use crate::format::location_text;
@@ -18,6 +18,7 @@ pub struct WorkspaceViewModel {
     notices_revision: u64,
     open_requests: u64,
     hide_notices_at_startup: bool,
+    visibility: VisibilityPolicy,
     notices_startup_ready: bool,
     settings_interaction_available: bool,
     last_rejection: Option<(FavoriteEdit, FavoriteRejection)>,
@@ -25,7 +26,7 @@ pub struct WorkspaceViewModel {
 
 impl Default for WorkspaceViewModel {
     fn default() -> Self {
-        Self { active_browser: BrowserSide::Left, groups: Vec::new(), favorites_ready: false, favorites_revision: 0, bindings: Vec::new(), bindings_revision: 0, notices: Vec::new(), notices_revision: 0, open_requests: 0, hide_notices_at_startup: false, notices_startup_ready: false, settings_interaction_available: false, last_rejection: None }
+        Self { active_browser: BrowserSide::Left, groups: Vec::new(), favorites_ready: false, favorites_revision: 0, bindings: Vec::new(), bindings_revision: 0, notices: Vec::new(), notices_revision: 0, open_requests: 0, hide_notices_at_startup: false, visibility: VisibilityPolicy::default(), notices_startup_ready: false, settings_interaction_available: false, last_rejection: None }
     }
 }
 
@@ -89,6 +90,9 @@ impl WorkspaceViewModel {
     }
     pub fn hide_notices_at_startup(&self) -> bool {
         self.hide_notices_at_startup
+    }
+    pub const fn visibility(&self) -> VisibilityPolicy {
+        self.visibility
     }
     pub fn notices_startup_ready(&self) -> bool {
         self.notices_startup_ready
@@ -157,6 +161,7 @@ impl WorkspacePresenter {
             self.view.bindings_revision = self.view.bindings_revision.wrapping_add(1);
         }
         self.view.hide_notices_at_startup = chrome.hide_notices_at_startup;
+        self.view.visibility = chrome.visibility;
         self.view.notices_startup_ready = chrome.notices_startup_ready;
         self.view.settings_interaction_available = chrome.settings_interaction_available;
         if previous.is_none_or(|previous| !std::sync::Arc::ptr_eq(&previous.notices, &chrome.notices)) {
@@ -226,14 +231,14 @@ mod tests {
     fn texts(kinds: Vec<NoticeKind>) -> Vec<NoticeViewModel> {
         let notices = kinds.into_iter().enumerate().map(|(id, kind)| Notice { id: id as u64, kind, offers_reset: false }).collect::<Arc<[_]>>();
         let mut presenter = WorkspacePresenter::new();
-        presenter.apply_chrome(&WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![], hide_notices_at_startup: false, notices_startup_ready: true, settings_interaction_available: true, notices });
+        presenter.apply_chrome(&WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![], hide_notices_at_startup: false, visibility: Default::default(), notices_startup_ready: true, settings_interaction_available: true, notices });
         presenter.view().notices().to_vec()
     }
 
     #[test]
     fn settings_interaction_availability_is_projected_without_a_binding_change() {
         let notices = Arc::from([]);
-        let mut chrome = WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: false, bindings: vec![], hide_notices_at_startup: false, notices_startup_ready: false, settings_interaction_available: false, notices };
+        let mut chrome = WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: false, bindings: vec![], hide_notices_at_startup: false, visibility: Default::default(), notices_startup_ready: false, settings_interaction_available: false, notices };
         let mut presenter = WorkspacePresenter::new();
         presenter.apply_chrome(&chrome);
         assert!(!presenter.view().settings_interaction_available());

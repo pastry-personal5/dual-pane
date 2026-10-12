@@ -59,6 +59,8 @@ make check                                   # full formatter, linter, and test 
 scripts/check-settings-window.sh            # offscreen Qt Settings Window lifecycle check
 ```
 
+Debug builds accept `DUAL_PANE_TEST_PROFILE` as an existing absolute disposable directory for isolated native verification; the Settings Window script uses it. Release builds use the normal home directory.
+
 Before you consider a change done, run `make check` and the equivalent direct commands. Rustfmt uses `max_width = 1000000` and `use_small_heuristics = "Max"`; `.clang-format` uses `ColumnLimit: 0`. Clippy and clang-tidy deliberately have no line-length diagnostic.
 
 ## Architecture

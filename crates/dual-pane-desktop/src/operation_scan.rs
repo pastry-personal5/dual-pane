@@ -278,11 +278,12 @@ mod tests {
         fs::create_dir(&destination).unwrap();
         fs::write(source.join("dir/b"), b"b").unwrap();
         fs::write(source.join("dir/sub/a"), b"a").unwrap();
+        fs::write(source.join("dir/.env"), b"private").unwrap();
         symlink("sub", source.join("dir/link")).unwrap();
         fs::write(source.join("dir").join(temporary_name(launch(), 1, 0)), b"partial").unwrap();
         let mut ws = workspace(&source, &[("dir", EntryKind::Directory)], &destination);
         let (scanned, work) = scan_through(&mut ws, OperationKind::Copy);
-        assert_eq!(plan(&scanned), vec![("dir".to_owned(), EntryKind::Directory), ("b".to_owned(), EntryKind::File), ("link".to_owned(), EntryKind::Symlink { points_to_directory: true }), ("sub".to_owned(), EntryKind::Directory), ("a".to_owned(), EntryKind::File)]);
+        assert_eq!(plan(&scanned), vec![("dir".to_owned(), EntryKind::Directory), (".env".to_owned(), EntryKind::File), ("b".to_owned(), EntryKind::File), ("link".to_owned(), EntryKind::Symlink { points_to_directory: true }), ("sub".to_owned(), EntryKind::Directory), ("a".to_owned(), EntryKind::File)]);
         assert!(scanned.identities.iter().all(Option::is_some));
         assert!(matches!(work.as_slice(), [WorkRequest::Operation(OperationEffect::Execute { at: 0, .. })]), "the application accepts the plan: {work:?}");
     }

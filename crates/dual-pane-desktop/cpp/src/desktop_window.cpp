@@ -2,6 +2,7 @@
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
 #include "dual-pane-desktop/src/operations_bridge.cxxqt.h"
 #include "dual-pane-desktop/src/workspace_bridge.cxxqt.h"
+#include "dual_pane_desktop/keyboard_layout.hpp"
 #include "dual_pane_desktop/notices_glyph.hpp"
 #include "dual_pane_desktop/quick_look_preview.hpp"
 #include "dual_pane_desktop/settings_glyph.hpp"
@@ -32,6 +33,7 @@
 #include <QtGui/QDrag>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QFontDatabase>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
 #include <QtGui/QImage>
@@ -44,6 +46,7 @@
 #include <QtGui/QScreen>
 #include <QtGui/QShortcut>
 #include <QtGui/QShowEvent>
+#include <QtGui/QWindow>
 #include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
@@ -72,6 +75,7 @@
 #include <QtWidgets/QTreeView>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
+#include <QtWidgets/QWidgetAction>
 
 #include <algorithm>
 #include <array>
@@ -235,13 +239,46 @@ auto style_sheet() -> QString {
       QWidget#floatingOperationPanel { background:%1; color:%3; }
       QLabel#operationPanelTitle { font-weight:bold; }
       QDialog#settingsWindow { background:%1; color:%3; }
-      QListWidget#settingsCategoryList { background:%1; color:%3; border:0; border-right:1px solid %4; outline:none; padding:8px; }
+      QWidget#settingsTitleRow { background:%1; border-bottom:1px solid %4; }
+      QWidget#settingsSidebar { background:%1; border-right:1px solid %4; }
+      QLabel#settingsHeading { background:transparent; color:%3; }
+      QListWidget#settingsCategoryList { background:%1; color:%3; border:0; outline:none; padding:8px; }
       QListWidget#settingsCategoryList::item { padding:10px 12px; margin:2px 0; border-radius:4px; }
       QListWidget#settingsCategoryList::item:hover:!selected { background:%11; }
       QListWidget#settingsCategoryList::item:selected { background:%5; color:white; }
       QWidget#settingsContent, QStackedWidget#settingsPages { background:%2; border:0; }
       QWidget#settingsPage { background:%2; color:%3; }
-      QToolButton#settingsCloseButton { background:%2; border:1px solid %4; border-radius:4px; padding:6px 12px; }
+      QWidget#settingsShortcutPage { background:%2; color:%3; }
+      QWidget#settingsShortcutPage QLabel, QWidget#settingsShortcutPage QToolButton, QWidget#settingsShortcutPage QPushButton { color:%3; font-size:10px; }
+      QWidget#shortcutTableHeader { background:%1; border-bottom:1px solid %4; }
+      QLabel#shortcutColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
+      QWidget#settingsShortcutList, QScrollArea#settingsShortcutScroll QWidget#qt_scrollarea_viewport { background:%2; color:%3; }
+      QFrame#shortcutGroup { background:%2; border:1px solid %4; border-radius:4px; }
+      QLabel#shortcutGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:7px 10px; font-size:11px; font-weight:600; }
+      QWidget#shortcutRow { background:%2; border-bottom:1px solid %4; }
+      QWidget#shortcutRow[alternate="true"] { background:#272B31; }
+      QWidget#shortcutRow:hover { background:%11; }
+      QWidget#shortcutRow QWidget, QWidget#shortcutRow QLabel { background:transparent; border:0; color:%3; }
+      QLabel#shortcutScope, QLabel#shortcutEmpty { color:#B7C0CA; }
+      QWidget#shortcutRow QLabel#shortcutOriginal { color:#9CA5AF; font-size:9px; }
+      QWidget#shortcutRow QToolButton { background:transparent; color:#9CA5AF; border:0; padding:0; }
+      QWidget#shortcutRow QToolButton:hover:enabled, QWidget#shortcutRow QToolButton:focus { background:transparent; color:#A9D8FA; border:0; }
+      QLabel#shortcutFeedback { background:%2; color:%8; font-size:10px; padding:2px 8px 4px; }
+      QLabel#shortcutFeedback[capturePrompt="true"] { color:#A9D8FA; }
+      QScrollArea#settingsShortcutScroll { background:%2; border:0; }
+      QScrollArea#settingsShortcutScroll QScrollBar { background:%2; border:0; }
+      QScrollArea#settingsShortcutScroll QScrollBar::handle { background:%4; border-radius:4px; min-height:24px; }
+      QScrollArea#settingsShortcutScroll QScrollBar::add-line, QScrollArea#settingsShortcutScroll QScrollBar::sub-line { width:0; height:0; }
+      QDialog#settingsWindow QCheckBox, QDialog#settingsWindow QPushButton { color:%3; }
+      QDialog#settingsWindow QPushButton { background:%2; border:1px solid %4; border-radius:4px; padding:6px 12px; }
+      QDialog#settingsWindow QPushButton:hover:enabled { background:%11; }
+      QDialog#settingsWindow QPushButton:focus { border-color:%5; }
+      QMenu#settingsInfoMenu { background:%1; color:%3; border:1px solid %4; }
+      QMenu#settingsInfoMenu QLabel { background:transparent; color:%3; font-size:12px; }
+      QMessageBox#settingsResetConfirmation { background:%1; color:%3; }
+      QMessageBox#settingsResetConfirmation QLabel { background:transparent; color:%3; }
+      QMessageBox#settingsResetConfirmation QPushButton { background:%2; color:%3; border:1px solid %4; border-radius:4px; padding:6px 12px; }
+      QToolButton#settingsCloseButton { background:%2; border:1px solid %4; border-radius:4px; padding:0; }
       QToolButton#settingsCloseButton:hover:enabled { background:%5; }
       QToolButton#settingsCloseButton:focus { border-color:%5; }
       QSplitter::handle { background:%4; }
@@ -2015,6 +2052,7 @@ class FavoritesPanel final : public QWidget {
     std::optional<EditKind> editing_kind_;
     std::int64_t editing_id_ = -1;
     bool editing_ = false;
+    bool capture_ = false;
 };
 
 /// One job's Operation Panel: progress, the Cancel Operation Button, and any
@@ -2603,52 +2641,289 @@ class NoticesWindow final : public QWidget {
     QCheckBox *startup_checkbox_;
 };
 
-/// The Settings shell deliberately contains no mutable controls yet. Its
-/// parent owns the one live instance and opens it without nesting the event
-/// loop, so a storage-health transition can dismiss it safely.
+enum class ShortcutGlyph : std::uint8_t { Info,
+                                          Add,
+                                          Remove,
+                                          Restore,
+};
+
+auto shortcut_glyph_bitmap(ShortcutGlyph glyph, const QColor &foreground) -> QPixmap {
+    constexpr int logical_size = 18;
+    constexpr qreal bitmap_scale = 3.0;
+    QPixmap bitmap(logical_size * static_cast<int>(bitmap_scale), logical_size * static_cast<int>(bitmap_scale));
+    bitmap.setDevicePixelRatio(bitmap_scale);
+    bitmap.fill(Qt::transparent);
+    QPainter painter(&bitmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(foreground, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    switch (glyph) {
+    case ShortcutGlyph::Info: {
+        painter.drawEllipse(QRectF(2, 2, 14, 14));
+        QFont font = painter.font();
+        font.setPointSize(10);
+        font.setBold(true);
+        painter.setFont(font);
+        painter.drawText(QRect(0, 0, logical_size, logical_size), Qt::AlignCenter, QStringLiteral("i"));
+        break;
+    }
+    case ShortcutGlyph::Add:
+        painter.drawLine(QPointF(9, 3.5), QPointF(9, 14.5));
+        painter.drawLine(QPointF(3.5, 9), QPointF(14.5, 9));
+        break;
+    case ShortcutGlyph::Remove:
+        painter.drawLine(QPointF(4.5, 4.5), QPointF(13.5, 13.5));
+        painter.drawLine(QPointF(13.5, 4.5), QPointF(4.5, 13.5));
+        break;
+    case ShortcutGlyph::Restore:
+        painter.drawArc(QRectF(3.5, 3.5, 11, 11), 35 * 16, 290 * 16);
+        painter.drawLine(QPointF(13.3, 4.2), QPointF(14.3, 7.2));
+        painter.drawLine(QPointF(14.3, 7.2), QPointF(11.2, 6.7));
+        break;
+    }
+    return bitmap;
+}
+
+class ShortcutGlyphButton : public QToolButton {
+  public:
+    ShortcutGlyphButton(QWidget *parent, ShortcutGlyph glyph)
+        : QToolButton(parent), normal_icon_(shortcut_glyph_bitmap(glyph, QColor(156, 165, 175))), active_icon_(shortcut_glyph_bitmap(glyph, QColor(169, 216, 250))) {
+        setObjectName(QStringLiteral("shortcutGlyphButton"));
+        setIcon(normal_icon_);
+        setIconSize(QSize(14, 14));
+        setFixedSize(18, 18);
+        setToolButtonStyle(Qt::ToolButtonIconOnly);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::PointingHandCursor);
+    }
+
+  protected:
+    bool event(QEvent *event) override {
+        if (event->type() == QEvent::Enter)
+            hovering_ = true;
+        else if (event->type() == QEvent::Leave)
+            hovering_ = false;
+        const bool handled = QToolButton::event(event);
+        if (event->type() == QEvent::Enter || event->type() == QEvent::Leave || event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)
+            setIcon(hovering_ || hasFocus() ? active_icon_ : normal_icon_);
+        return handled;
+    }
+
+  private:
+    QIcon normal_icon_;
+    QIcon active_icon_;
+    bool hovering_ = false;
+};
+
+/// A focused capture consumes shortcut events before the workspace can act.
+class ShortcutCapture final : public ShortcutGlyphButton {
+  public:
+    ShortcutCapture(QWidget *parent, std::function<QString(int, int)> submit, std::function<void(bool)> active, std::function<void(QWidget *)> reveal, QLabel *feedback)
+        : ShortcutGlyphButton(parent, ShortcutGlyph::Add), submit_(std::move(submit)), active_(std::move(active)), reveal_(std::move(reveal)), feedback_(feedback) {
+        setToolTip(QStringLiteral("Add shortcut"));
+        setAccessibleName(QStringLiteral("Add shortcut"));
+        QObject::connect(this, &QToolButton::clicked, this, [this] {
+            capturing_ = true;
+            setAccessibleDescription(QStringLiteral("Press one supported key with Command, Control, or Option. Function keys may stand alone. Escape cancels; Tab moves focus."));
+            feedback_->setProperty("capturePrompt", true);
+            feedback_->setText(QStringLiteral("Press shortcut…"));
+            feedback_->style()->unpolish(feedback_);
+            feedback_->style()->polish(feedback_);
+            feedback_->show();
+            active_(true);
+            setFocus();
+        });
+    }
+    void finish() {
+        if (!capturing_)
+            return;
+        capturing_ = false;
+        if (feedback_->property("capturePrompt").toBool()) {
+            feedback_->clear();
+            feedback_->hide();
+        }
+        active_(false);
+    }
+
+  protected:
+    bool event(QEvent *event) override {
+        if (capturing_ && event->type() == QEvent::ShortcutOverride) {
+            event->accept();
+            return true;
+        }
+        return ShortcutGlyphButton::event(event);
+    }
+    void keyPressEvent(QKeyEvent *event) override {
+        if (!capturing_) {
+            ShortcutGlyphButton::keyPressEvent(event);
+            return;
+        }
+        const auto held = event->modifiers();
+        if (held == Qt::NoModifier && event->key() == Qt::Key_Escape) {
+            finish();
+            event->accept();
+            return;
+        }
+        if (held == Qt::NoModifier && event->key() == Qt::Key_Tab) {
+            finish();
+            focusNextChild();
+            event->accept();
+            return;
+        }
+        const unsigned flags = (held.testFlag(Qt::MetaModifier) ? 1U : 0U) | (held.testFlag(Qt::ControlModifier) ? 2U : 0U) | (held.testFlag(Qt::AltModifier) ? 4U : 0U) | (held.testFlag(Qt::ShiftModifier) ? 8U : 0U);
+        int key = event->key();
+        if (key < Qt::Key_Escape) {
+            const int unshifted = unshifted_key_character(event->nativeVirtualKey());
+            if (unshifted != 0)
+                key = unshifted;
+        }
+        const QString error = submit_(key, static_cast<int>(flags));
+        feedback_->setProperty("capturePrompt", false);
+        feedback_->style()->unpolish(feedback_);
+        feedback_->style()->polish(feedback_);
+        feedback_->setText(error);
+        feedback_->setVisible(!error.isEmpty());
+        if (!error.isEmpty())
+            reveal_(feedback_);
+        if (error.isEmpty())
+            finish();
+        event->accept();
+    }
+    void focusOutEvent(QFocusEvent *event) override {
+        finish();
+        ShortcutGlyphButton::focusOutEvent(event);
+    }
+
+  private:
+    std::function<QString(int, int)> submit_;
+    std::function<void(bool)> active_;
+    std::function<void(QWidget *)> reveal_;
+    QLabel *feedback_;
+    bool capturing_ = false;
+};
+
+class SettingsTitleRow final : public QWidget {
+  public:
+    explicit SettingsTitleRow(QWidget *parent) : QWidget(parent) { setCursor(Qt::OpenHandCursor); }
+
+  protected:
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton) {
+            QWidget::mousePressEvent(event);
+            return;
+        }
+        if (auto *handle = window()->windowHandle(); handle && handle->startSystemMove()) {
+            event->accept();
+            return;
+        }
+        dragging_ = true;
+        last_global_ = event->globalPosition().toPoint();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+    }
+    void mouseMoveEvent(QMouseEvent *event) override {
+        if (dragging_ && (event->buttons() & Qt::LeftButton)) {
+            const QPoint current = event->globalPosition().toPoint();
+            window()->move(window()->pos() + current - last_global_);
+            last_global_ = current;
+            event->accept();
+            return;
+        }
+        QWidget::mouseMoveEvent(event);
+    }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (dragging_ && event->button() == Qt::LeftButton) {
+            dragging_ = false;
+            setCursor(Qt::OpenHandCursor);
+            event->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
+    }
+
+  private:
+    QPoint last_global_;
+    bool dragging_ = false;
+};
+
 class SettingsWindow final : public QDialog {
   public:
-    explicit SettingsWindow(QWidget *owner) : QDialog(owner), categories_(new QListWidget(this)), pages_(new QStackedWidget(this)) {
+    explicit SettingsWindow(QWidget *owner, WorkspaceBridge *bridge = nullptr, std::function<void(bool)> capture = {})
+        : QDialog(owner, Qt::Dialog | Qt::FramelessWindowHint), bridge_(bridge), capture_(std::move(capture)), categories_(new QListWidget(this)), pages_(new QStackedWidget(this)) {
         setObjectName(QStringLiteral("settingsWindow"));
         setWindowTitle(QStringLiteral("Settings"));
         setAccessibleName(QStringLiteral("Settings Window"));
-        setWindowModality(Qt::WindowModal);
-        QObject::connect(this, &QDialog::finished, this, &QObject::deleteLater);
-        auto *layout = new QHBoxLayout(this);
-        layout->setContentsMargins(favorite_group_margin, 0, favorite_group_margin, 0);
+        setWindowModality(Qt::ApplicationModal);
+        QObject::connect(this, &QDialog::finished, this, [this] { if (capture_) capture_(false); deleteLater(); });
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
+        auto *title_row = new SettingsTitleRow(this);
+        title_row->setObjectName(QStringLiteral("settingsTitleRow"));
+        title_row->setFixedHeight(48);
+        auto *title_layout = new QHBoxLayout(title_row);
+        title_layout->setContentsMargins(32, 8, 24, 8);
+        title_layout->setSpacing(0);
+        auto *heading = new QLabel(QStringLiteral("Settings"), title_row);
+        heading->setObjectName(QStringLiteral("settingsHeading"));
+        heading->setAttribute(Qt::WA_TransparentForMouseEvents);
+        QFont heading_font = heading->font();
+        heading_font.setPointSize(20);
+        heading_font.setBold(true);
+        heading->setFont(heading_font);
+        title_layout->addWidget(heading);
+        title_layout->addStretch();
+        auto *close = new QToolButton(title_row);
+        close->setObjectName(QStringLiteral("settingsCloseButton"));
+        QPixmap close_bitmap(18, 18);
+        close_bitmap.fill(Qt::transparent);
+        QPainter close_painter(&close_bitmap);
+        close_painter.setRenderHint(QPainter::Antialiasing);
+        close_painter.setPen(QPen(QColor(225, 231, 237), 1.8, Qt::SolidLine, Qt::RoundCap));
+        close_painter.drawLine(QPointF(4, 4), QPointF(14, 14));
+        close_painter.drawLine(QPointF(14, 4), QPointF(4, 14));
+        close_painter.end();
+        close->setIcon(QIcon(close_bitmap));
+        close->setIconSize(QSize(18, 18));
+        close->setFixedSize(28, 28);
+        close->setToolTip(QStringLiteral("Close Settings"));
+        close->setAccessibleName(QStringLiteral("Close Settings Window"));
+        close->setFocusPolicy(Qt::TabFocus);
+        QObject::connect(close, &QToolButton::clicked, this, &QDialog::reject);
+        title_layout->addWidget(close);
+        layout->addWidget(title_row);
+        auto *body = new QHBoxLayout();
+        body->setContentsMargins(0, 0, 0, 0);
+        body->setSpacing(0);
+        auto *sidebar = new QWidget(this);
+        sidebar->setObjectName(QStringLiteral("settingsSidebar"));
+        auto *sidebar_layout = new QVBoxLayout(sidebar);
+        sidebar_layout->setContentsMargins(0, 0, 0, 0);
+        sidebar_layout->setSpacing(0);
         categories_->setObjectName(QStringLiteral("settingsCategoryList"));
         categories_->setAccessibleName(QStringLiteral("Settings Category List"));
         categories_->setMinimumWidth(320);
         categories_->addItem(QStringLiteral("General Settings"));
         categories_->addItem(QStringLiteral("Keyboard Shortcuts Settings"));
         categories_->setCurrentRow(0);
+        sidebar_layout->addWidget(categories_, 1);
         pages_->setObjectName(QStringLiteral("settingsPages"));
-        pages_->addWidget(placeholder(QStringLiteral("General Settings"), QStringLiteral("General settings will be available here in a future update.")));
-        pages_->addWidget(placeholder(QStringLiteral("Keyboard Shortcuts Settings"), QStringLiteral("Keyboard shortcut settings will be available here in a future update.")));
+        pages_->addWidget(general_page());
+        pages_->addWidget(shortcut_page());
         QObject::connect(categories_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
         auto *content = new QWidget(this);
         content->setObjectName(QStringLiteral("settingsContent"));
         auto *content_layout = new QVBoxLayout(content);
         content_layout->setContentsMargins(0, 0, 0, 0);
         content_layout->setSpacing(0);
-        auto *header = new QHBoxLayout();
-        header->setContentsMargins(0, 8, 16, 8);
-        header->addStretch();
-        auto *close = new QToolButton(content);
-        close->setObjectName(QStringLiteral("settingsCloseButton"));
-        close->setText(QStringLiteral("Close"));
-        close->setAccessibleName(QStringLiteral("Close Settings Window"));
-        close->setFocusPolicy(Qt::TabFocus);
-        QObject::connect(close, &QToolButton::clicked, this, &QDialog::reject);
-        header->addWidget(close);
-        content_layout->addLayout(header);
         content_layout->addWidget(pages_, 1);
-        layout->addWidget(categories_);
-        layout->addWidget(content, 1);
+        body->addWidget(sidebar);
+        body->addWidget(content, 1);
+        layout->addLayout(body, 1);
         setMinimumSize(1400, 900);
         resize(1400, 900);
         categories_->setFocus();
+        if (bridge_)
+            QObject::connect(bridge_, &WorkspaceBridge::bindingsRevisionChanged, this, [this] { QTimer::singleShot(0, this, [this] { rebuild_shortcuts(); }); });
     }
 
   private:
@@ -2656,40 +2931,395 @@ class SettingsWindow final : public QDialog {
         QDialog::showEvent(event);
         categories_->setFocus();
     }
-
-    auto placeholder(const QString &name, const QString &text) -> QWidget * {
+    static auto action_name(const QString &id) -> QString {
+        QString name;
+        for (const QChar ch : id) {
+            if (!name.isEmpty() && ch.isUpper())
+                name += QLatin1Char(' ');
+            name += ch;
+        }
+        return name;
+    }
+    static auto shortcut_group(const QString &id) -> int {
+        if (id == QStringLiteral("FocusOtherBrowser") || id == QStringLiteral("NavigateParent") || id == QStringLiteral("NavigateBack") || id == QStringLiteral("NavigateForward") || id == QStringLiteral("RefreshFolder"))
+            return 0;
+        if (id == QStringLiteral("NewTab") || id == QStringLiteral("CloseTab") || id == QStringLiteral("CloseWindow") || id == QStringLiteral("QuitApplication"))
+            return 1;
+        if (id == QStringLiteral("NewFolder") || id == QStringLiteral("CopyToOtherBrowser") || id == QStringLiteral("MoveToOtherBrowser") || id == QStringLiteral("RenameItem") || id == QStringLiteral("MoveToTrash") || id == QStringLiteral("DeletePermanently") || id == QStringLiteral("ShowPackageContents"))
+            return 2;
+        if (id.startsWith(QStringLiteral("SortBy")))
+            return 3;
+        return 4;
+    }
+    auto info_button(QWidget *parent, const QString &subject, const QString &description, bool shortcut_style = false) -> QToolButton * {
+        QToolButton *button = shortcut_style ? static_cast<QToolButton *>(new ShortcutGlyphButton(parent, ShortcutGlyph::Info)) : new QToolButton(parent);
+        if (!shortcut_style) {
+            QPixmap bitmap(18, 18);
+            bitmap.fill(Qt::transparent);
+            QPainter painter(&bitmap);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(QPen(QColor(145, 185, 230), 1.5));
+            painter.drawEllipse(QRectF(1.5, 1.5, 15, 15));
+            painter.setFont(QFont(QStringLiteral("Helvetica"), 11, QFont::Bold));
+            painter.drawText(bitmap.rect(), Qt::AlignCenter, QStringLiteral("i"));
+            painter.end();
+            button->setIcon(QIcon(bitmap));
+            button->setIconSize(QSize(18, 18));
+            button->setFixedSize(24, 24);
+        }
+        button->setToolTip(subject + QStringLiteral(" information"));
+        button->setAccessibleName(subject + QStringLiteral(" information"));
+        button->setFocusPolicy(Qt::StrongFocus);
+        QObject::connect(button, &QToolButton::clicked, this, [button, description] {
+            auto *menu = new QMenu(button);
+            menu->setObjectName(QStringLiteral("settingsInfoMenu"));
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            menu->setAttribute(Qt::WA_StyledBackground);
+            menu->setFocusPolicy(Qt::StrongFocus);
+            menu->setStyleSheet(QStringLiteral("QMenu#settingsInfoMenu { background-color:#1D2229; color:#F4F6F8; border:1px solid #778392; padding:4px; }"));
+            auto *label = new QLabel(description, menu);
+            label->setObjectName(QStringLiteral("settingsInfoText"));
+            label->setAccessibleName(description);
+            label->setWordWrap(true);
+            label->setMinimumWidth(300);
+            label->setMaximumWidth(400);
+            label->setContentsMargins(12, 12, 12, 12);
+            label->setStyleSheet(QStringLiteral("QLabel#settingsInfoText { background-color:#2B323B; color:#F4F6F8; border:1px solid #56616E; border-radius:5px; padding:12px; font-size:13px; }"));
+            auto *action = new QWidgetAction(menu);
+            action->setDefaultWidget(label);
+            menu->addAction(action);
+            QObject::connect(menu, &QMenu::aboutToHide, button, [button] { QTimer::singleShot(0, button, [button] { button->setFocus(Qt::OtherFocusReason); }); });
+            menu->popup(button->mapToGlobal(QPoint(0, button->height())));
+            menu->setFocus();
+        });
+        return button;
+    }
+    auto general_page() -> QWidget * {
         auto *page = new QWidget(pages_);
         page->setObjectName(QStringLiteral("settingsPage"));
-        page->setAccessibleName(name);
-        page->setAccessibleDescription(text);
+        page->setAccessibleName(QStringLiteral("General Settings"));
         auto *layout = new QVBoxLayout(page);
-        auto *label = new QLabel(text, page);
-        label->setWordWrap(true);
-        label->setAccessibleName(name + QStringLiteral(" placeholder"));
-        layout->addWidget(label);
+        layout->setContentsMargins(24, 20, 24, 20);
+        auto *title = new QLabel(QStringLiteral("General"), page);
+        layout->addWidget(title);
+        auto *notices = new QHBoxLayout();
+        auto *check = new QCheckBox(QStringLiteral("Don’t show notices at startup"), page);
+        check->setObjectName(QStringLiteral("settingsHideNotices"));
+        check->setAccessibleName(QStringLiteral("Don’t show notices at startup"));
+        check->setChecked(bridge_ && bridge_->getHideNoticesAtStartup());
+        check->setEnabled(bridge_ != nullptr);
+        if (bridge_) {
+            QObject::connect(check, &QCheckBox::toggled, page, [this](bool value) { bridge_->changeHideNoticesAtStartup(value); });
+            QObject::connect(bridge_, &WorkspaceBridge::hideNoticesAtStartupChanged, page, [this, check] { QSignalBlocker block(check); check->setChecked(bridge_->getHideNoticesAtStartup()); });
+        }
+        notices->addWidget(check);
+        notices->addWidget(info_button(page, QStringLiteral("Startup notices"), QStringLiteral("When selected, routine notices stay in Notices at startup. Important errors still open Notices so you can act on them.")));
+        notices->addStretch();
+        layout->addLayout(notices);
+        auto *visibility_help = new QLabel(QStringLiteral("An item matching more than one rule appears only when every matching Show control is selected."), page);
+        visibility_help->setObjectName(QStringLiteral("settingsVisibilityHelp"));
+        visibility_help->setAccessibleName(QStringLiteral("Visibility settings help"));
+        visibility_help->setWordWrap(true);
+        layout->addWidget(visibility_help);
+        auto *macos_items = new QCheckBox(QStringLiteral("Show macOS metadata and service items"), page);
+        auto *dotfiles = new QCheckBox(QStringLiteral("Show dotfiles"), page);
+        auto *macos_invisible = new QCheckBox(QStringLiteral("Show items marked invisible by macOS"), page);
+        macos_items->setObjectName(QStringLiteral("settingsShowMacosItems"));
+        dotfiles->setObjectName(QStringLiteral("settingsShowDotfiles"));
+        macos_invisible->setObjectName(QStringLiteral("settingsShowMacosInvisible"));
+        macos_items->setAccessibleName(QStringLiteral("Show macOS metadata and service items"));
+        dotfiles->setAccessibleName(QStringLiteral("Show dotfiles"));
+        macos_invisible->setAccessibleName(QStringLiteral("Show items marked invisible by macOS"));
+        const bool visibility_available = bridge_ != nullptr;
+        for (auto *control : {macos_items, dotfiles, macos_invisible}) {
+            control->setEnabled(visibility_available);
+        }
+        if (bridge_) {
+            macos_items->setChecked(bridge_->getShowMacosItems());
+            dotfiles->setChecked(bridge_->getShowDotfiles());
+            macos_invisible->setChecked(bridge_->getShowMacosInvisible());
+            auto submit_visibility = [this, macos_items, dotfiles, macos_invisible] { bridge_->changeVisibility(macos_items->isChecked(), dotfiles->isChecked(), macos_invisible->isChecked()); };
+            QObject::connect(macos_items, &QCheckBox::toggled, page, submit_visibility);
+            QObject::connect(dotfiles, &QCheckBox::toggled, page, submit_visibility);
+            QObject::connect(macos_invisible, &QCheckBox::toggled, page, submit_visibility);
+            auto synchronize_visibility = [this, macos_items, dotfiles, macos_invisible] {
+                QSignalBlocker macos_block(macos_items);
+                QSignalBlocker dot_block(dotfiles);
+                QSignalBlocker invisible_block(macos_invisible);
+                macos_items->setChecked(bridge_->getShowMacosItems());
+                dotfiles->setChecked(bridge_->getShowDotfiles());
+                macos_invisible->setChecked(bridge_->getShowMacosInvisible());
+            };
+            QObject::connect(bridge_, &WorkspaceBridge::showMacosItemsChanged, page, synchronize_visibility);
+            QObject::connect(bridge_, &WorkspaceBridge::showDotfilesChanged, page, synchronize_visibility);
+            QObject::connect(bridge_, &WorkspaceBridge::showMacosInvisibleChanged, page, synchronize_visibility);
+        }
+        layout->addWidget(macos_items);
+        layout->addWidget(dotfiles);
+        layout->addWidget(macos_invisible);
+        auto *reset_row = new QHBoxLayout();
+        auto *reset = new QPushButton(QStringLiteral("Reset Settings"), page);
+        reset->setObjectName(QStringLiteral("settingsReset"));
+        reset->setAccessibleName(QStringLiteral("Reset Settings"));
+        reset->setEnabled(bridge_ != nullptr);
+        QObject::connect(reset, &QPushButton::clicked, this, [this] {
+            auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Reset Settings"), QStringLiteral("Reset Dual Pane’s settings?"), QMessageBox::NoButton, this);
+            box->setObjectName(QStringLiteral("settingsResetConfirmation"));
+            box->setInformativeText(QStringLiteral("Your settings and Favorites, including changes made in this session, will be replaced with defaults. Open tabs will close and the workspace layout will return to its defaults. The current settings database is kept as a backup."));
+            auto *confirm = box->addButton(QStringLiteral("Reset"), QMessageBox::DestructiveRole);
+            auto *cancel = box->addButton(QMessageBox::Cancel);
+            box->setDefaultButton(cancel);
+            box->setEscapeButton(cancel);
+            box->setWindowModality(Qt::WindowModal);
+            box->setAttribute(Qt::WA_DeleteOnClose);
+            QObject::connect(box, &QMessageBox::finished, this, [this, box, confirm] { if (box->clickedButton() == confirm && bridge_) { reject(); bridge_->resetSettings(); } });
+            box->open();
+        });
+        reset_row->addWidget(reset);
+        reset_row->addWidget(info_button(page, QStringLiteral("Reset Settings"), QStringLiteral("Reset restores all compiled settings and shortcuts, removes Favorites, closes open tabs, and returns the workspace layout to its defaults. The current database is kept as a backup.")));
+        reset_row->addStretch();
+        layout->addLayout(reset_row);
         layout->addStretch();
         return page;
     }
-
+    static auto shortcut_table_header(QWidget *parent) -> QWidget * {
+        auto *header = new QWidget(parent);
+        header->setObjectName(QStringLiteral("shortcutTableHeader"));
+        header->setFixedHeight(36);
+        auto *head = new QHBoxLayout(header);
+        head->setContentsMargins(8, 0, 8, 0);
+        head->setSpacing(8);
+        for (const auto &name : {QStringLiteral("Action"), QStringLiteral("Shortcuts"), QStringLiteral("Original Shortcuts"), QStringLiteral("Scope"), QStringLiteral("Add")}) {
+            auto *label = new QLabel(name, header);
+            label->setObjectName(QStringLiteral("shortcutColumnHeading"));
+            int width = 36;
+            if (name == QStringLiteral("Action"))
+                width = 170;
+            else if (name == QStringLiteral("Shortcuts"))
+                width = shortcut_column_width();
+            else if (name == QStringLiteral("Original Shortcuts"))
+                width = 160;
+            else if (name == QStringLiteral("Scope"))
+                width = 120;
+            label->setFixedWidth(width);
+            head->addWidget(label);
+        }
+        head->addStretch();
+        return header;
+    }
+    static auto shortcut_column_width() -> int {
+        auto font = QApplication::font("QLabel");
+        font.setPixelSize(10);
+        const QFontMetrics metrics(font);
+        const auto longest_supported_shortcut = QStringLiteral("Control+Option+Shift+Command+Backspace");
+        return metrics.horizontalAdvance(longest_supported_shortcut) + 6 + 18;
+    }
+    static auto shortcut_table_width() -> int {
+        constexpr int action_width = 170;
+        constexpr int original_width = 160;
+        constexpr int scope_width = 120;
+        constexpr int add_width = 36;
+        constexpr int column_gap = 8;
+        constexpr int horizontal_padding = 8;
+        constexpr int card_border = 2;
+        constexpr int column_count = 5;
+        return action_width + shortcut_column_width() + original_width + scope_width + add_width + ((column_count - 1) * column_gap) + (2 * horizontal_padding) + card_border;
+    }
+    auto shortcut_page() -> QWidget * {
+        auto *page = new QWidget(pages_);
+        page->setObjectName(QStringLiteral("settingsShortcutPage"));
+        page->setAccessibleName(QStringLiteral("Keyboard Shortcuts Settings"));
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(16, 16, 16, 16);
+        shortcut_scroll_ = new QScrollArea(page);
+        shortcut_scroll_->setWidgetResizable(true);
+        shortcut_scroll_->setObjectName(QStringLiteral("settingsShortcutScroll"));
+        shortcut_list_ = new QWidget(shortcut_scroll_);
+        shortcut_list_->setObjectName(QStringLiteral("settingsShortcutList"));
+        shortcut_layout_ = new QVBoxLayout(shortcut_list_);
+        shortcut_layout_->setContentsMargins(0, 0, 0, 0);
+        shortcut_layout_->setSpacing(10);
+        shortcut_scroll_->setWidget(shortcut_list_);
+        layout->addWidget(shortcut_scroll_);
+        rebuild_shortcuts();
+        return page;
+    }
+    void rebuild_shortcuts() {
+        if (!shortcut_layout_)
+            return;
+        feedback_by_action_.clear();
+        while (auto *item = shortcut_layout_->takeAt(0)) {
+            if (auto *widget = item->widget()) {
+                widget->hide();
+                widget->deleteLater();
+            }
+            delete item;
+        }
+        if (!bridge_) {
+            shortcut_layout_->addWidget(new QLabel(QStringLiteral("Shortcuts are unavailable."), shortcut_list_));
+            return;
+        }
+        const QStringList group_names{QStringLiteral("Navigation"), QStringLiteral("Tabs and Windows"), QStringLiteral("File Actions"), QStringLiteral("Sorting"), QStringLiteral("Other Actions")};
+        for (int group_index = 0; group_index < group_names.size(); ++group_index) {
+            auto *group = new QFrame(shortcut_list_);
+            group->setObjectName(QStringLiteral("shortcutGroup"));
+            group->setAccessibleName(group_names.at(group_index) + QStringLiteral(" shortcuts"));
+            group->setFixedWidth(shortcut_table_width());
+            auto *group_layout = new QVBoxLayout(group);
+            group_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->setSpacing(0);
+            auto *group_heading = new QLabel(group_names.at(group_index), group);
+            group_heading->setObjectName(QStringLiteral("shortcutGroupHeading"));
+            group_layout->addWidget(group_heading);
+            group_layout->addWidget(shortcut_table_header(group));
+            int group_rows = 0;
+            for (int index = 0; index < bridge_->actionCount(); ++index) {
+                const QString id = bridge_->actionId(index);
+                if (shortcut_group(id) != group_index)
+                    continue;
+                const QString name = action_name(id);
+                auto *row = new QWidget(group);
+                row->setObjectName(QStringLiteral("shortcutRow"));
+                row->setProperty("alternate", group_rows % 2 != 0);
+                ++group_rows;
+                row->setAccessibleName(name + QStringLiteral(" shortcuts"));
+                auto *cells = new QHBoxLayout(row);
+                cells->setContentsMargins(8, 3, 8, 3);
+                cells->setSpacing(8);
+                auto *action_cell = new QWidget(row);
+                action_cell->setFixedWidth(170);
+                auto *action_layout = new QHBoxLayout(action_cell);
+                action_layout->setContentsMargins(0, 0, 0, 0);
+                auto *title = new QLabel(name, action_cell);
+                title->setAccessibleName(name);
+                action_layout->addWidget(title);
+                action_layout->addStretch();
+                QString scope = QStringLiteral("Workspace window");
+                if (bridge_->actionScope(index) == 0)
+                    scope = QStringLiteral("Folder Items List");
+                else if (bridge_->actionScope(index) == 2)
+                    scope = QStringLiteral("Application");
+                const QString help = name + QStringLiteral(". This action is available in the ") + scope + QStringLiteral(". Add one or more shortcuts, remove individual entries, or restore its compiled default.");
+                row->setAccessibleDescription(help);
+                action_layout->addWidget(info_button(action_cell, name, help, true));
+                cells->addWidget(action_cell);
+                auto *shortcuts_cell = new QWidget(row);
+                shortcuts_cell->setFixedWidth(shortcut_column_width());
+                auto *shortcuts_layout = new QVBoxLayout(shortcuts_cell);
+                shortcuts_layout->setContentsMargins(0, 0, 0, 0);
+                shortcuts_layout->setSpacing(2);
+                const int count = bridge_->actionShortcutCount(index);
+                if (count == 0) {
+                    auto *empty_row = new QWidget(shortcuts_cell);
+                    empty_row->setFixedHeight(20);
+                    auto *empty_layout = new QHBoxLayout(empty_row);
+                    empty_layout->setContentsMargins(0, 0, 0, 0);
+                    auto *empty = new QLabel(QStringLiteral("No shortcut"), empty_row);
+                    empty->setObjectName(QStringLiteral("shortcutEmpty"));
+                    empty_layout->addWidget(empty);
+                    empty_layout->addStretch();
+                    shortcuts_layout->addWidget(empty_row);
+                }
+                for (int position = 0; position < count; ++position) {
+                    const QString label = bridge_->actionShortcutLabel(index, position);
+                    auto *shortcut_line = new QWidget(shortcuts_cell);
+                    shortcut_line->setFixedHeight(20);
+                    auto *line_layout = new QHBoxLayout(shortcut_line);
+                    line_layout->setContentsMargins(0, 0, 0, 0);
+                    line_layout->setSpacing(6);
+                    line_layout->addWidget(new QLabel(label, shortcut_line));
+                    line_layout->addStretch();
+                    auto *remove = new ShortcutGlyphButton(shortcut_line, ShortcutGlyph::Remove);
+                    remove->setToolTip(QStringLiteral("Remove ") + label);
+                    remove->setAccessibleName(QStringLiteral("Remove ") + label + QStringLiteral(" from ") + name);
+                    QObject::connect(remove, &QToolButton::clicked, this, [this, index, position] { const auto error = bridge_->removeActionShortcut(index, position); if (!error.isEmpty()) show_row_error(index, error); });
+                    line_layout->addWidget(remove);
+                    shortcuts_layout->addWidget(shortcut_line);
+                }
+                auto *feedback = new QLabel(shortcuts_cell);
+                feedback->setObjectName(QStringLiteral("shortcutFeedback"));
+                feedback->setAccessibleName(name + QStringLiteral(" shortcut feedback"));
+                feedback->setWordWrap(true);
+                feedback->hide();
+                feedback_by_action_.insert(index, feedback);
+                auto *capture = new ShortcutCapture(row, [this, index](int key, int modifiers) { return bridge_->addActionShortcut(index, key, modifiers); }, [this](bool active) { if (capture_) capture_(active); }, [this](QWidget *widget) { reveal_feedback(widget); }, feedback);
+                capture->setAccessibleName(QStringLiteral("Add shortcut for ") + name);
+                cells->addWidget(shortcuts_cell);
+                const QString original_shortcut = bridge_->actionDefaultShortcutLabel(index);
+                auto *original_cell = new QWidget(row);
+                original_cell->setFixedWidth(160);
+                auto *original_layout = new QHBoxLayout(original_cell);
+                original_layout->setContentsMargins(0, 0, 0, 0);
+                auto *original_label = new QLabel(original_shortcut.isEmpty() ? QStringLiteral("None") : original_shortcut, original_cell);
+                original_label->setObjectName(QStringLiteral("shortcutOriginal"));
+                original_label->setAccessibleName(QStringLiteral("Original shortcut for ") + name + QStringLiteral(": ") + (original_shortcut.isEmpty() ? QStringLiteral("None") : original_shortcut));
+                original_layout->addWidget(original_label, 1);
+                auto *restore = new ShortcutGlyphButton(original_cell, ShortcutGlyph::Restore);
+                restore->setToolTip(QStringLiteral("Reset to default shortcuts for ") + name);
+                restore->setAccessibleName(QStringLiteral("Reset to default shortcuts for ") + name);
+                QObject::connect(restore, &QToolButton::clicked, this, [this, index] { const auto error = bridge_->restoreActionShortcuts(index); if (!error.isEmpty()) show_row_error(index, error); });
+                original_layout->addWidget(restore);
+                cells->addWidget(original_cell);
+                auto *scope_label = new QLabel(scope, row);
+                scope_label->setObjectName(QStringLiteral("shortcutScope"));
+                scope_label->setFixedWidth(120);
+                cells->addWidget(scope_label);
+                auto *add_cell = new QWidget(row);
+                add_cell->setFixedWidth(36);
+                auto *add_layout = new QHBoxLayout(add_cell);
+                add_layout->setContentsMargins(0, 0, 0, 0);
+                add_layout->addWidget(capture, 0, Qt::AlignCenter);
+                cells->addWidget(add_cell);
+                cells->addStretch();
+                group_layout->addWidget(row);
+                group_layout->addWidget(feedback);
+            }
+            if (group_rows == 0) {
+                delete group;
+            } else {
+                shortcut_layout_->addWidget(group, 0, Qt::AlignLeft);
+            }
+        }
+        shortcut_layout_->addStretch();
+    }
+    void show_row_error(int index, const QString &error) {
+        if (auto feedback = feedback_by_action_.value(index)) {
+            feedback->setText(error);
+            feedback->setVisible(!error.isEmpty());
+            if (!error.isEmpty())
+                reveal_feedback(feedback);
+        }
+    }
+    void reveal_feedback(QWidget *widget) {
+        QTimer::singleShot(0, this, [this, widget] {
+            if (shortcut_scroll_)
+                shortcut_scroll_->ensureWidgetVisible(widget, 0, 16);
+        });
+    }
+    WorkspaceBridge *bridge_;
+    std::function<void(bool)> capture_;
     QListWidget *categories_;
     QStackedWidget *pages_;
+    QWidget *shortcut_list_ = nullptr;
+    QScrollArea *shortcut_scroll_ = nullptr;
+    QVBoxLayout *shortcut_layout_ = nullptr;
+    QHash<int, QPointer<QLabel>> feedback_by_action_;
 };
 
 class SettingsWindowController final : public QObject {
   public:
-    explicit SettingsWindowController(QWidget *owner) : QObject(owner), owner_(owner), shortcut_(new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma), owner)) {
+    explicit SettingsWindowController(QWidget *owner, WorkspaceBridge *bridge = nullptr) : QObject(owner), owner_(owner), bridge_(bridge), shortcut_(new QShortcut(QKeySequence(Qt::META | Qt::Key_Comma), owner)) {
         shortcut_->setContext(Qt::WindowShortcut);
         shortcut_->setEnabled(false);
         QObject::connect(shortcut_, &QShortcut::activated, this, [this] { present(); });
     }
-
+    void set_capture_handler(std::function<void(bool)> handler) { capture_handler_ = std::move(handler); }
     void set_available(bool available) {
         if (!available && dialog_)
             dialog_->reject();
         available_ = available;
         shortcut_->setEnabled(available);
     }
-
     void present() {
         if (!available_)
             return;
@@ -2699,19 +3329,20 @@ class SettingsWindowController final : public QObject {
             dialog_->activateWindow();
             return;
         }
-        auto *dialog = new SettingsWindow(owner_);
+        auto *dialog = new SettingsWindow(owner_, bridge_, capture_handler_);
         dialog_ = dialog;
-        QObject::connect(dialog, &QDialog::finished, this, [this] { dialog_.clear(); });
-        dialog->open();
+        QObject::connect(dialog, &QDialog::finished, this, [this] { dialog_.clear(); if (capture_handler_) capture_handler_(false); });
+        dialog->show();
     }
-
     [[nodiscard]] auto dialog() const -> SettingsWindow * { return dialog_; }
     [[nodiscard]] auto shortcut() const -> QShortcut * { return shortcut_; }
 
   private:
     QWidget *owner_;
+    WorkspaceBridge *bridge_;
     QShortcut *shortcut_;
     QPointer<SettingsWindow> dialog_;
+    std::function<void(bool)> capture_handler_;
     bool available_ = false;
 };
 
@@ -2721,7 +3352,8 @@ auto run_settings_window_checks(QApplication &app) -> int {
     QMainWindow owner;
     QToolButton gear(&owner);
     gear.setEnabled(false);
-    SettingsWindowController controller(&owner);
+    WorkspaceBridge bridge;
+    SettingsWindowController controller(&owner, &bridge);
     const auto apply_availability = [&controller, &gear](bool available) {
         controller.set_available(available);
         gear.setEnabled(available);
@@ -2748,12 +3380,58 @@ auto run_settings_window_checks(QApplication &app) -> int {
             QApplication::exit(1);
             return;
         }
-        check(dialog->isVisible() && dialog->parentWidget() == &owner && dialog->windowModality() == Qt::WindowModal, "parented window modality");
+        check(dialog->isVisible() && dialog->parentWidget() == &owner && dialog->windowModality() == Qt::ApplicationModal && dialog->windowFlags().testFlag(Qt::FramelessWindowHint), "movable frameless Settings modality");
         auto *categories = dialog->findChild<QListWidget *>(QStringLiteral("settingsCategoryList"));
         auto *pages = dialog->findChild<QStackedWidget *>(QStringLiteral("settingsPages"));
+        auto *title_row = dialog->findChild<QWidget *>(QStringLiteral("settingsTitleRow"));
         auto *close = dialog->findChild<QToolButton *>(QStringLiteral("settingsCloseButton"));
+        auto *heading = dialog->findChild<QLabel *>(QStringLiteral("settingsHeading"));
+        auto *notices = dialog->findChild<QCheckBox *>(QStringLiteral("settingsHideNotices"));
+        auto *macos_items = dialog->findChild<QCheckBox *>(QStringLiteral("settingsShowMacosItems"));
+        auto *dotfiles = dialog->findChild<QCheckBox *>(QStringLiteral("settingsShowDotfiles"));
+        auto *macos_invisible = dialog->findChild<QCheckBox *>(QStringLiteral("settingsShowMacosInvisible"));
+        auto *visibility_help = dialog->findChild<QLabel *>(QStringLiteral("settingsVisibilityHelp"));
+        auto *reset = dialog->findChild<QPushButton *>(QStringLiteral("settingsReset"));
         check(categories && dialog->focusWidget() == categories && categories->currentRow() == 0, "initial category focus");
         check(pages && pages->count() == 2, "placeholder pages");
+        check(title_row && heading && heading->text() == QStringLiteral("Settings") && heading->parentWidget() == title_row && notices && reset, "General controls and title row");
+        check(macos_items && macos_items->accessibleName() == QStringLiteral("Show macOS metadata and service items") && macos_items->focusPolicy() != Qt::NoFocus, "accessible macOS items control");
+        check(dotfiles && dotfiles->accessibleName() == QStringLiteral("Show dotfiles") && dotfiles->focusPolicy() != Qt::NoFocus, "accessible dotfiles control");
+        check(macos_invisible && macos_invisible->accessibleName() == QStringLiteral("Show items marked invisible by macOS") && macos_invisible->focusPolicy() != Qt::NoFocus, "accessible macOS invisible control");
+        check(visibility_help && visibility_help->text().contains(QStringLiteral("every matching Show control")), "visibility overlap help");
+        check(close && close->parentWidget() == title_row && close->text().isEmpty() && !close->icon().isNull(), "bitmap Close button in title row");
+        if (title_row) {
+            const QPoint original = dialog->pos();
+            const QPoint start = title_row->mapToGlobal(QPoint(20, 20));
+            const QPoint delta(24, 18);
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(20, 20), QPointF(start), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(title_row, &press);
+            QMouseEvent move(QEvent::MouseMove, QPointF(20, 20) + QPointF(delta), QPointF(start + delta), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(title_row, &move);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(20, 20) + QPointF(delta), QPointF(start + delta), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(title_row, &release);
+            check(dialog->pos() == original + delta, "dragging title row moves Settings");
+        }
+        check(dialog->findChildren<QWidget *>(QStringLiteral("shortcutRow")).size() == bridge.actionCount(), "all action rows");
+        const auto shortcut_groups = dialog->findChildren<QFrame *>(QStringLiteral("shortcutGroup"));
+        check(shortcut_groups.size() == 4, "four human-readable shortcut groups");
+        for (auto *group : shortcut_groups)
+            check(!group->findChildren<QWidget *>(QStringLiteral("shortcutRow")).isEmpty(), "group contains action rows");
+        check(dialog->findChildren<QToolButton *>().size() >= bridge.actionCount() + 3, "item information controls");
+        for (auto *button : dialog->findChildren<QToolButton *>()) {
+            if (button->accessibleName() != QStringLiteral("Startup notices information"))
+                continue;
+            button->click();
+            auto *help = button->findChild<QMenu *>();
+            check(help && help->isVisible(), "anchored help opens");
+            if (help) {
+                QPointer<QMenu> closing_help(help);
+                help->close();
+                QApplication::processEvents();
+                check(!closing_help || !closing_help->isVisible(), "help dismisses");
+            }
+            break;
+        }
         if (categories && pages) {
             categories->setCurrentRow(1);
             check(pages->currentIndex() == 1, "category switching");
@@ -2778,6 +3456,23 @@ auto run_settings_window_checks(QApplication &app) -> int {
         check(controller.dialog() == nullptr && !gear.isEnabled() && !controller.shortcut()->isEnabled(), "failure-time dismissal");
         controller.present();
         check(controller.dialog() == nullptr, "disabled entry after failure");
+        QLabel feedback(&owner);
+        bool capturing = false;
+        int submissions = 0;
+        ShortcutCapture capture(&owner, [&submissions](int key, int flags) { ++submissions; return key == Qt::Key_A && flags == 1 ? QString() : QStringLiteral("Invalid"); }, [&capturing](bool active) { capturing = active; }, [](QWidget *) {}, &feedback);
+        capture.show();
+        capture.click();
+        check(capturing, "capture starts");
+        QKeyEvent invalid(QEvent::KeyPress, Qt::Key_B, Qt::NoModifier);
+        QApplication::sendEvent(&capture, &invalid);
+        check(capturing && submissions == 1 && feedback.text() == QStringLiteral("Invalid"), "invalid input stays in capture");
+        QKeyEvent accepted(QEvent::KeyPress, Qt::Key_A, Qt::MetaModifier);
+        QApplication::sendEvent(&capture, &accepted);
+        check(!capturing && submissions == 2 && feedback.text().isEmpty(), "accepted input leaves capture");
+        capture.click();
+        QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&capture, &cancel);
+        check(!capturing && submissions == 2, "bare Escape cancels capture");
         QApplication::exit(failed ? 1 : 0);
     });
     return QApplication::exec();
@@ -2955,11 +3650,15 @@ class ShortcutBinder final {
         editing_ = editing;
         apply();
     }
+    void setCapture(bool active) {
+        capture_ = active;
+        apply();
+    }
 
   private:
     void apply() {
         for (auto *shortcut : shortcuts_)
-            shortcut->setEnabled(!editing_ || shortcut->property("application").toBool());
+            shortcut->setEnabled(!capture_ && (!editing_ || shortcut->property("application").toBool()));
     }
 
     QWidget *window_;
@@ -2969,6 +3668,7 @@ class ShortcutBinder final {
     QHash<QString, ListHandler> list_handlers_;
     std::vector<QShortcut *> shortcuts_;
     bool editing_ = false;
+    bool capture_ = false;
 };
 
 /// Refreshes every binder after any call that may have changed the session.
@@ -3087,7 +3787,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         notices->raise();
         notices->activateWindow();
     };
-    auto *settings_controller = new SettingsWindowController(&window);
+    auto *settings_controller = new SettingsWindowController(&window, &bridge);
     const auto show_settings = [settings_controller] { settings_controller->present(); };
     auto *sidebar = new Sidebar(&bridge, focus_active_list, show_notices, show_settings, &standard_layout);
     split->addWidget(left_browser);
@@ -3303,6 +4003,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     for (const auto &file_command : file_commands)
         list_handlers.insert(file_command.first, [models, command = file_command.second](int browser) { models.at(browser)->startFileCommand(command); });
     ShortcutBinder shortcuts(&window, &bridge, handlers, {left_browser->view(), right_browser->view()}, list_handlers);
+    settings_controller->set_capture_handler([&shortcuts](bool active) { shortcuts.setCapture(active); });
     QObject::connect(&bridge, &WorkspaceBridge::bindingsRevisionChanged, &window, [&shortcuts] { shortcuts.rebind(); });
 
     // Focus entering any control inside a Browser activates that Browser.
@@ -3332,6 +4033,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     }));
     volume_reader->start(QThread::LowPriority);
     const auto result = QApplication::exec();
+    settings_controller->set_available(false);
+    settings_controller->set_capture_handler({});
     // The lambdas above capture stack objects that are destroyed in reverse
     // order below; focus changes during that teardown must not reach them.
     QObject::disconnect(&app, nullptr, &window, nullptr);

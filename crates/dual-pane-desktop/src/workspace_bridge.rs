@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, favorite_rejection_text, reader_start_failure_status};
-use dual_pane_application::{Key, Shortcut, ShortcutScope, WindowFrame, WindowLayout, WindowState};
+use dual_pane_application::{ActionId, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, default_shortcuts};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
@@ -47,6 +47,9 @@ pub mod ffi {
         #[qproperty(i32, notices_revision, cxx_name = "noticesRevision", READ, NOTIFY)]
         #[qproperty(i32, notices_open_requests, cxx_name = "noticesOpenRequests", READ, NOTIFY)]
         #[qproperty(bool, hide_notices_at_startup, cxx_name = "hideNoticesAtStartup", READ, NOTIFY)]
+        #[qproperty(bool, show_macos_items, cxx_name = "showMacosItems", READ, NOTIFY)]
+        #[qproperty(bool, show_dotfiles, cxx_name = "showDotfiles", READ, NOTIFY)]
+        #[qproperty(bool, show_macos_invisible, cxx_name = "showMacosInvisible", READ, NOTIFY)]
         #[qproperty(bool, notices_startup_ready, cxx_name = "noticesStartupReady", READ, NOTIFY)]
         #[qproperty(bool, settings_interaction_available, cxx_name = "settingsInteractionAvailable", READ, NOTIFY)]
         #[qproperty(i32, layout_revision, cxx_name = "layoutRevision", READ, NOTIFY)]
@@ -123,6 +126,8 @@ pub mod ffi {
         fn retry_journal(self: Pin<&mut WorkspaceBridge>);
         #[cxx_name = "changeHideNoticesAtStartup"]
         fn change_hide_notices_at_startup(self: Pin<&mut WorkspaceBridge>, hide: bool);
+        #[cxx_name = "changeVisibility"]
+        fn change_visibility(self: Pin<&mut WorkspaceBridge>, show_macos_items: bool, show_dotfiles: bool, show_macos_invisible: bool);
         #[cxx_name = "startupPeriodElapsed"]
         fn startup_period_elapsed(self: Pin<&mut WorkspaceBridge>);
         #[cxx_name = "settingsLoadTimedOut"]
@@ -150,6 +155,24 @@ pub mod ffi {
         /// the workspace window, 2 for every window, or -1 for no binding.
         #[cxx_name = "bindingScope"]
         fn binding_scope(self: &WorkspaceBridge, binding: i32) -> i32;
+        #[cxx_name = "actionCount"]
+        fn action_count(self: &WorkspaceBridge) -> i32;
+        #[cxx_name = "actionId"]
+        fn action_id(self: &WorkspaceBridge, index: i32) -> QString;
+        #[cxx_name = "actionScope"]
+        fn action_scope(self: &WorkspaceBridge, index: i32) -> i32;
+        #[cxx_name = "actionShortcutCount"]
+        fn action_shortcut_count(self: &WorkspaceBridge, index: i32) -> i32;
+        #[cxx_name = "actionShortcutLabel"]
+        fn action_shortcut_label(self: &WorkspaceBridge, index: i32, position: i32) -> QString;
+        #[cxx_name = "actionDefaultShortcutLabel"]
+        fn action_default_shortcut_label(self: &WorkspaceBridge, index: i32) -> QString;
+        #[cxx_name = "addActionShortcut"]
+        fn add_action_shortcut(self: Pin<&mut WorkspaceBridge>, index: i32, key: i32, modifiers: i32) -> QString;
+        #[cxx_name = "removeActionShortcut"]
+        fn remove_action_shortcut(self: Pin<&mut WorkspaceBridge>, index: i32, position: i32) -> QString;
+        #[cxx_name = "restoreActionShortcuts"]
+        fn restore_action_shortcuts(self: Pin<&mut WorkspaceBridge>, index: i32) -> QString;
     }
 }
 
@@ -186,6 +209,9 @@ pub struct WorkspaceBridgeRust {
     notices_revision: i32,
     notices_open_requests: i32,
     hide_notices_at_startup: bool,
+    show_macos_items: bool,
+    show_dotfiles: bool,
+    show_macos_invisible: bool,
     notices_startup_ready: bool,
     settings_interaction_available: bool,
     layout_revision: i32,
@@ -237,6 +263,7 @@ impl ffi::WorkspaceBridge {
         let active = i32::from(view.active_browser() == BrowserSide::Right);
         let ready = view.favorites_ready();
         let hide_notices = view.hide_notices_at_startup();
+        let visibility = view.visibility();
         let notices_ready = view.notices_startup_ready();
         let settings_available = view.settings_interaction_available();
         self.as_mut().rust_mut().get_mut().shown = view;
@@ -247,6 +274,9 @@ impl ffi::WorkspaceBridge {
         self.as_mut().set_notices_revision(notices);
         self.as_mut().set_notices_open_requests(opened);
         self.as_mut().set_hide_notices_at_startup(hide_notices);
+        self.as_mut().set_show_macos_items(visibility.show_macos_items);
+        self.as_mut().set_show_dotfiles(visibility.show_dotfiles);
+        self.as_mut().set_show_macos_invisible(visibility.show_macos_invisible);
         self.as_mut().set_notices_startup_ready(notices_ready);
         self.as_mut().set_settings_interaction_available(settings_available);
         if let Some(layout) = layout {
@@ -374,6 +404,10 @@ impl ffi::WorkspaceBridge {
         with_session(|session| session.submit(dual_pane_application::Command::SetHideNoticesAtStartup { hide }));
         self.as_mut().session_changed();
     }
+    fn change_visibility(mut self: Pin<&mut Self>, show_macos_items: bool, show_dotfiles: bool, show_macos_invisible: bool) {
+        with_session(|session| session.submit(dual_pane_application::Command::SetVisibilityPolicy { visibility: dual_pane_application::VisibilityPolicy { show_macos_items, show_dotfiles, show_macos_invisible } }));
+        self.as_mut().session_changed();
+    }
     fn startup_period_elapsed(mut self: Pin<&mut Self>) {
         with_session(|session| session.submit(dual_pane_application::Event::StartupPeriodElapsed));
         self.as_mut().session_changed();
@@ -410,6 +444,59 @@ impl ffi::WorkspaceBridge {
     }
     fn binding_scope(&self, binding: i32) -> i32 {
         usize::try_from(binding).ok().and_then(|binding| self.rust().shown.bindings().get(binding)).map_or(-1, |binding| scope_code(binding.action.scope()))
+    }
+    fn action_count(&self) -> i32 {
+        count(ActionId::ALL.len())
+    }
+    fn action_id(&self, index: i32) -> QString {
+        action_at(index).map_or_else(QString::default, |action| QString::from(action.as_str()))
+    }
+    fn action_scope(&self, index: i32) -> i32 {
+        action_at(index).map_or(-1, |action| scope_code(action.scope()))
+    }
+    fn action_shortcut_count(&self, index: i32) -> i32 {
+        action_at(index).map_or(0, |action| count(self.rust().shown.bindings().iter().filter(|binding| binding.action == action && binding.shortcut.is_some()).count()))
+    }
+    fn action_shortcut_label(&self, index: i32, position: i32) -> QString {
+        let Some(action) = action_at(index) else { return QString::default() };
+        usize::try_from(position).ok().and_then(|position| self.rust().shown.bindings().iter().filter(|binding| binding.action == action).filter_map(|binding| binding.shortcut).nth(position)).map_or_else(QString::default, |shortcut| QString::from(shortcut_label(shortcut).as_str()))
+    }
+    fn action_default_shortcut_label(&self, index: i32) -> QString {
+        action_at(index).map(default_shortcuts).map(|shortcuts| shortcuts.into_iter().map(shortcut_label).collect::<Vec<_>>().join("\n")).map_or_else(QString::default, |label| QString::from(label.as_str()))
+    }
+    fn add_action_shortcut(mut self: Pin<&mut Self>, index: i32, key: i32, modifiers: i32) -> QString {
+        let Some(action) = action_at(index) else { return QString::from("Unknown action") };
+        let key = capture_key(key);
+        let shortcut = Shortcut::new(modifiers & 1 != 0, modifiers & 8 != 0, modifiers & 4 != 0, modifiers & 2 != 0, key);
+        let result = with_session(|session| {
+            let mut shortcuts = session.shortcuts(action);
+            shortcuts.push(shortcut);
+            session.submit_shortcuts(action, shortcuts)
+        })
+        .flatten();
+        self.as_mut().session_changed();
+        rejection_text(result)
+    }
+    fn remove_action_shortcut(mut self: Pin<&mut Self>, index: i32, position: i32) -> QString {
+        let Some(action) = action_at(index) else { return QString::from("Unknown action") };
+        let result = with_session(|session| {
+            let mut shortcuts = session.shortcuts(action);
+            if let Ok(position) = usize::try_from(position)
+                && position < shortcuts.len()
+            {
+                shortcuts.remove(position);
+            }
+            session.submit_shortcuts(action, shortcuts)
+        })
+        .flatten();
+        self.as_mut().session_changed();
+        rejection_text(result)
+    }
+    fn restore_action_shortcuts(mut self: Pin<&mut Self>, index: i32) -> QString {
+        let Some(action) = action_at(index) else { return QString::from("Unknown action") };
+        let result = with_session(|session| session.restore_shortcuts(action)).flatten();
+        self.as_mut().session_changed();
+        rejection_text(result)
     }
 
     fn set_active_browser(mut self: Pin<&mut Self>, value: i32) {
@@ -453,6 +540,24 @@ impl ffi::WorkspaceBridge {
             self.hide_notices_at_startup_changed();
         }
     }
+    fn set_show_macos_items(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().show_macos_items != value {
+            self.as_mut().rust_mut().get_mut().show_macos_items = value;
+            self.show_macos_items_changed();
+        }
+    }
+    fn set_show_dotfiles(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().show_dotfiles != value {
+            self.as_mut().rust_mut().get_mut().show_dotfiles = value;
+            self.show_dotfiles_changed();
+        }
+    }
+    fn set_show_macos_invisible(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().show_macos_invisible != value {
+            self.as_mut().rust_mut().get_mut().show_macos_invisible = value;
+            self.show_macos_invisible_changed();
+        }
+    }
     fn set_notices_startup_ready(mut self: Pin<&mut Self>, value: bool) {
         if self.rust().notices_startup_ready != value {
             self.as_mut().rust_mut().get_mut().notices_startup_ready = value;
@@ -493,11 +598,95 @@ fn scope_code(scope: ShortcutScope) -> i32 {
     }
 }
 
-/// Qt portable key-sequence text for `shortcut`. Qt names the Command key
-/// `Ctrl` and the Control key `Meta` on macOS.
+fn action_at(index: i32) -> Option<ActionId> {
+    usize::try_from(index).ok().and_then(|index| ActionId::ALL.get(index).copied())
+}
+
+fn capture_key(key: i32) -> Key {
+    match key {
+        0x01000000 => Key::Escape,
+        0x01000001 | 0x01000002 => Key::Tab,
+        0x01000003 => Key::Delete,
+        0x01000004 | 0x01000005 => Key::Return,
+        0x01000007 => Key::ForwardDelete,
+        0x01000012 => Key::Left,
+        0x01000013 => Key::Up,
+        0x01000014 => Key::Right,
+        0x01000015 => Key::Down,
+        0x20 => Key::Space,
+        0x01000030..=0x01000047 => Key::Function((key - 0x01000030 + 1) as u8),
+        _ => {
+            let character = char::from_u32(key as u32).unwrap_or('\0');
+            let unshifted = match character {
+                '!' => '1',
+                '@' => '2',
+                '#' => '3',
+                '$' => '4',
+                '%' => '5',
+                '^' => '6',
+                '&' => '7',
+                '*' => '8',
+                '(' => '9',
+                ')' => '0',
+                '_' => '-',
+                '+' => '=',
+                '{' => '[',
+                '}' => ']',
+                '|' => '\\',
+                ':' => ';',
+                '"' => '\'',
+                '<' => ',',
+                '>' => '.',
+                '?' => '/',
+                '~' => '`',
+                other => other,
+            };
+            Key::Character(unshifted.to_ascii_uppercase())
+        }
+    }
+}
+
+fn shortcut_label(shortcut: Shortcut) -> String {
+    let mut result = String::new();
+    for (held, label) in [(shortcut.control, "Control+"), (shortcut.option, "Option+"), (shortcut.shift, "Shift+"), (shortcut.command, "Command+")] {
+        if held {
+            result.push_str(label);
+        }
+    }
+    let key_label = match shortcut.key {
+        Key::Delete => "Backspace".to_owned(),
+        Key::ForwardDelete => "Forward Delete".to_owned(),
+        key => key.as_text(),
+    };
+    result.push_str(&key_label);
+    result
+}
+
+fn rejection_text(rejection: Option<ShortcutRejection>) -> QString {
+    match rejection {
+        None => QString::default(),
+        Some(ShortcutRejection::Invalid) => QString::from("Use a supported key with Command, Control, or Option; function keys may stand alone. Shift+Backspace and Shift+Delete are defaults for Move to Trash."),
+        Some(ShortcutRejection::Reserved) => QString::from("This shortcut is reserved for Settings or macOS."),
+        Some(ShortcutRejection::Duplicate) => QString::from("This action already has that shortcut."),
+        Some(ShortcutRejection::Conflict(action)) => QString::from(format!("Already assigned to {}.", action_label(action)).as_str()),
+    }
+}
+fn action_label(action: ActionId) -> String {
+    let mut label = String::new();
+    for character in action.as_str().chars() {
+        if character.is_ascii_uppercase() && !label.is_empty() {
+            label.push(' ');
+        }
+        label.push(character);
+    }
+    label
+}
+
+/// Qt portable key-sequence text for `shortcut`. Native macOS key events use
+/// `MetaModifier` for Command and `ControlModifier` for Control.
 pub(crate) fn key_sequence(shortcut: Shortcut) -> String {
     let mut text = String::new();
-    for (held, name) in [(shortcut.control, "Meta+"), (shortcut.option, "Alt+"), (shortcut.shift, "Shift+"), (shortcut.command, "Ctrl+")] {
+    for (held, name) in [(shortcut.control, "Ctrl+"), (shortcut.option, "Alt+"), (shortcut.shift, "Shift+"), (shortcut.command, "Meta+")] {
         if held {
             text.push_str(name);
         }
@@ -510,6 +699,10 @@ pub(crate) fn key_sequence(shortcut: Shortcut) -> String {
         Key::Right => text.push_str("Right"),
         Key::Return => text.push_str("Return"),
         Key::Delete => text.push_str("Backspace"),
+        Key::ForwardDelete => text.push_str("Delete"),
+        Key::Space => text.push_str("Space"),
+        Key::Tab => text.push_str("Tab"),
+        Key::Escape => text.push_str("Esc"),
         Key::Function(number) => text.push_str(&format!("F{number}")),
     }
     text
@@ -523,18 +716,26 @@ mod tests {
     #[test]
     fn delivered_shortcuts_map_to_qt_key_sequences() {
         let sequence = |action| default_shortcut(action).map(key_sequence);
-        assert_eq!(sequence(ActionId::NewTab).as_deref(), Some("Ctrl+T"));
-        assert_eq!(sequence(ActionId::CloseTab).as_deref(), Some("Ctrl+W"));
+        assert_eq!(sequence(ActionId::NewTab).as_deref(), Some("Meta+T"));
+        assert_eq!(sequence(ActionId::CloseTab).as_deref(), Some("Meta+W"));
         assert_eq!(sequence(ActionId::NavigateBack).as_deref(), Some("Alt+Left"));
         assert_eq!(sequence(ActionId::NavigateForward).as_deref(), Some("Alt+Right"));
-        assert_eq!(sequence(ActionId::RefreshFolder).as_deref(), Some("Ctrl+R"));
+        assert_eq!(sequence(ActionId::RefreshFolder).as_deref(), Some("Meta+R"));
         assert_eq!(sequence(ActionId::FocusOtherBrowser).as_deref(), Some("Alt+F"));
-        assert_eq!(sequence(ActionId::NavigateParent).as_deref(), Some("Ctrl+Up"));
-        assert_eq!(sequence(ActionId::QuitApplication).as_deref(), Some("Ctrl+Q"));
-        assert_eq!(sequence(ActionId::NewFolder).as_deref(), Some("Shift+Ctrl+N"));
+        assert_eq!(sequence(ActionId::NavigateParent).as_deref(), Some("Meta+Up"));
+        assert_eq!(sequence(ActionId::QuitApplication).as_deref(), Some("Meta+Q"));
+        assert_eq!(sequence(ActionId::NewFolder).as_deref(), Some("Shift+Meta+N"));
         assert_eq!(sequence(ActionId::CloseWindow), None);
-        assert_eq!(key_sequence(Shortcut::new(true, false, true, true, Key::Delete)), "Meta+Alt+Ctrl+Backspace");
+        assert_eq!(key_sequence(Shortcut::new(true, false, true, true, Key::Delete)), "Ctrl+Alt+Meta+Backspace");
         assert_eq!(key_sequence(Shortcut::new(false, false, false, false, Key::Function(2))), "F2");
+    }
+    #[test]
+    fn capture_normalizes_shifted_keys_and_writes_full_modifier_names() {
+        assert_eq!(capture_key('!' as i32), Key::Character('1'));
+        assert_eq!(capture_key('?' as i32), Key::Character('/'));
+        assert_eq!(capture_key(0x01000047), Key::Function(24));
+        let shortcut = Shortcut::new(true, true, true, true, Key::ForwardDelete);
+        assert_eq!(shortcut_label(shortcut), "Control+Option+Shift+Command+Forward Delete");
     }
 
     #[test]

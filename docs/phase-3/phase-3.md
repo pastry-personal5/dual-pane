@@ -99,12 +99,18 @@ Notes: The automated gate, offscreen Qt lifecycle check, and native macOS access
 
 ### P3-M14: Basic Settings and Keyboard Shortcuts
 
-Status: Planned
+Status: Done
 Goal: Expose approved basic settings and editable keyboard shortcuts through Settings while preserving the application-owned settings boundary.
 Plan: [overview](milestone-14-overview.md), [architecture](milestone-14-architecture.md)
 
 ### P3-M15: File and folder visibility
 
-Status: Planned
+Status: Done
 Goal: Give people independent Settings controls for macOS metadata/service items, dotfiles, and items marked invisible by macOS, with safe live updates across both Browsers.
 Plan: [overview](milestone-15-overview.md), [architecture](milestone-15-architecture.md)
+
+### P3-M16: GUI polish and Preview Pane
+
+Status: Planned
+Goal: Refine Favorite Group controls and add an expandable per-Browser Preview Pane for selected images and their details.
+Plan: [overview](milestone-16-overview.md), [architecture](milestone-16-architecture.md)

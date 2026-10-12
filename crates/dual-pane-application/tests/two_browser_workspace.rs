@@ -1,5 +1,5 @@
-use dual_pane_application::{BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteProbeOutcome, FavoriteRejection, Notice, NoticeKind, Output, RowChange, SessionSnapshot, SettingsFailure, SettingsSnapshot, SettingsStatus, TabSnapshot, WindowFrame, WindowLayout, WindowState, WorkRequest, Workspace, WorkspaceSnapshot};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, Location, ScrollAnchor, SortDirection, SortField, SortSpec, TabId};
+use dual_pane_application::{ActionId, BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteProbeOutcome, FavoriteRejection, Key, Notice, NoticeKind, Output, RowChange, SessionSnapshot, SettingsFailure, SettingsSnapshot, SettingsStatus, Shortcut, ShortcutRejection, TabSnapshot, VisibilityPolicy, WindowFrame, WindowLayout, WindowState, WorkRequest, Workspace, WorkspaceSnapshot};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingErrorKind, Location, ScrollAnchor, SortDirection, SortField, SortSpec, TabId};
 use std::sync::Arc;
 
 fn name(value: &str) -> EntryName {
@@ -23,6 +23,126 @@ fn ready() -> Workspace {
     let mut workspace = Workspace::new();
     workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot { favorites: dual_pane_application::FavoritesRecords { initialized: true, ..Default::default() }, ..SettingsSnapshot::default() } }.into());
     workspace
+}
+
+#[test]
+fn stricter_visibility_clears_actions_then_reconciles_surviving_visit_state() {
+    let mut workspace = ready();
+    let folder = location("folder");
+    let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: folder.clone() }.into()).work);
+    load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("keep"), entry(".hidden")]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab, row: 0, name: name("keep") }.into());
+    workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, tab, row: 1, name: name(".hidden") }.into());
+    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab, scroll: Some(ScrollAnchor::new(name("keep"), 3)) }.into());
+
+    let stricter = VisibilityPolicy { show_dotfiles: false, ..VisibilityPolicy::default() };
+    let transition = workspace.handle(Command::SetVisibilityPolicy { visibility: stricter }.into());
+    let (_, token) = request(&transition.work);
+    assert!(workspace.entries(BrowserSide::Left).is_empty());
+    assert!(workspace.selection(BrowserSide::Left).entries().is_empty());
+    assert!(matches!(transition.outputs.iter().find(|output| matches!(output, Output::TabViewChanged { browser: BrowserSide::Left, tab: id, .. } if *id == tab)), Some(Output::TabViewChanged { location: Some(shown), selection, row: None, .. }) if shown == &folder && selection.entries().is_empty()));
+    assert_eq!(workspace.browser_chrome(BrowserSide::Left).tabs[0].location.as_ref(), Some(&folder));
+    assert!(workspace.handle(Command::OpenEntry { browser: BrowserSide::Left, tab, row: 0, name: name("keep") }.into()).work.is_empty());
+
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("keep")]), changes: None }.into());
+    assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("keep")]);
+    assert!(matches!(loaded.outputs.as_slice(), [Output::FolderItemsLoaded { scroll_hint: Some(scroll), .. }, Output::SelectionChanged { row: None, .. }] if scroll.entry() == &name("keep")));
+}
+
+#[test]
+fn saturated_visibility_read_retries_after_capacity_without_resurrecting_old_rows() {
+    let mut workspace = ready();
+    let folder = location("folder");
+    let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: folder.clone() }.into()).work);
+    load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("old")]);
+    let visibility = VisibilityPolicy { show_dotfiles: false, ..VisibilityPolicy::default() };
+    let transition = workspace.handle(Command::SetVisibilityPolicy { visibility }.into());
+    let (_, denied) = request(&transition.work);
+    workspace.handle(Event::LocationInvalidated { location: folder.clone() }.into());
+    let refused = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token: denied, kind: ListingErrorKind::Busy }.into());
+    assert!(!refused.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { .. })));
+    assert!(workspace.entries(BrowserSide::Left).is_empty());
+    assert!(workspace.browser_chrome(BrowserSide::Left).tabs[0].failed);
+    let retried = workspace.handle(Event::ReadCapacityAvailable.into());
+    let (_, retry) = request(&retried.work);
+    assert_ne!(retry, denied);
+    assert!(workspace.handle(Event::ReadCapacityAvailable.into()).work.is_empty());
+    load(&mut workspace, BrowserSide::Left, tab, denied, vec![entry("stale")]);
+    assert!(workspace.entries(BrowserSide::Left).is_empty());
+    load(&mut workspace, BrowserSide::Left, tab, retry, vec![entry("new")]);
+    assert_eq!(workspace.entries(BrowserSide::Left)[0].name(), &name("new"));
+}
+
+#[test]
+fn visibility_invalidates_inactive_tabs_without_emitting_an_active_view_for_them() {
+    let mut workspace = ready();
+    let first_folder = location("first");
+    let first = show(&mut workspace, BrowserSide::Left, &first_folder);
+    let created = workspace.handle(Command::NewTab { browser: BrowserSide::Left }.into());
+    let (second, token) = request(&created.work);
+    load(&mut workspace, BrowserSide::Left, second, token, vec![entry("new")]);
+    assert_eq!(workspace.active_tab(BrowserSide::Left), second);
+    let stricter = VisibilityPolicy { show_dotfiles: false, ..VisibilityPolicy::default() };
+    let transition = workspace.handle(Command::SetVisibilityPolicy { visibility: stricter }.into());
+    assert_eq!(workspace.active_tab(BrowserSide::Left), second);
+    assert!(transition.outputs.iter().any(|output| matches!(output, Output::TabViewChanged { browser: BrowserSide::Left, tab, .. } if *tab == second)));
+    assert!(!transition.outputs.iter().any(|output| matches!(output, Output::TabViewChanged { browser: BrowserSide::Left, tab, .. } if *tab == first)));
+    let switched = workspace.handle(Command::ActivateTab { browser: BrowserSide::Left, tab: first }.into());
+    assert!(matches!(switched.outputs.iter().find(|output| matches!(output, Output::TabViewChanged { .. })), Some(Output::TabViewChanged { location: Some(location), entries, .. }) if location == &first_folder && entries.is_empty()));
+}
+
+#[test]
+fn rapid_visibility_changes_accept_only_the_latest_policy_result() {
+    let mut workspace = ready();
+    let folder = location("folder");
+    let (tab, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: folder }.into()).work);
+    load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("original")]);
+    let narrower = VisibilityPolicy { show_dotfiles: false, ..VisibilityPolicy::default() };
+    let wider = VisibilityPolicy { show_macos_items: true, ..VisibilityPolicy::default() };
+    let read_token = |transition: &dual_pane_application::Transition| {
+        transition
+            .work
+            .iter()
+            .find_map(|work| match work {
+                WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: read_tab, token, .. } if *read_tab == tab => Some(*token),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let first = read_token(&workspace.handle(Command::SetVisibilityPolicy { visibility: narrower }.into()));
+    let second = read_token(&workspace.handle(Command::SetVisibilityPolicy { visibility: wider }.into()));
+    let latest = read_token(&workspace.handle(Command::SetVisibilityPolicy { visibility: narrower }.into()));
+    load(&mut workspace, BrowserSide::Left, tab, first, vec![entry("old-first")]);
+    load(&mut workspace, BrowserSide::Left, tab, second, vec![entry("old-second")]);
+    assert!(workspace.entries(BrowserSide::Left).is_empty());
+    load(&mut workspace, BrowserSide::Left, tab, latest, vec![entry("current")]);
+    assert_eq!(workspace.entries(BrowserSide::Left)[0].name(), &name("current"));
+}
+
+#[test]
+fn shortcut_edits_save_only_valid_changes_and_project_every_entry() {
+    let mut workspace = ready();
+    let one = Shortcut::new(true, false, false, false, Key::Character('J'));
+    let two = Shortcut::new(false, false, true, false, Key::Function(24));
+    let accepted = workspace.handle(Command::SetActionShortcuts { action: ActionId::NewFolder, shortcuts: vec![one, two] }.into());
+    assert!(accepted.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
+    assert_eq!(workspace.bindings().iter().filter(|binding| binding.action == ActionId::NewFolder).filter_map(|binding| binding.shortcut).collect::<Vec<_>>(), vec![one, two]);
+    let rejected = workspace.handle(Command::SetActionShortcuts { action: ActionId::NewFolder, shortcuts: vec![one, one] }.into());
+    assert!(rejected.work.is_empty());
+    assert!(matches!(rejected.outputs.as_slice(), [Output::ShortcutEditRejected { action: ActionId::NewFolder, reason: ShortcutRejection::Duplicate }]));
+    let unchanged = workspace.handle(Command::SetActionShortcuts { action: ActionId::NewFolder, shortcuts: vec![one, two] }.into());
+    assert!(unchanged.work.is_empty());
+}
+#[test]
+fn restoring_removed_option_f_shortcut_reinstates_factory_default() {
+    let mut workspace = ready();
+    let factory_default = Shortcut::new(false, false, true, false, Key::Character('F'));
+    assert_eq!(workspace.shortcuts(ActionId::FocusOtherBrowser), &[factory_default]);
+    workspace.handle(Command::SetActionShortcuts { action: ActionId::FocusOtherBrowser, shortcuts: vec![] }.into());
+    assert!(workspace.shortcuts(ActionId::FocusOtherBrowser).is_empty());
+    let restored = workspace.handle(Command::RestoreActionShortcuts { action: ActionId::FocusOtherBrowser }.into());
+    assert!(restored.work.iter().any(|work| matches!(work, WorkRequest::SaveSettings { .. })));
+    assert_eq!(workspace.shortcuts(ActionId::FocusOtherBrowser), &[factory_default]);
 }
 fn load(workspace: &mut Workspace, browser: BrowserSide, tab: TabId, token: dual_pane_domain::RequestToken, entries: Vec<Entry>) {
     workspace.handle(Event::FolderItemsLoaded { browser, tab, token, entries: Arc::from(entries), changes: None }.into());
@@ -576,8 +696,9 @@ fn restoration_discards_only_conclusive_first_read_failures() {
             _ => None,
         })
         .expect("left restoration read");
-    let busy = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: dual_pane_domain::ListingErrorKind::Busy }.into());
-    assert!(!busy.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if matches!(notice.kind, NoticeKind::TabDiscarded { .. }))));
+    let uncertain = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: ListingErrorKind::VisibilityClassificationFailed }.into());
+    assert!(!uncertain.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if matches!(notice.kind, NoticeKind::TabDiscarded { .. }))));
+    assert_eq!(workspace.browser_chrome(BrowserSide::Left).tabs[0].location.as_ref(), Some(&left));
     let retry = workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into());
     let retry_token = retry
         .work
@@ -587,7 +708,10 @@ fn restoration_discards_only_conclusive_first_read_failures() {
             _ => None,
         })
         .expect("retry read");
-    let discarded = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token: retry_token, kind: dual_pane_domain::ListingErrorKind::PermissionDenied }.into());
+    let busy = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token: retry_token, kind: ListingErrorKind::Busy }.into());
+    assert!(!busy.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if matches!(notice.kind, NoticeKind::TabDiscarded { .. }))));
+    let (_, final_token) = request(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into()).work);
+    let discarded = workspace.handle(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token: final_token, kind: ListingErrorKind::PermissionDenied }.into());
     assert!(discarded.outputs.iter().any(|output| matches!(output, Output::NoticeAdded { notice, .. } if matches!(notice.kind, NoticeKind::TabDiscarded { ref location, reason: dual_pane_domain::ListingErrorKind::PermissionDenied } if *location == left))));
     assert!(discarded.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { browser: BrowserSide::Left, location: folder, .. } if *folder == location("home"))));
 }
@@ -621,6 +745,26 @@ fn a_late_settings_answer_after_timeout_never_restores_or_saves_the_prior_sessio
     assert!(!late.outputs.iter().any(|output| matches!(output, Output::SessionRestored { .. })));
     assert_eq!(workspace.active_browser(), BrowserSide::Left);
     assert_eq!(workspace.location(BrowserSide::Left), None, "the Home fallback is still loading");
+    assert!(workspace.final_session_save().is_none());
+}
+
+#[test]
+fn late_stricter_settings_clear_loaded_fallback_rows_without_replacing_tabs() {
+    let mut workspace = Workspace::with_home(location("home"));
+    let fallback = workspace.handle(Event::SettingsLoadTimedOut.into());
+    let original = [BrowserSide::Left, BrowserSide::Right].map(|side| workspace.active_tab(side));
+    for work in &fallback.work {
+        if let WorkRequest::ReadDirectory { browser, tab, token, .. } = work {
+            load(&mut workspace, *browser, *tab, *token, vec![entry(".env")]);
+        }
+    }
+    let visibility = VisibilityPolicy { show_dotfiles: false, ..VisibilityPolicy::default() };
+    let late = workspace.handle(Event::SettingsLoadedWithSession { snapshot: SettingsSnapshot { visibility, ..SettingsSnapshot::default() }, session: SessionSnapshot::Absent }.into());
+    assert_eq!([BrowserSide::Left, BrowserSide::Right].map(|side| workspace.active_tab(side)), original);
+    assert!(workspace.entries(BrowserSide::Left).is_empty());
+    assert!(workspace.entries(BrowserSide::Right).is_empty());
+    assert_eq!(late.work.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { visibility: policy, .. } if *policy == visibility)).count(), 2);
+    assert!(!late.work.iter().any(|work| matches!(work, WorkRequest::SaveSession { .. })));
     assert!(workspace.final_session_save().is_none());
 }
 

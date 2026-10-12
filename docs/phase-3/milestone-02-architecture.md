@@ -27,7 +27,7 @@ Every product-facing value at this boundary is Qt-free: settings, defaults, acti
 
 Application state holds a map of explicit sort choices keyed by `Location` and an LRU order. A logical location is its exact ordered byte components: the two Browsers and any tabs at the same location see one choice, while a symlink alias and its target path can have distinct choices. Revisiting a recorded folder or changing its sort refreshes its recency; choosing natural Name ascending remains an explicit record and uses an LRU slot. On the 101st recorded location, the oldest record is evicted; revisiting it uses Name ascending. The driver encodes path components losslessly into a SQLite BLOB primary key, never through a lossy display string.
 
-P3-M5 passes the effective `SortSpec` with each tokenized directory-read request and rejects results for an obsolete specification. The later listing implementation collects non-recursive size and modification metadata on workers, uses a link's own metadata, and puts unknown metadata last. The owner-approved field order, sort controls, display formats, and narrow-Browser behavior are [planned in the GUI specification](../ux-gui.md#planned-phase-3-gui-decisions).
+P3-M5 passes the effective `SortSpec` with each tokenized directory-read request and rejects results for an obsolete specification. The later listing implementation collects non-recursive size and modification metadata on workers, uses a link's own metadata, and puts unknown metadata last. The owner-approved field order, sort controls, display formats, and narrow-Browser behavior are [planned in the GUI specification](../ux-gui.md#phase-3-gui-decisions-and-behavior).
 
 ## Actions and shortcut settings
 
@@ -37,7 +37,7 @@ P3-M6 [supersedes the `CloseWindow` default binding](milestone-06-architecture.m
 
 Superseded in part on 2026-10-02 by [schema version 2](changelog.md#2026-10-02--pre-m6-review-fixes): normalized keys can name arrow, Return, Delete, and function keys, so the stored `NavigateParent` default is its current `Command+Up` binding; a stored NULL key means a deliberately unbound action, and unknown key text falls back to the default for that action only.
 
-Saved shortcuts are application-owned normalized modifier/key values rather than Qt or localized strings. An `ActionId` is never localized, renamed, or reused for a different meaning; UI labels are separate presentation data. Loading validates each override independently, rejects unknown IDs, malformed or platform-reserved shortcuts, and collisions among actions active in the same context. A binding for an action that has no delivered command remains inert until that action is delivered. The [planned editor behavior](../ux-gui.md#future-shortcut-editor) uses these values and dispatches through the existing command boundary.
+Saved shortcuts are application-owned normalized modifier/key values rather than Qt or localized strings. An `ActionId` is never localized, renamed, or reused for a different meaning; UI labels are separate presentation data. Loading validates each override independently, rejects unknown IDs, malformed or platform-reserved shortcuts, and collisions among actions active in the same context. A binding for an action that has no delivered command remains inert until that action is delivered. The [planned editor behavior](../ux-gui.md#keyboard-shortcuts-settings-p3-m14) uses these values and dispatches through the existing command boundary.
 
 ## Favorites hierarchy
 

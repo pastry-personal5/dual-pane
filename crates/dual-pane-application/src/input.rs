@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, MonitoringStatus, PlannedItem, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, StepResult, WindowLayout};
+use crate::{ActionId, ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, MonitoringStatus, PlannedItem, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, VisibilityPolicy, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +205,16 @@ pub enum Command {
     SetHideNoticesAtStartup {
         hide: bool,
     },
+    SetVisibilityPolicy {
+        visibility: VisibilityPolicy,
+    },
+    SetActionShortcuts {
+        action: ActionId,
+        shortcuts: Vec<Shortcut>,
+    },
+    RestoreActionShortcuts {
+        action: ActionId,
+    },
     UpdateWindowLayout {
         layout: WindowLayout,
     },
@@ -315,6 +325,9 @@ pub enum Event {
         tab: TabId,
         token: RequestToken,
     },
+    /// The runtime has delivered a result and may have room for a visibility
+    /// read whose earlier admission returned Busy.
+    ReadCapacityAvailable,
     FavoriteTargetProbed {
         item_id: i64,
         target: Location,

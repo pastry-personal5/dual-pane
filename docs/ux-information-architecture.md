@@ -2,52 +2,67 @@
 
 Status: Active
 
-The Standard Layout is the conceptual containment model for the dual-Browser window. It records structure only; visual and interaction rules are in [ux-gui.md](ux-gui.md), and it does not imply that every conceptual container has a separate Qt widget.
+This document describes the current component hierarchy of Dual Pane. It records containment; visual treatment and interaction rules are in [ux-gui.md](ux-gui.md), and not every conceptual container has a separate Qt widget.
 
-## Current Standard Layout (version 2.0.0)
+## Workspace Window
 
-- Standard Layout
+- Workspace Window
   - Sidebar
     - Drives Group with Drive Items
-    - Favorites Groups containing Favorite Groups, each with Favorite Items
-    - flexible space
-    - Main Toolbar with Settings
+    - Favorites Groups
+      - Favorite Group rows with Favorite Group Name, Favorite Group Menu Button, Add Favorite Item Button, and Favorite Items
+      - New Group Button
+    - Main Toolbar
+      - Settings Button
+      - Notices Button
   - Sidebar Splitter
   - Left Browser
     - Navigation Pane
-      - Browser Tabs Strip: label-only current-folder strip
+      - Browser Tabs Strip
+        - Browser Tabs, each with a Close Tab Button
+        - New Tab Button
       - Path Edit Control
     - Folder Pane
-      - Folder Pane Toolbar Row #1: concise current folder name
-      - Folder Pane Toolbar Row #2: reserved Folder Items summary
-      - Folder Pane Toolbar Row #3: Up Button and sort controls
-      - Folder Items List
-      - Browser Status Bar
-  - Browser Divider
-  - Right Browser, with the same Navigation Pane and Folder Pane structure
-
-The Sidebar Splitter divides the Sidebar from both Browsers. The Browser Divider divides the Left Browser from the Right Browser. Each Browser owns its own location, Folder Items, selection, and active state. Browser Tabs Strip binds only to the current folder name; it does not yet create, close, switch, or retain history. The Sidebar groups remain static and are not connected to persisted Favorites.
-
-## Planned Phase 3 containment
-
-- Workspace window
-  - Sidebar
-    - Favorites Groups
-      - Favorite Group rows, each with Favorite Group Name, Favorite Group Menu Button, Add Favorite Item Button, and Favorite Items
-      - New Group Button below the group list
-    - Main Toolbar with Settings and Notices Button
-  - Left Browser and Right Browser
-    - Navigation Pane with Browser Tabs Strip, Browser Tabs, each tab's Close Tab Button, New Tab Button, and Path Edit Control
-    - Folder Pane
-      - Folder Pane Toolbar Rows #1 and #2
+      - Folder Pane Toolbar Row #1
+      - Folder Pane Toolbar Row #2
       - Folder Pane Toolbar Row #3 with Back Button, Forward Button, Up Button, and sort controls
-      - Folder Items List, Folder Items Context Menu, and Missing Folder Overlay
-      - Browser Status Bar
-  - Operation Panel Strip below both Browsers, containing docked Operation Panels
+      - Folder Items List and Folder Items Context Menu
+      - Missing Folder Overlay
+    - Preview Pane Splitter
+    - Preview Pane
+      - Status Presentation
+      - Item Content Preview
+      - Item Details Preview
+  - Browser Divider
+  - Right Browser with the same Navigation Pane, Folder Pane, and Preview Pane structure as the Left Browser
+  - Operation Panel Strip containing docked Operation Panels
 - Floating Operation Panels, each with Operation Progress Indicator, Cancel Operation Button, and any Operation Decision Card for its job
-- Notices auxiliary window with Notice entries and Notices Startup Checkbox
-- Settings Window with General Settings and Keyboard Shortcuts Settings categories
-- Transient Waiting Window while the workspace session loads
-- Permanent Delete Confirmation Window
 
-The Favorites hierarchy has one level: Favorites Groups contains Favorite Groups, and each group contains ordered Favorite Items. Groups do not nest. The Sidebar and Browser Tabs Strip above describe planned containment; the [GUI rules](ux-gui.md#planned-phase-3-gui-decisions) define their interactions.
+Each Browser owns its tabs, location, Folder Items, selection, cursor, and preview state. The Sidebar contains one level of Favorite Groups; groups do not nest, and each group contains ordered Favorite Items.
+
+## Auxiliary Windows and Dialogs
+
+- Notices Window with Notice entries and the Notices Startup Checkbox
+- Settings Window
+  - Settings Title Row with Settings heading and Close Button
+  - Settings Category List
+    - General Settings
+      - Don’t show notices at startup
+      - Reset Settings
+    - Keyboard Shortcuts Settings
+      - Scrollable list of left-aligned category cards sized to the table columns, ending just beyond Add with a small right inset: Navigation, Tabs and Windows, File Actions, Sorting, and Other Actions
+        - Category heading
+        - Repeated Shortcut Table Header: Action, Shortcuts, Original Shortcuts, Scope, Add
+        - Action rows with:
+          - Action name and Shortcut Information Button
+          - Current shortcut combinations, each on its own line with a Remove Shortcut Button
+          - Original factory shortcut combinations and Reset to Default Shortcuts Button
+          - Shortcut scope
+          - Add Shortcut Button in its own column
+          - Inline capture or rejection feedback when needed
+  - Anchored Settings Information Overlay
+- Waiting Window while the workspace session loads
+- Permanent Delete Confirmation Window
+- Quit Confirmation Window
+
+The Favorites hierarchy has one level. Settings and Notices are separate windows opened from the Main Toolbar. See [ux-gui.md](ux-gui.md) for presentation, focus, capture, dismissal, and shortcut behavior.

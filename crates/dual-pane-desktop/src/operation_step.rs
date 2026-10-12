@@ -984,6 +984,17 @@ mod tests {
     }
 
     #[test]
+    fn an_unlisted_destination_child_still_requires_a_conflict_decision() {
+        let mut run = Run::new();
+        run.write("from/dir/.DS_Store", "new");
+        run.write("to/dir/.DS_Store", "old");
+        let id = run.start(&["dir"], OperationKind::Copy);
+        assert_eq!(run.waiting(id).0, OperationIssue::FileConflict);
+        run.decide(id, OperationChoice::Skip, false);
+        assert_eq!(run.read("to/dir/.DS_Store"), "old");
+    }
+
+    #[test]
     fn a_kind_mismatch_replaces_neither_side() {
         let mut run = Run::new();
         run.write("from/clash/inner.txt", "inner");

@@ -9,10 +9,10 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [development-process.md](development-process.md) | Phases, milestones, IDs (`P1-M2`), definition of done, where plans live, and doc status values |
 | [architecture.md](architecture.md) | Active Clean Architecture with MVVM presentation and command-based input, technical stack, crate boundaries, threading, file-operation safety, and testing. |
 | [product-behavior.md](product-behavior.md) | Active product scope, Favorites identity, file-operation safeguards, session recovery, Notices startup policy, and exclusions. |
-| [hidden-files-research.md](hidden-files-research.md) | Evidence for macOS metadata/service names, dotfiles, platform invisibility, and P3-M15 visibility settings. |
+| [hidden-files-research.md](research/hidden-files-research.md) | Evidence for macOS metadata/service names, dotfiles, platform invisibility, and P3-M15 visibility settings. |
 | [ux-terms.md](ux-terms.md) | Canonical component and action names, code mappings, and naming exemptions. |
-| [ux-information-architecture.md](ux-information-architecture.md) | Current Standard Layout and planned Phase 3 component containment. |
-| [ux-gui.md](ux-gui.md) | Version 2.0.0 interaction table and planned Phase 3 tabs, Favorites, commands, operation UI, Notices, sort, and refresh rules. |
+| [ux-information-architecture.md](ux-information-architecture.md) | Standard Layout, planned Phase 3 containment, and the delivered P3-M14 Settings Window hierarchy. |
+| [ux-gui.md](ux-gui.md) | Version 2.0.0 interaction rules and current or planned Phase 3 GUI behavior, including Settings and shortcut editing. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and which phase is active. |
 | [phase-3/phase-3.md](phase-3/phase-3.md) | Active Phase 3 goal, exit criteria, and milestone sequence for tabs, file operations, session recovery, and watching. |
@@ -46,6 +46,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-3/milestone-14-architecture.md](phase-3/milestone-14-architecture.md) | P3-M14 application-owned settings and shortcut-editor delivery approach. |
 | [phase-3/milestone-15-overview.md](phase-3/milestone-15-overview.md) | P3-M15 owner decisions and completion checklist for three file and folder visibility settings. |
 | [phase-3/milestone-15-architecture.md](phase-3/milestone-15-architecture.md) | P3-M15 application-owned policy, native classification, live refresh, and persistence approach. |
+| [phase-3/milestone-16-overview.md](phase-3/milestone-16-overview.md) | P3-M16 scope and executable checklist for Favorite control polish and per-Browser preview panes. |
+| [phase-3/milestone-16-architecture.md](phase-3/milestone-16-architecture.md) | P3-M16 desktop composition, request ownership, image delivery, and layout-persistence approach. |
 | [phase-3/changelog.md](phase-3/changelog.md) | Phase 3 decisions and plan changes. |
 | [phase-3/open-items.md](phase-3/open-items.md) | Unresolved Phase 3 design and product questions, deferred verification, and the milestone or phase that must settle each. |
 | [archive/phases/phase-2/phase-2.md](archive/phases/phase-2/phase-2.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |

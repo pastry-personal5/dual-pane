@@ -96,7 +96,8 @@ pub enum ShortcutScope {
     Application,
 }
 
-/// A platform-neutral key. Characters are uppercase ASCII letters or digits.
+/// A platform-neutral key. Printable characters use uppercase letters and
+/// the unshifted logical digit or punctuation key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Key {
     Character(char),
@@ -106,18 +107,22 @@ pub enum Key {
     Right,
     Return,
     Delete,
-    /// A function key, F1 through F12.
+    ForwardDelete,
+    Space,
+    Tab,
+    Escape,
+    /// A function key, F1 through F24.
     Function(u8),
 }
 
 impl Key {
-    const NAMED: [(Self, &'static str); 6] = [(Self::Up, "Up"), (Self::Down, "Down"), (Self::Left, "Left"), (Self::Right, "Right"), (Self::Return, "Return"), (Self::Delete, "Delete")];
+    const NAMED: [(Self, &'static str); 10] = [(Self::Up, "Up"), (Self::Down, "Down"), (Self::Left, "Left"), (Self::Right, "Right"), (Self::Return, "Return"), (Self::Delete, "Delete"), (Self::ForwardDelete, "Forward Delete"), (Self::Space, "Space"), (Self::Tab, "Tab"), (Self::Escape, "Escape")];
 
     pub fn is_valid(self) -> bool {
         match self {
-            Self::Character(key) => key.is_ascii_uppercase() || key.is_ascii_digit(),
-            Self::Function(number) => (1..=12).contains(&number),
-            Self::Up | Self::Down | Self::Left | Self::Right | Self::Return | Self::Delete => true,
+            Self::Character(key) => key.is_ascii_uppercase() || key.is_ascii_digit() || "-=[]\\;',./`".contains(key),
+            Self::Function(number) => (1..=24).contains(&number),
+            Self::Up | Self::Down | Self::Left | Self::Right | Self::Return | Self::Delete | Self::ForwardDelete | Self::Space | Self::Tab | Self::Escape => true,
         }
     }
 
@@ -158,11 +163,28 @@ impl Shortcut {
         Self { command, shift, option, control, key }
     }
     pub fn is_valid(self) -> bool {
-        self.key.is_valid()
+        self.key.is_valid() && (matches!(self.key, Key::Function(_)) || self.command || self.option || self.control)
     }
     pub fn is_reserved(self) -> bool {
-        self.command && matches!(self.key, Key::Character('H' | 'M'))
+        (self.command && matches!(self.key, Key::Character('H' | 'M' | '`' | ','))) || (self.command && self.option && self.key == Key::Escape) || (self.command && self.shift && matches!(self.key, Key::Character('3' | '4' | '5'))) || (self.command && matches!(self.key, Key::Tab | Key::Space)) || (self.control && self.key == Key::Space)
     }
+    fn is_valid_for(self, action: ActionId) -> bool {
+        self.is_valid() || (action == ActionId::MoveToTrash && !self.command && self.shift && !self.option && !self.control && matches!(self.key, Key::Delete | Key::ForwardDelete))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionShortcuts {
+    pub action: ActionId,
+    pub shortcuts: Vec<Shortcut>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortcutRejection {
+    Invalid,
+    Reserved,
+    Duplicate,
+    Conflict(ActionId),
 }
 
 pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
@@ -179,12 +201,20 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
         ActionId::CopyToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('C'))),
         ActionId::MoveToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('M'))),
         ActionId::RenameItem => Some(Shortcut::new(false, false, false, false, Key::Function(2))),
-        ActionId::MoveToTrash => Some(Shortcut::new(true, false, false, false, Key::Delete)),
+        ActionId::MoveToTrash => Some(Shortcut::new(false, true, false, false, Key::Delete)),
         ActionId::DeletePermanently => Some(Shortcut::new(true, false, true, false, Key::Delete)),
         // Command+W closes a tab; Close Window keeps its meaning but has no
         // default shortcut. Show Package Contents is a Context Menu command.
         ActionId::CloseWindow | ActionId::ShowPackageContents | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
     }
+}
+
+pub fn default_shortcuts(action: ActionId) -> Vec<Shortcut> {
+    if action == ActionId::MoveToTrash { vec![Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)] } else { default_shortcut(action).into_iter().collect() }
+}
+
+pub fn default_shortcut_lists() -> Vec<ActionShortcuts> {
+    ActionId::ALL.into_iter().map(|action| ActionShortcuts { action, shortcuts: default_shortcuts(action) }).collect()
 }
 
 pub fn default_bindings() -> Vec<ActionBinding> {
@@ -216,7 +246,7 @@ pub fn validate_bindings(bindings: &[ActionBinding]) -> Vec<ActionBinding> {
         if accepted.iter().any(|existing: &ActionBinding| existing.action == binding.action) {
             continue;
         }
-        let valid = binding.shortcut.is_none_or(|shortcut| shortcut.is_valid() && !shortcut.is_reserved() && !accepted.iter().any(|existing: &ActionBinding| existing.shortcut == Some(shortcut)));
+        let valid = binding.shortcut.is_none_or(|shortcut| shortcut.is_valid_for(binding.action) && !shortcut.is_reserved() && !accepted.iter().any(|existing: &ActionBinding| existing.shortcut == Some(shortcut)));
         if valid {
             accepted.push(binding.clone());
         }
@@ -368,20 +398,45 @@ impl WindowLayout {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SettingsSnapshot {
     pub bindings: Vec<ActionBinding>,
+    /// Ordered replacements. Empty on legacy callers, which supply `bindings`.
+    pub shortcut_lists: Vec<ActionShortcuts>,
     pub folder_sorts: Vec<(Location, SortSpec)>,
     pub favorites: FavoritesRecords,
     pub hide_notices_at_startup: bool,
+    pub visibility: VisibilityPolicy,
+}
+
+/// Global Folder Items visibility choices. An item that matches several rules
+/// needs every corresponding setting enabled to be shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisibilityPolicy {
+    pub show_macos_items: bool,
+    pub show_dotfiles: bool,
+    pub show_macos_invisible: bool,
+}
+
+impl VisibilityPolicy {
+    pub const fn may_hide_more_than(self, previous: Self) -> bool {
+        (!self.show_macos_items && previous.show_macos_items) || (!self.show_dotfiles && previous.show_dotfiles) || (!self.show_macos_invisible && previous.show_macos_invisible)
+    }
+}
+
+impl Default for VisibilityPolicy {
+    fn default() -> Self {
+        Self { show_macos_items: false, show_dotfiles: true, show_macos_invisible: false }
+    }
 }
 
 /// Application memory. It applies choices immediately and retains the latest
 /// replaceable snapshot for an asynchronous settings service to persist.
 #[derive(Debug, Default)]
 pub struct SettingsState {
-    bindings: HashMap<ActionId, Option<Shortcut>>,
+    bindings: HashMap<ActionId, Vec<Shortcut>>,
     folder_sorts: HashMap<Location, SortSpec>,
     lru: VecDeque<Location>,
     favorites: FavoritesRecords,
     hide_notices_at_startup: bool,
+    visibility: VisibilityPolicy,
     revision: u64,
     saved_revision: u64,
 }
@@ -389,7 +444,7 @@ pub struct SettingsState {
 impl SettingsState {
     pub fn new() -> Self {
         let mut state = Self::default();
-        state.apply(SettingsSnapshot { bindings: default_bindings(), ..SettingsSnapshot::default() });
+        state.apply(SettingsSnapshot { shortcut_lists: default_shortcut_lists(), ..SettingsSnapshot::default() });
         state.saved_revision = state.revision;
         state
     }
@@ -416,23 +471,57 @@ impl SettingsState {
     /// The effective shortcut. `None` means the action is deliberately
     /// unbound; an action with no recorded choice uses its default.
     pub fn binding(&self, action: ActionId) -> Option<Shortcut> {
-        self.bindings.get(&action).copied().unwrap_or_else(|| default_shortcut(action))
+        self.bindings.get(&action).and_then(|shortcuts| shortcuts.first().copied()).or_else(|| (!self.bindings.contains_key(&action)).then(|| default_shortcuts(action).first().copied()).flatten())
+    }
+    pub fn shortcuts(&self, action: ActionId) -> &[Shortcut] {
+        self.bindings.get(&action).map(Vec::as_slice).unwrap_or(&[])
+    }
+    pub fn shortcut_lists(&self) -> Vec<ActionShortcuts> {
+        ActionId::ALL.into_iter().map(|action| ActionShortcuts { action, shortcuts: self.shortcuts(action).to_vec() }).collect()
+    }
+    /// The effective entries for presentation and dispatch, including one
+    /// empty marker for actions deliberately left unbound.
+    pub fn all_bindings(&self) -> Vec<ActionBinding> {
+        ActionId::ALL
+            .into_iter()
+            .flat_map(|action| {
+                let shortcuts = self.shortcuts(action);
+                if shortcuts.is_empty() { vec![ActionBinding { action, shortcut: None }] } else { shortcuts.iter().copied().map(|shortcut| ActionBinding { action, shortcut: Some(shortcut) }).collect() }
+            })
+            .collect()
     }
     /// The effective shortcut of every catalogued action, in catalogue order.
     pub fn bindings(&self) -> Vec<ActionBinding> {
         ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect()
     }
     pub fn update_binding(&mut self, binding: ActionBinding) -> bool {
-        let mut all = self.snapshot().bindings;
-        all.retain(|current| current.action != binding.action);
-        all.push(binding);
-        let valid = validate_bindings(&all);
-        if valid.len() != all.len() {
-            return false;
+        self.set_shortcuts(binding.action, binding.shortcut.into_iter().collect()).is_ok()
+    }
+    pub fn set_shortcuts(&mut self, action: ActionId, shortcuts: Vec<Shortcut>) -> Result<bool, ShortcutRejection> {
+        let mut seen = std::collections::HashSet::new();
+        for shortcut in &shortcuts {
+            if !shortcut.is_valid_for(action) {
+                return Err(ShortcutRejection::Invalid);
+            }
+            if shortcut.is_reserved() {
+                return Err(ShortcutRejection::Reserved);
+            }
+            if !seen.insert(*shortcut) {
+                return Err(ShortcutRejection::Duplicate);
+            }
+            if let Some(owner) = ActionId::ALL.into_iter().find(|other| *other != action && self.shortcuts(*other).contains(shortcut)) {
+                return Err(ShortcutRejection::Conflict(owner));
+            }
         }
-        self.bindings = valid.into_iter().map(|item| (item.action, item.shortcut)).collect();
+        if self.shortcuts(action) == shortcuts {
+            return Ok(false);
+        }
+        self.bindings.insert(action, shortcuts);
         self.revision += 1;
-        true
+        Ok(true)
+    }
+    pub fn restore_shortcuts(&mut self, action: ActionId) -> Result<bool, ShortcutRejection> {
+        self.set_shortcuts(action, default_shortcuts(action))
     }
     pub fn replace_favorites(&mut self, favorites: FavoritesRecords) {
         self.favorites = favorites;
@@ -445,7 +534,7 @@ impl SettingsState {
         let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect::<Vec<_>>();
         bindings.sort_by_key(|binding| binding.action.as_str());
         let folder_sorts = self.lru.iter().filter_map(|location| self.folder_sorts.get(location).copied().map(|sort| (location.clone(), sort))).collect();
-        SettingsSnapshot { bindings, folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup }
+        SettingsSnapshot { bindings, shortcut_lists: self.shortcut_lists(), folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup, visibility: self.visibility }
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -461,7 +550,27 @@ impl SettingsState {
         true
     }
     pub fn apply(&mut self, snapshot: SettingsSnapshot) {
-        self.bindings = complete_bindings(validate_bindings(&snapshot.bindings));
+        self.bindings = if snapshot.shortcut_lists.is_empty() {
+            complete_bindings(validate_bindings(&snapshot.bindings)).into_iter().map(|(action, shortcut)| (action, shortcut.into_iter().collect())).collect()
+        } else {
+            let mut accepted: HashMap<ActionId, Vec<Shortcut>> = HashMap::new();
+            for list in snapshot.shortcut_lists {
+                if accepted.contains_key(&list.action) {
+                    continue;
+                }
+                let valid = list.shortcuts.iter().all(|shortcut| shortcut.is_valid_for(list.action) && !shortcut.is_reserved()) && list.shortcuts.iter().collect::<std::collections::HashSet<_>>().len() == list.shortcuts.len() && !list.shortcuts.iter().any(|shortcut| accepted.values().any(|taken| taken.contains(shortcut)));
+                if valid {
+                    accepted.insert(list.action, list.shortcuts);
+                }
+            }
+            for action in ActionId::ALL {
+                if !accepted.contains_key(&action) {
+                    let defaults = default_shortcuts(action).into_iter().filter(|shortcut| !accepted.values().any(|taken| taken.contains(shortcut))).collect();
+                    accepted.insert(action, defaults);
+                }
+            }
+            accepted
+        };
         self.folder_sorts.clear();
         self.lru.clear();
         for (location, sort) in snapshot.folder_sorts.into_iter().take(FOLDER_SORT_LIMIT) {
@@ -470,6 +579,7 @@ impl SettingsState {
         }
         self.favorites = snapshot.favorites;
         self.hide_notices_at_startup = snapshot.hide_notices_at_startup;
+        self.visibility = snapshot.visibility;
         self.revision += 1;
     }
     pub fn hide_notices_at_startup(&self) -> bool {
@@ -480,6 +590,17 @@ impl SettingsState {
             self.hide_notices_at_startup = hide;
             self.revision += 1;
         }
+    }
+    pub const fn visibility(&self) -> VisibilityPolicy {
+        self.visibility
+    }
+    pub fn set_visibility(&mut self, visibility: VisibilityPolicy) -> bool {
+        if self.visibility == visibility {
+            return false;
+        }
+        self.visibility = visibility;
+        self.revision += 1;
+        true
     }
     fn touch(&mut self, location: &Location) {
         self.lru.retain(|candidate| candidate != location);
@@ -530,13 +651,26 @@ mod tests {
         assert!(state.mark_saved(state.revision()));
     }
     #[test]
+    fn visibility_defaults_round_trip_and_only_change_on_new_values() {
+        let mut state = SettingsState::new();
+        assert_eq!(state.visibility(), VisibilityPolicy::default());
+        let revision = state.revision();
+        assert!(!state.set_visibility(VisibilityPolicy::default()));
+        assert_eq!(state.revision(), revision);
+        let visible = VisibilityPolicy { show_macos_items: true, show_dotfiles: false, show_macos_invisible: true };
+        assert!(state.set_visibility(visible));
+        assert_eq!(state.snapshot().visibility, visible);
+        assert!(VisibilityPolicy::default().may_hide_more_than(visible));
+        assert!(!VisibilityPolicy { show_macos_items: true, show_dotfiles: true, show_macos_invisible: true }.may_hide_more_than(VisibilityPolicy::default()));
+    }
+    #[test]
     fn key_text_round_trips_and_unknown_text_is_rejected() {
         for key in [Key::Character('N'), Key::Character('7'), Key::Up, Key::Down, Key::Left, Key::Right, Key::Return, Key::Delete, Key::Function(2), Key::Function(12)] {
             assert_eq!(Key::parse(&key.as_text()), Some(key));
         }
-        assert_eq!(Key::parse("Escape"), None);
+        assert_eq!(Key::parse("Escape"), Some(Key::Escape));
         assert_eq!(Key::parse(""), None);
-        assert!(!Key::Function(13).is_valid());
+        assert!(!Key::Function(25).is_valid());
         assert!(!Key::Character('n').is_valid());
     }
     #[test]
@@ -557,7 +691,7 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::CopyToOtherBrowser), shortcut(false, true, Key::Character('C')));
         assert_eq!(default_shortcut(ActionId::MoveToOtherBrowser), shortcut(false, true, Key::Character('M')));
         assert_eq!(default_shortcut(ActionId::RenameItem), shortcut(false, false, Key::Function(2)));
-        assert_eq!(default_shortcut(ActionId::MoveToTrash), shortcut(true, false, Key::Delete));
+        assert_eq!(default_shortcut(ActionId::MoveToTrash), Some(Shortcut::new(false, true, false, false, Key::Delete)));
         assert_eq!(default_shortcut(ActionId::DeletePermanently), shortcut(true, true, Key::Delete));
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
         assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 6..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents], "new IDs are appended");
@@ -602,6 +736,41 @@ mod tests {
         restored.apply(state.snapshot());
         assert_eq!(restored.binding(ActionId::NewFolder), None);
         assert_eq!(restored.binding(ActionId::CloseTab), default_shortcut(ActionId::CloseTab));
+    }
+    #[test]
+    fn multiple_shortcuts_validate_and_round_trip_in_order() {
+        let mut state = SettingsState::new();
+        let first = Shortcut::new(true, false, false, false, Key::Character('J'));
+        let second = Shortcut::new(false, true, true, false, Key::Function(24));
+        assert_eq!(state.set_shortcuts(ActionId::NewFolder, vec![first, second]), Ok(true));
+        assert_eq!(state.shortcuts(ActionId::NewFolder), &[first, second]);
+        assert_eq!(state.set_shortcuts(ActionId::NewFolder, vec![first, first]), Err(ShortcutRejection::Duplicate));
+        assert_eq!(state.set_shortcuts(ActionId::NewFolder, vec![Shortcut::new(false, true, false, false, Key::Character('1'))]), Err(ShortcutRejection::Invalid));
+        assert_eq!(state.set_shortcuts(ActionId::NewFolder, vec![Shortcut::new(true, false, false, false, Key::Character(','))]), Err(ShortcutRejection::Reserved));
+        assert_eq!(state.set_shortcuts(ActionId::NewFolder, vec![default_shortcut(ActionId::NewTab).unwrap()]), Err(ShortcutRejection::Conflict(ActionId::NewTab)));
+        assert_eq!(state.shortcuts(ActionId::NewFolder), &[first, second]);
+        let mut restored = SettingsState::new();
+        restored.apply(state.snapshot());
+        assert_eq!(restored.shortcuts(ActionId::NewFolder), &[first, second]);
+        assert_eq!(restored.set_shortcuts(ActionId::NewFolder, vec![]), Ok(true));
+        assert!(restored.shortcuts(ActionId::NewFolder).is_empty());
+    }
+    #[test]
+    fn restoring_a_removed_factory_shortcut_reinstates_its_default() {
+        let mut state = SettingsState::new();
+        let factory_default = Shortcut::new(false, false, true, false, Key::Character('F'));
+        assert_eq!(state.shortcuts(ActionId::FocusOtherBrowser), &[factory_default]);
+        assert_eq!(state.set_shortcuts(ActionId::FocusOtherBrowser, vec![]), Ok(true));
+        assert!(state.shortcuts(ActionId::FocusOtherBrowser).is_empty());
+        assert_eq!(state.restore_shortcuts(ActionId::FocusOtherBrowser), Ok(true));
+        assert_eq!(state.shortcuts(ActionId::FocusOtherBrowser), &[factory_default]);
+    }
+    #[test]
+    fn reserved_combinations_reject_additional_modifiers() {
+        for shortcut in [Shortcut::new(true, true, true, true, Key::Character(',')), Shortcut::new(true, true, false, true, Key::Tab), Shortcut::new(true, false, true, true, Key::Escape), Shortcut::new(true, true, true, false, Key::Character('4')), Shortcut::new(false, true, true, true, Key::Space)] {
+            assert!(shortcut.is_reserved(), "{shortcut:?}");
+        }
+        assert!(!Shortcut::new(false, false, false, false, Key::Function(24)).is_reserved());
     }
     #[test]
     fn a_missing_binding_uses_its_default_unless_that_default_is_taken() {

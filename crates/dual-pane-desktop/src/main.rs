@@ -27,14 +27,27 @@ use crate::folder_items::ListingRules;
 use crate::operation_journal::{LaunchId, is_launch_temporary};
 use crate::runtime::{FolderItemsSource, FolderItemsSourceFactory, LocationProbe};
 fn main() -> ExitCode {
-    let home = env::var_os("HOME").and_then(|path| native_location::location_from_path(Path::new(&path))).unwrap_or_else(Location::root);
+    // Debug verification uses a disposable profile without changing HOME for
+    // the process or touching the person's normal settings database.
+    #[cfg(debug_assertions)]
+    let profile = match env::var_os("DUAL_PANE_TEST_PROFILE") {
+        Some(path) if Path::new(&path).is_absolute() && Path::new(&path).is_dir() => Some(path),
+        Some(_) => {
+            eprintln!("DUAL_PANE_TEST_PROFILE must name an existing absolute directory");
+            return ExitCode::FAILURE;
+        }
+        None => env::var_os("HOME"),
+    };
+    #[cfg(not(debug_assertions))]
+    let profile = env::var_os("HOME");
+    let home = profile.as_ref().and_then(|path| native_location::location_from_path(Path::new(path))).unwrap_or_else(Location::root);
     let launch = LaunchId::generate();
     // Listings hide this launch's operation temporaries and mark packages.
     let source_factory: FolderItemsSourceFactory = Arc::new(move || {
-        let source: FolderItemsSource = Box::new(move |location, sort, cancelled| folder_items::read_listing(location, sort, cancelled, &ListingRules { hidden: &|name| is_launch_temporary(name, launch), package: &native_shell::is_bundle }));
+        let source: FolderItemsSource = Box::new(move |location, sort, visibility, cancelled| folder_items::read_listing(location, sort, visibility, cancelled, &ListingRules { hidden: &|name| is_launch_temporary(name, launch), package: &native_shell::is_bundle, volume_root: &native_calls::is_volume_root, invisible: &native_calls::is_macos_invisible }));
         source
     });
-    let settings_path = env::var_os("HOME").map(|home| settings_storage::application_support_database_path(Path::new(&home)));
+    let settings_path = profile.as_ref().map(|path| settings_storage::application_support_database_path(Path::new(path)));
     let location_probe: LocationProbe = Box::new(location_probe::probe_directory);
     let startup = BrowserStartup { home, settings_path, source_factory, location_probe, launch };
     let status = workspace_bridge::ffi::run_desktop(Box::new(startup));

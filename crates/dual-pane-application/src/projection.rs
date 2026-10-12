@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::{ActionBinding, FavoritesRecords, OperationFailure, OperationOutcome, OperationProgress, SettingsFailure};
+use crate::{ActionBinding, FavoritesRecords, OperationFailure, OperationOutcome, OperationProgress, SettingsFailure, VisibilityPolicy};
 use dual_pane_domain::{BrowserSide, ListingErrorKind, Location, OperationIntent, SortSpec, TabId};
 
 /// How reliably one open location is being observed for external changes.
@@ -56,6 +56,7 @@ pub struct WorkspaceChrome {
     pub bindings: Vec<ActionBinding>,
     /// The persisted choice that suppresses routine launch Notices.
     pub hide_notices_at_startup: bool,
+    pub visibility: VisibilityPolicy,
     /// False while the initial settings read could still replace the choice.
     pub notices_startup_ready: bool,
     /// Whether opening Settings is safe. It stays false until a successful

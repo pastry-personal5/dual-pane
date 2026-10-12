@@ -7,11 +7,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{ActionBinding, ActionId, BrowserSnapshot, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot};
+use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, BrowserSnapshot, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, VisibilityPolicy, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot, default_shortcuts};
 use dual_pane_domain::{BrowserSide, EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 7;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(50);
 type BindingParameters = (&'static str, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>);
 
@@ -87,7 +87,7 @@ impl SettingsDatabase {
         Self::load_connection(&self.connection)
     }
     fn load_connection(connection: &Connection) -> Result<LoadedSettings, SettingsStorageError> {
-        let bindings = ActionId::ALL
+        let bindings: Vec<ActionBinding> = ActionId::ALL
             .into_iter()
             .map(|action| {
                 connection
@@ -112,25 +112,47 @@ impl SettingsDatabase {
             .collect();
         let mut statement = connection.prepare("SELECT target, field, direction FROM folder_sort ORDER BY recent ASC")?;
         let folder_sorts = statement.query_map([], |row| Ok((decode_location(&row.get::<_, Vec<u8>>(0)?).map_err(to_sql_error)?, decode_sort(row.get(1)?, row.get(2)?).map_err(to_sql_error)?)))?.collect::<Result<Vec<_>, _>>()?;
-        let initialized = connection.query_row("SELECT value FROM setting_marker WHERE key = 'favorites_initialized'", [], |row| row.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0;
-        let hide_notices_at_startup = connection.query_row("SELECT value FROM setting_marker WHERE key = 'hide_notices_at_startup'", [], |row| row.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0;
+        let initialized = marker_bool(connection, "favorites_initialized", false)?;
+        let hide_notices_at_startup = marker_bool(connection, "hide_notices_at_startup", false)?;
+        let visibility = VisibilityPolicy { show_macos_items: marker_bool(connection, "show_macos_items", false)?, show_dotfiles: marker_bool(connection, "show_dotfiles", true)?, show_macos_invisible: marker_bool(connection, "show_macos_invisible", false)? };
         let groups = connection.prepare("SELECT id, name, position FROM favorite_group ORDER BY position, id")?.query_map([], |row| Ok(FavoriteGroupRecord { id: row.get(0)?, name: row.get(1)?, position: row.get(2)? }))?.collect::<Result<Vec<_>, _>>()?;
         let items = connection.prepare("SELECT id, group_id, name, target, position FROM favorite_item ORDER BY group_id, position, id")?.query_map([], |row| Ok(FavoriteItemRecord { id: row.get(0)?, group_id: row.get(1)?, name: row.get(2)?, target: decode_location(&row.get::<_, Vec<u8>>(3)?).map_err(to_sql_error)?, position: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
         let favorites = FavoritesRecords { initialized, groups, items };
         favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
-        let snapshot = SettingsSnapshot { bindings, folder_sorts, favorites, hide_notices_at_startup };
+        let mut shortcut_lists = Vec::new();
+        for binding in &bindings {
+            let mut statement = connection.prepare("SELECT command, shift, option, control, key FROM action_shortcut WHERE action = ?1 ORDER BY position")?;
+            let entries = statement
+                .query_map([binding.action.as_str()], |row| {
+                    let text: String = row.get(4)?;
+                    let command = row.get::<_, i64>(0)? != 0;
+                    let shift = row.get::<_, i64>(1)? != 0;
+                    let option = row.get::<_, i64>(2)? != 0;
+                    let control = row.get::<_, i64>(3)? != 0;
+                    Ok(Key::parse(&text).map(|key| Shortcut::new(command, shift, option, control, key)))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            if entries.iter().all(Option::is_some) && (!entries.is_empty() || binding.shortcut.is_none()) {
+                shortcut_lists.push(ActionShortcuts { action: binding.action, shortcuts: entries.into_iter().flatten().collect() });
+            }
+        }
+        let snapshot = SettingsSnapshot { bindings, shortcut_lists, folder_sorts, favorites, hide_notices_at_startup, visibility };
         let session = read_session(connection)?;
         Ok(LoadedSettings { snapshot, session })
     }
     pub fn save(&mut self, snapshot: &SettingsSnapshot) -> Result<(), SettingsStorageError> {
         snapshot.favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
         let tx = self.connection.transaction()?;
+        tx.execute("DELETE FROM action_shortcut", [])?;
         tx.execute("DELETE FROM action_binding", [])?;
-        for binding in dual_pane_application::default_bindings() {
-            insert_binding(&tx, &binding)?;
-        }
-        for binding in &snapshot.bindings {
-            tx.execute("INSERT OR REPLACE INTO action_binding(action, command, shift, option, control, key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", binding_params(binding))?;
+        let lists = if snapshot.shortcut_lists.is_empty() { snapshot.bindings.iter().map(|binding| ActionShortcuts { action: binding.action, shortcuts: binding.shortcut.into_iter().collect() }).collect::<Vec<_>>() } else { snapshot.shortcut_lists.clone() };
+        for action in ActionId::ALL {
+            let shortcuts = lists.iter().find(|list| list.action == action).map(|list| list.shortcuts.as_slice()).unwrap_or(&[]);
+            let first = ActionBinding { action, shortcut: shortcuts.first().copied().or_else(|| (!lists.iter().any(|list| list.action == action)).then(|| default_shortcuts(action).first().copied()).flatten()) };
+            insert_binding(&tx, &first)?;
+            for (position, shortcut) in shortcuts.iter().enumerate() {
+                insert_shortcut(&tx, action, position, *shortcut)?;
+            }
         }
         tx.execute("DELETE FROM folder_sort", [])?;
         for (recent, (location, sort)) in snapshot.folder_sorts.iter().enumerate() {
@@ -140,6 +162,9 @@ impl SettingsDatabase {
         tx.execute("DELETE FROM favorite_group", [])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('favorites_initialized', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.favorites.initialized)])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('hide_notices_at_startup', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.hide_notices_at_startup)])?;
+        tx.execute("INSERT INTO setting_marker(key, value) VALUES ('show_macos_items', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.visibility.show_macos_items)])?;
+        tx.execute("INSERT INTO setting_marker(key, value) VALUES ('show_dotfiles', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.visibility.show_dotfiles)])?;
+        tx.execute("INSERT INTO setting_marker(key, value) VALUES ('show_macos_invisible', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.visibility.show_macos_invisible)])?;
         for group in &snapshot.favorites.groups {
             tx.execute("INSERT INTO favorite_group(id, name, position) VALUES (?1, ?2, ?3)", params![group.id, group.name, group.position])?;
         }
@@ -210,6 +235,53 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
     if version < 4 {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS session_browser(browser INTEGER PRIMARY KEY NOT NULL, active_position INTEGER NOT NULL, active INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS session_tab(browser INTEGER NOT NULL, position INTEGER NOT NULL, location BLOB NOT NULL, PRIMARY KEY(browser, position)); CREATE TABLE IF NOT EXISTS session_window(id INTEGER PRIMARY KEY NOT NULL CHECK(id = 1), x INTEGER NOT NULL, y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, state INTEGER NOT NULL, sidebar_splitter INTEGER NOT NULL, browser_splitter INTEGER NOT NULL);")?;
     }
+    if version < 5 {
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS action_shortcut(action TEXT NOT NULL REFERENCES action_binding(action) ON DELETE CASCADE, position INTEGER NOT NULL, command INTEGER NOT NULL, shift INTEGER NOT NULL, option INTEGER NOT NULL, control INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(action, position));")?;
+        let mut statement = tx.prepare("SELECT action, command, shift, option, control, key FROM action_binding WHERE key IS NOT NULL")?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or_default() != 0, row.get::<_, Option<i64>>(2)?.unwrap_or_default() != 0, row.get::<_, Option<i64>>(3)?.unwrap_or_default() != 0, row.get::<_, Option<i64>>(4)?.unwrap_or_default() != 0, row.get::<_, String>(5)?)))?.collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        for (name, command, shift, option, control, text) in rows {
+            if let (Some(action), Some(key)) = (ActionId::parse(&name), Key::parse(&text)) {
+                let shortcut = Shortcut::new(command, shift, option, control, key);
+                if shortcut.is_valid() && !shortcut.is_reserved() {
+                    tx.execute("INSERT OR IGNORE INTO action_shortcut(action, position, command, shift, option, control, key) VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6)", params![action.as_str(), i64::from(command), i64::from(shift), i64::from(option), i64::from(control), shortcut.key.as_text()])?;
+                }
+            }
+        }
+    }
+    if version < 6 {
+        let previous_default = Shortcut::new(true, false, false, false, Key::Delete);
+        let first_default = Shortcut::new(false, true, false, false, Key::Delete);
+        let second_default = Shortcut::new(false, true, false, false, Key::ForwardDelete);
+        let parent = tx.query_row("SELECT command, shift, option, control, key FROM action_binding WHERE action = 'MoveToTrash'", [], |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or_default() != 0, row.get::<_, Option<i64>>(1)?.unwrap_or_default() != 0, row.get::<_, Option<i64>>(2)?.unwrap_or_default() != 0, row.get::<_, Option<i64>>(3)?.unwrap_or_default() != 0, row.get::<_, Option<String>>(4)?))).optional()?;
+        let mut statement = tx.prepare("SELECT command, shift, option, control, key FROM action_shortcut WHERE action = 'MoveToTrash' ORDER BY position")?;
+        let existing = statement
+            .query_map([], |row| {
+                let command = row.get::<_, i64>(0)? != 0;
+                let shift = row.get::<_, i64>(1)? != 0;
+                let option = row.get::<_, i64>(2)? != 0;
+                let control = row.get::<_, i64>(3)? != 0;
+                let key_text: String = row.get(4)?;
+                Ok(Key::parse(&key_text).map(|key| Shortcut::new(command, shift, option, control, key)))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        let previous_default_is_active = existing.as_slice() == [Some(previous_default)];
+        let partially_seeded_default = existing.is_empty() && parent.as_ref().is_some_and(|(command, shift, option, control, key)| !*command && *shift && !*option && !*control && key.as_deref() == Some("Delete"));
+        let first_default_is_active = existing.as_slice() == [Some(first_default)];
+        if previous_default_is_active || partially_seeded_default || first_default_is_active {
+            tx.execute("DELETE FROM action_shortcut WHERE action = 'MoveToTrash'", [])?;
+            insert_shortcut(&tx, ActionId::MoveToTrash, 0, first_default)?;
+            insert_shortcut(&tx, ActionId::MoveToTrash, 1, second_default)?;
+            tx.execute("UPDATE action_binding SET command = 0, shift = 1, option = 0, control = 0, key = 'Delete' WHERE action = 'MoveToTrash'", [])?;
+        }
+    }
+    if version < 7 {
+        // Freeze the three new defaults for both older profiles and fresh
+        // databases. A future release can change its fresh-profile defaults
+        // without silently changing an already migrated person's choices.
+        tx.execute_batch("INSERT OR IGNORE INTO setting_marker(key, value) VALUES ('show_macos_items', 0); INSERT OR IGNORE INTO setting_marker(key, value) VALUES ('show_dotfiles', 1); INSERT OR IGNORE INTO setting_marker(key, value) VALUES ('show_macos_invisible', 0);")?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     // Validate migrated records before committing the schema change. A
     // malformed old collection leaves the original database intact.
@@ -217,10 +289,23 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
     tx.commit()?;
     Ok(())
 }
+fn marker_bool(connection: &Connection, key: &str, default: bool) -> Result<bool, SettingsStorageError> {
+    match connection.query_row("SELECT value FROM setting_marker WHERE key = ?1", [key], |row| row.get::<_, i64>(0)).optional()? {
+        None => Ok(default),
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        Some(_) => Err(SettingsStorageError::InvalidData("Boolean setting")),
+    }
+}
 fn preload_bindings(connection: &mut Connection) -> Result<(), SettingsStorageError> {
     let tx = connection.transaction()?;
     for binding in dual_pane_application::default_bindings() {
-        tx.execute("INSERT OR IGNORE INTO action_binding(action, command, shift, option, control, key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", binding_params(&binding))?;
+        let inserted = tx.execute("INSERT OR IGNORE INTO action_binding(action, command, shift, option, control, key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", binding_params(&binding))?;
+        if inserted != 0 {
+            for (position, shortcut) in default_shortcuts(binding.action).into_iter().enumerate() {
+                insert_shortcut(&tx, binding.action, position, shortcut)?;
+            }
+        }
     }
     tx.commit()?;
     Ok(())
@@ -231,6 +316,10 @@ fn binding_params(binding: &ActionBinding) -> BindingParameters {
 }
 fn insert_binding(tx: &Transaction<'_>, binding: &ActionBinding) -> Result<(), rusqlite::Error> {
     tx.execute("INSERT INTO action_binding(action, command, shift, option, control, key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", binding_params(binding))?;
+    Ok(())
+}
+fn insert_shortcut(tx: &Transaction<'_>, action: ActionId, position: usize, shortcut: Shortcut) -> Result<(), rusqlite::Error> {
+    tx.execute("INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![action.as_str(), position as i64, i64::from(shortcut.command), i64::from(shortcut.shift), i64::from(shortcut.option), i64::from(shortcut.control), shortcut.key.as_text()])?;
     Ok(())
 }
 fn sort_field(field: SortField) -> i64 {
@@ -663,6 +752,8 @@ mod tests {
     #[test]
     fn supported_old_schema_migrates_transactionally() {
         let (_directory, path) = temp_database();
+        let database = SettingsDatabase::open(&path).unwrap();
+        drop(database);
         let connection = Connection::open(&path).unwrap();
         connection.pragma_update(None, "user_version", 0).unwrap();
         drop(connection);
@@ -678,6 +769,35 @@ mod tests {
         assert!(!loaded.snapshot.hide_notices_at_startup);
         let version: i64 = database.connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+    #[test]
+    fn visibility_defaults_migrate_and_all_values_round_trip() {
+        let (_directory, path) = temp_database();
+        drop(SettingsDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.execute("DELETE FROM setting_marker WHERE key IN ('show_macos_items', 'show_dotfiles', 'show_macos_invisible')", []).unwrap();
+        connection.pragma_update(None, "user_version", 6).unwrap();
+        drop(connection);
+        let mut database = SettingsDatabase::open(&path).unwrap();
+        assert_eq!(database.load().unwrap().visibility, VisibilityPolicy::default());
+        let stored: i64 = database.connection.query_row("SELECT COUNT(*) FROM setting_marker WHERE key IN ('show_macos_items', 'show_dotfiles', 'show_macos_invisible')", [], |row| row.get(0)).unwrap();
+        assert_eq!(stored, 3, "migration persists defaults, rather than only supplying fallbacks at read time");
+        for show_macos_items in [false, true] {
+            for show_dotfiles in [false, true] {
+                for show_macos_invisible in [false, true] {
+                    let snapshot = SettingsSnapshot { visibility: VisibilityPolicy { show_macos_items, show_dotfiles, show_macos_invisible }, ..SettingsSnapshot::default() };
+                    database.save(&snapshot).unwrap();
+                    assert_eq!(database.load().unwrap().visibility, snapshot.visibility);
+                }
+            }
+        }
+        let (replacement, reset) = reset_database(&path, Some(database));
+        let backup = reset.unwrap().unwrap();
+        assert_eq!(SettingsDatabase::open(&backup).unwrap().load().unwrap().visibility, VisibilityPolicy { show_macos_items: true, show_dotfiles: true, show_macos_invisible: true });
+        let database = replacement.unwrap();
+        assert_eq!(database.load().unwrap().visibility, VisibilityPolicy::default());
+        database.connection.execute("INSERT INTO setting_marker(key, value) VALUES ('show_dotfiles', 2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", []).unwrap();
+        assert!(matches!(database.load(), Err(SettingsStorageError::InvalidData("Boolean setting"))));
     }
     #[test]
     fn newer_schema_and_failed_open_are_reported_without_reset() {
@@ -927,6 +1047,34 @@ mod tests {
         assert!(state.update_binding(ActionBinding { action: ActionId::QuitApplication, shortcut: None }));
         SettingsDatabase::open(&path).unwrap().save(&state.snapshot()).unwrap();
         assert_eq!(loaded_binding(&path, ActionId::QuitApplication), Some(None));
+    }
+    #[test]
+    fn ordered_shortcut_lists_and_unbinding_survive_reopen() {
+        let (_directory, path) = temp_database();
+        let mut state = SettingsState::new();
+        let first = Shortcut::new(true, false, false, false, Key::Character('J'));
+        let second = Shortcut::new(false, true, false, true, Key::Function(24));
+        state.set_shortcuts(ActionId::NewFolder, vec![first, second]).unwrap();
+        state.set_shortcuts(ActionId::NewTab, vec![]).unwrap();
+        SettingsDatabase::open(&path).unwrap().save(&state.snapshot()).unwrap();
+        let mut restored = SettingsState::new();
+        restored.apply(SettingsDatabase::open(&path).unwrap().load().unwrap());
+        assert_eq!(restored.shortcuts(ActionId::NewFolder), &[first, second]);
+        assert!(restored.shortcuts(ActionId::NewTab).is_empty());
+    }
+    #[test]
+    fn version_four_shortcuts_migrate_to_ordered_entries() {
+        let (_directory, path) = temp_database();
+        let database = SettingsDatabase::open(&path).unwrap();
+        database.connection.execute_batch("DROP TABLE action_shortcut; UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'J' WHERE action = 'NewFolder'; UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'NewTab'; PRAGMA user_version = 4;").unwrap();
+        drop(database);
+        let loaded = SettingsDatabase::open(&path).unwrap().load().unwrap();
+        let mut state = SettingsState::new();
+        state.apply(loaded);
+        assert_eq!(state.shortcuts(ActionId::NewFolder), &[Shortcut::new(true, false, false, false, Key::Character('J'))]);
+        assert!(state.shortcuts(ActionId::NewTab).is_empty());
+        let count: i64 = Connection::open(&path).unwrap().query_row("SELECT COUNT(*) FROM action_shortcut WHERE action = 'NewFolder'", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

@@ -14,6 +14,9 @@ pub enum ListingErrorKind {
     /// The bounded reader admission queue is temporarily full. Retrying later
     /// is meaningful and does not imply a filesystem failure.
     Busy,
+    /// A required macOS visibility classification could not be established.
+    /// Retrying can succeed and this says nothing about the folder itself.
+    VisibilityClassificationFailed,
     Unknown,
 }
 

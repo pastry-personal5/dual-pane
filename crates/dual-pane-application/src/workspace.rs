@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
+use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
 use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
@@ -87,6 +87,8 @@ pub struct Workspace {
     application_active: bool,
     deferred_watch_invalidations: HashSet<Location>,
     watch_visible: HashSet<Location>,
+    visibility_generation: u64,
+    visibility_retries: HashMap<(BrowserSide, TabId), (Location, Option<usize>)>,
 }
 #[derive(Debug, Clone)]
 struct PendingSelection {
@@ -118,6 +120,10 @@ struct TabState {
     /// read caused by an invalidation keeps this mark; a person's navigation
     /// deliberately clears it.
     restoring: bool,
+    /// A stricter policy has removed the shown rows; retain visit state only
+    /// as a reconciliation hint until a fresh listing succeeds.
+    visibility_cleared: bool,
+    visibility_recheck: bool,
 }
 #[derive(Debug)]
 struct FolderItems {
@@ -135,6 +141,8 @@ struct PendingRead {
     /// One coalesced watcher or operation invalidation observed while this
     /// exact location was already being read.
     dirty: bool,
+    visibility_generation: u64,
+    retry_on_busy: bool,
 }
 
 impl Default for Workspace {
@@ -149,7 +157,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new() }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
@@ -196,6 +204,9 @@ impl Workspace {
             Command::DeleteFavoriteItem { id } => self.favorites_edit(FavoriteEdit::Item(id), |workspace| workspace.delete_favorite_item(id)),
             Command::ResetSettings => self.reset_settings(),
             Command::SetHideNoticesAtStartup { hide } => self.set_hide_notices_at_startup(hide),
+            Command::SetVisibilityPolicy { visibility } => self.set_visibility_policy(visibility),
+            Command::SetActionShortcuts { action, shortcuts } => self.set_action_shortcuts(action, shortcuts),
+            Command::RestoreActionShortcuts { action } => self.restore_action_shortcuts(action),
             Command::UpdateWindowLayout { layout } => self.update_window_layout(layout),
             Command::GoBack { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, false)),
             Command::GoForward { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, true)),
@@ -241,6 +252,7 @@ impl Workspace {
             Event::FolderItemsLoaded { browser, tab, token, entries, changes } => self.loaded(browser, tab, token, entries, changes),
             Event::FolderItemsFailed { browser, tab, token, kind } => self.failed(browser, tab, token, kind),
             Event::FolderItemsCancelled { browser, tab, token } => self.cancelled(browser, tab, token),
+            Event::ReadCapacityAvailable => self.retry_visibility_reads(),
             Event::FavoriteTargetProbed { item_id, target, outcome } => self.favorite_target_probed(item_id, target, outcome),
             Event::ScreenshotsFolderProbed { location, outcome } => self.screenshots_folder_probed(&location, outcome),
             Event::SettingsSaved { revision } => {
@@ -299,7 +311,7 @@ impl Workspace {
     }
     pub fn selection(&self, side: BrowserSide) -> &Selection {
         static NONE: Selection = Selection::new();
-        self.tab(side, self.active_tab(side)).and_then(|tab| tab.history.current()).map_or(&NONE, |visit| visit.state().selection())
+        self.tab(side, self.active_tab(side)).filter(|tab| tab.folder_items.is_some()).and_then(|tab| tab.history.current()).map_or(&NONE, |visit| visit.state().selection())
     }
     pub fn operation_jobs(&self) -> &[OperationJob] {
         self.operations.jobs()
@@ -513,7 +525,10 @@ impl Workspace {
     }
     /// The effective shortcut of every catalogued action.
     pub fn bindings(&self) -> Vec<ActionBinding> {
-        self.settings.bindings()
+        self.settings.all_bindings()
+    }
+    pub fn shortcuts(&self, action: crate::ActionId) -> &[crate::Shortcut] {
+        self.settings.shortcuts(action)
     }
     pub fn notices(&self) -> &[Notice] {
         &self.notices
@@ -521,7 +536,7 @@ impl Workspace {
     /// The Browser's tab strip, toolbar availability, and effective sort.
     pub fn browser_chrome(&self, side: BrowserSide) -> BrowserChrome {
         let state = self.browser(side);
-        let tabs = state.order.tabs().iter().filter_map(|id| self.tab(side, *id)).map(|tab| TabSummary { id: tab.id, location: tab.folder_items.as_ref().map(|items| &items.location).or_else(|| tab.pending.as_ref().map(|pending| &pending.location)).cloned(), loading: tab.pending.is_some(), failed: tab.error.is_some() }).collect();
+        let tabs = state.order.tabs().iter().filter_map(|id| self.tab(side, *id)).map(|tab| TabSummary { id: tab.id, location: tab.folder_items.as_ref().map(|items| &items.location).or_else(|| tab.pending.as_ref().map(|pending| &pending.location)).or_else(|| (tab.visibility_cleared || tab.error.is_some()).then_some(tab.requested.as_ref()).flatten()).cloned(), loading: tab.pending.is_some(), failed: tab.error.is_some() }).collect();
         let location = self.location(side).cloned();
         let monitored = self.tab(side, state.order.active()).and_then(TabState::requested_location);
         let monitoring = monitored.as_ref().and_then(|location| self.watch_status.get(location)).copied();
@@ -529,7 +544,7 @@ impl Workspace {
     }
     /// Workspace-wide presentation state.
     pub fn workspace_chrome(&self) -> WorkspaceChrome {
-        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, settings_interaction_available: self.settings_interaction_available, notices: Arc::clone(&self.notices) }
+        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), visibility: self.settings.visibility(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, settings_interaction_available: self.settings_interaction_available, notices: Arc::clone(&self.notices) }
     }
     /// The save to flush before the application exits, if loaded settings
     /// have changed since the last confirmed save.
@@ -604,6 +619,7 @@ impl Workspace {
             return Transition::default();
         };
         let was_active = self.active_tab(browser) == tab;
+        self.visibility_retries.remove(&(browser, tab));
         let final_tab = self.browser(browser).order.tabs().len() == 1;
         if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab) {
             self.pending_selection = None;
@@ -646,6 +662,7 @@ impl Workspace {
         }
         if let Some(tab) = self.tab_mut(browser, tab) {
             tab.restoring = false;
+            tab.visibility_recheck = false;
         }
         self.start_read(browser, tab, location, history_target)
     }
@@ -656,14 +673,16 @@ impl Workspace {
         }
         let token = self.next_token();
         let sort = self.settings.sort_for(&location);
+        self.visibility_retries.remove(&(browser, tab));
+        let visibility_generation = self.visibility_generation;
         let previous = self.tab(browser, tab).and_then(|state| state.folder_items.as_ref()).filter(|items| items.location == location).map(|items| Arc::clone(&items.entries));
         let old = self.tab_mut(browser, tab).and_then(|state| {
             state.error = None;
             state.requested = Some(location.clone());
-            state.pending.replace(PendingRead { token, location: location.clone(), history_target, base: previous.clone(), restoring: state.restoring, dirty: false })
+            state.pending.replace(PendingRead { token, location: location.clone(), history_target, base: previous.clone(), restoring: state.restoring, dirty: false, visibility_generation, retry_on_busy: state.visibility_recheck })
         });
         let mut work = old.into_iter().map(|old| WorkRequest::Cancel { browser, tab, token: old.token }).collect::<Vec<_>>();
-        work.push(WorkRequest::ReadDirectory { browser, tab, token, location: location.clone(), sort, previous });
+        work.push(WorkRequest::ReadDirectory { browser, tab, token, location: location.clone(), sort, visibility: self.settings.visibility(), previous });
         Transition { outputs: vec![Output::LoadingStarted { browser, tab, location }], work }
     }
     fn next_token(&mut self) -> RequestToken {
@@ -836,7 +855,11 @@ impl Workspace {
         if self.settings_status != SettingsStatus::Loading {
             return Transition::default();
         }
+        let previous_visibility = self.settings.visibility();
         self.settings.apply(snapshot);
+        if self.settings.visibility() != previous_visibility {
+            self.visibility_generation = self.visibility_generation.wrapping_add(1);
+        }
         // The loaded snapshot is what storage already holds.
         self.settings.mark_saved(self.settings.revision());
         self.settings_status = SettingsStatus::Loaded;
@@ -875,8 +898,26 @@ impl Workspace {
                 }
             }
         } else {
-            let tabs = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|side| self.browser(side).tabs.iter().map(move |tab| (side, tab.id))).collect::<Vec<_>>();
+            let tabs = self.restore_read_order();
+            if self.settings.visibility().may_hide_more_than(previous_visibility) {
+                for (side, tab) in &tabs {
+                    if let Some(state) = self.tab_mut(*side, *tab) {
+                        state.folder_items = None;
+                        state.error = None;
+                        state.visibility_cleared = true;
+                        state.visibility_recheck = true;
+                    }
+                    if self.active_tab(*side) == *tab {
+                        transition.outputs.push(self.tab_view(*side, *tab));
+                    }
+                }
+            }
             for (side, tab) in tabs {
+                if self.settings.visibility() != previous_visibility
+                    && let Some(state) = self.tab_mut(side, tab)
+                {
+                    state.visibility_recheck = true;
+                }
                 transition.append(self.refresh_tab(side, tab));
             }
         }
@@ -1023,6 +1064,70 @@ impl Workspace {
         self.settings.set_hide_notices_at_startup(hide);
         Transition { outputs: vec![], work: self.save_settings().into_iter().collect() }
     }
+    fn set_visibility_policy(&mut self, visibility: VisibilityPolicy) -> Transition {
+        if !self.settings_interaction_available {
+            return Transition::default();
+        }
+        let previous = self.settings.visibility();
+        if !self.settings.set_visibility(visibility) {
+            return Transition::default();
+        }
+        self.visibility_generation = self.visibility_generation.wrapping_add(1);
+        let stricter = visibility.may_hide_more_than(previous);
+        let targets = self.restore_read_order();
+        let mut transition = Transition { outputs: Vec::new(), work: self.save_settings().into_iter().collect() };
+        for (side, tab) in targets {
+            if stricter {
+                if let Some(state) = self.tab_mut(side, tab) {
+                    state.folder_items = None;
+                    state.error = None;
+                    state.visibility_cleared = true;
+                }
+                if self.active_tab(side) == tab {
+                    transition.outputs.push(self.tab_view(side, tab));
+                }
+            }
+            if let Some(state) = self.tab_mut(side, tab) {
+                state.visibility_recheck = true;
+            }
+            transition.append(self.refresh_tab(side, tab));
+        }
+        transition
+    }
+    /// Retry only reads whose visibility-driven replacement was refused by
+    /// the bounded runtime. A later runtime completion supplies capacity.
+    fn retry_visibility_reads(&mut self) -> Transition {
+        let targets = self.restore_read_order();
+        let mut transition = Transition::default();
+        for (side, tab) in targets {
+            if let Some((location, history_target)) = self.visibility_retries.remove(&(side, tab))
+                && self.tab(side, tab).is_some_and(|state| state.pending.is_none() && state.visibility_recheck)
+            {
+                transition.append(self.start_read(side, tab, location, history_target));
+            }
+        }
+        transition
+    }
+    fn set_action_shortcuts(&mut self, action: crate::ActionId, shortcuts: Vec<crate::Shortcut>) -> Transition {
+        if !self.settings_interaction_available {
+            return Transition::default();
+        }
+        match self.settings.set_shortcuts(action, shortcuts) {
+            Ok(true) => Transition { outputs: vec![], work: self.save_settings().into_iter().collect() },
+            Ok(false) => Transition::default(),
+            Err(reason) => Transition::output(Output::ShortcutEditRejected { action, reason }),
+        }
+    }
+    fn restore_action_shortcuts(&mut self, action: crate::ActionId) -> Transition {
+        if !self.settings_interaction_available {
+            return Transition::default();
+        }
+        match self.settings.restore_shortcuts(action) {
+            Ok(true) => Transition { outputs: vec![], work: self.save_settings().into_iter().collect() },
+            Ok(false) => Transition::default(),
+            Err(reason) => Transition::output(Output::ShortcutEditRejected { action, reason }),
+        }
+    }
     fn update_window_layout(&mut self, layout: WindowLayout) -> Transition {
         if !layout.valid() {
             return Transition::default();
@@ -1093,6 +1198,7 @@ impl Workspace {
         transition
     }
     fn reset_workspace(&mut self) -> Transition {
+        self.visibility_retries.clear();
         let cancelled = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|browser| self.browser(browser).tabs.iter().filter_map(move |tab| tab.pending.as_ref().map(|pending| WorkRequest::Cancel { browser, tab: tab.id, token: pending.token }))).collect::<Vec<_>>();
         let left = TabId::new(self.next_tab);
         self.next_tab += 1;
@@ -1405,6 +1511,8 @@ impl Workspace {
         state.folder_items = Some(FolderItems { location: pending.location.clone(), entries: Arc::clone(&entries) });
         state.error = None;
         state.restoring = false;
+        state.visibility_cleared = false;
+        state.visibility_recheck = false;
         let visit = visit.state();
         let location = pending.location.clone();
         let dirty = pending.dirty;
@@ -1424,11 +1532,14 @@ impl Workspace {
         }
         let location = pending.location.clone();
         let dirty = pending.dirty;
+        if kind == ListingErrorKind::Busy && pending.retry_on_busy {
+            self.visibility_retries.insert((browser, tab), (location.clone(), pending.history_target));
+        }
         let error = ListingError::new(pending.location, kind);
         let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
         state.error = Some(error.clone());
         let mut transition = Transition { outputs: vec![Output::FolderItemsFailed { browser, tab, error }], work: vec![WorkRequest::WatchReadCompleted { location: location.clone(), succeeded: false }] };
-        if dirty && self.tab(browser, tab).and_then(TabState::requested_location).as_ref() == Some(&location) {
+        if dirty && kind != ListingErrorKind::Busy && self.tab(browser, tab).and_then(TabState::requested_location).as_ref() == Some(&location) {
             transition.append(self.start_read(browser, tab, location, None));
         }
         transition
@@ -1444,16 +1555,17 @@ impl Workspace {
         })
     }
     fn take_pending(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken) -> Option<PendingRead> {
-        self.tab_mut(browser, tab)?.pending.take_if(|pending| pending.token == token)
+        let generation = self.visibility_generation;
+        self.tab_mut(browser, tab)?.pending.take_if(|pending| pending.token == token && pending.visibility_generation == generation)
     }
     fn tab_view(&self, browser: BrowserSide, id: TabId) -> Output {
         let tab = self.tab(browser, id).expect("tab view needs a live tab");
         let entries = tab.folder_items.as_ref().map_or_else(|| Arc::from([]), |items| Arc::clone(&items.entries));
-        let location = tab.folder_items.as_ref().map(|items| items.location.clone());
+        let location = tab.folder_items.as_ref().map(|items| items.location.clone()).or_else(|| (tab.visibility_cleared || tab.error.is_some()).then_some(tab.requested.clone()).flatten());
         let visit = tab.history.current().map(Visit::state);
-        let selection = visit.map_or_else(Selection::default, |visit| visit.selection().clone());
-        let row = visit.and_then(|visit| visit.cursor_row(&entries));
-        Output::TabViewChanged { browser, tab: id, location, selection, row, scroll_hint: visit.and_then(|visit| visit.scroll().cloned()), entries, loading: tab.pending.is_some(), error: tab.error.clone() }
+        let selection = if tab.folder_items.is_some() { visit.map_or_else(Selection::default, |visit| visit.selection().clone()) } else { Selection::default() };
+        let row = if tab.folder_items.is_some() { visit.and_then(|visit| visit.cursor_row(&entries)) } else { None };
+        Output::TabViewChanged { browser, tab: id, location, selection, row, scroll_hint: if tab.folder_items.is_some() { visit.and_then(|visit| visit.scroll().cloned()) } else { None }, entries, loading: tab.pending.is_some(), error: tab.error.clone() }
     }
 }
 impl BrowserState {
@@ -1463,10 +1575,10 @@ impl BrowserState {
 }
 impl TabState {
     fn new(id: TabId) -> Self {
-        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: None, restoring: false }
+        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: None, restoring: false, visibility_cleared: false, visibility_recheck: false }
     }
     fn requested(id: TabId, location: Location) -> Self {
-        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: Some(location), restoring: true }
+        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: Some(location), restoring: true, visibility_cleared: false, visibility_recheck: false }
     }
     fn requested_location(&self) -> Option<Location> {
         self.folder_items.as_ref().map(|items| items.location.clone()).or_else(|| self.requested.clone())
