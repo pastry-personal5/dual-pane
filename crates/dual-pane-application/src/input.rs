@@ -1,11 +1,18 @@
 use std::sync::Arc;
 
-use crate::{ActionId, ByteProgress, CleanupResult, FavoriteProbeOutcome, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, VisibilityPolicy, WindowLayout};
+use crate::{ActionId, ByteProgress, CleanupResult, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, VisibilityPolicy, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
     Command(Command),
+    /// A gesture on visible rows or selection, stamped by the showing view.
+    ObservedCommand {
+        command: Command,
+        browser: BrowserSide,
+        tab: TabId,
+        visible_revision: u64,
+    },
     Event(Event),
 }
 
@@ -15,6 +22,11 @@ pub enum Input {
 /// Browser's active tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    SetFilterText {
+        browser: BrowserSide,
+        tab: TabId,
+        text: String,
+    },
     StartOperation {
         browser: BrowserSide,
         tab: TabId,
@@ -180,6 +192,7 @@ pub enum Command {
     UpdateScrollHint {
         browser: BrowserSide,
         tab: TabId,
+        row: Option<usize>,
         scroll: Option<ScrollAnchor>,
     },
     SelectRange {
@@ -228,6 +241,17 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// Commands whose meaning depends on the rows or selection currently
+    /// shown by a Browser must carry an observed visible revision.
+    pub fn visible_target(&self) -> Option<(BrowserSide, TabId)> {
+        match self {
+            Self::StartOperation { browser, tab, .. } | Self::RequestNameEditor { browser, tab, .. } | Self::SelectEntry { browser, tab, .. } | Self::ToggleEntry { browser, tab, .. } | Self::SelectRange { browser, tab, .. } | Self::MoveSelection { browser, tab, .. } | Self::SecondarySelect { browser, tab, .. } | Self::SelectAll { browser, tab } | Self::ClearSelection { browser, tab } | Self::OpenEntry { browser, tab, .. } | Self::ShowPackageContents { browser, tab, .. } | Self::UpdateScrollHint { browser, tab, .. } => Some((*browser, *tab)),
+            _ => None,
+        }
+    }
+}
+
 /// Externally observed facts, usually the results of work requests.
 ///
 /// In `FolderItemsLoaded`, `changes` turns the request's `previous` Folder
@@ -246,6 +270,10 @@ pub enum Command {
 /// sweep of temporaries left by earlier launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    FilterProjected {
+        request: FilterRequest,
+        result: Result<FilterResult, FilterFailure>,
+    },
     PreviewFinished {
         request: PreviewRequest,
         result: PreviewResult,

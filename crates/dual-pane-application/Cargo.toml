@@ -7,6 +7,8 @@ description = "Workspace state and use cases for Dual Pane"
 
 [dependencies]
 dual-pane-domain.workspace = true
+caseless.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

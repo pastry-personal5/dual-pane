@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 fn controller_uses_exact_row_identity() {
     let entry = Entry::new(EntryName::new("docs").unwrap(), EntryKind::Directory);
     let mut presenter = BrowserPresenter::new(BrowserSide::Left);
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::from(vec![entry.clone()]), changes: None, scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::from(vec![entry.clone()]), changes: None, scroll_hint: None, visible_revision: 0 });
     assert_eq!(InputController::new().command(BrowserSide::Left, UiEvent::ActivateRow { row: 0 }, presenter.view()), Some(Command::OpenEntry { browser: BrowserSide::Left, tab: TabId::new(0), row: 0, name: entry.name().clone() }));
 }
 
@@ -20,8 +20,8 @@ fn inactive_tab_result_does_not_replace_the_visible_listing() {
     let second = TabId::new(2);
     let shown = Entry::new(EntryName::new("shown").unwrap(), EntryKind::File);
     let hidden = Entry::new(EntryName::new("hidden").unwrap(), EntryKind::File);
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::from(vec![shown]), selection: Default::default(), row: None, scroll_hint: Some(ScrollAnchor::new(EntryName::new("shown").unwrap(), 7)), loading: false, error: None });
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: second, location: Location::root(), entries: Arc::from(vec![hidden]), changes: None, scroll_hint: Some(ScrollAnchor::new(EntryName::new("hidden").unwrap(), 9)) });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::from(vec![shown]), selection: Default::default(), row: None, scroll_hint: Some(ScrollAnchor::new(EntryName::new("shown").unwrap(), 7)), loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: second, location: Location::root(), entries: Arc::from(vec![hidden]), changes: None, scroll_hint: Some(ScrollAnchor::new(EntryName::new("hidden").unwrap(), 9)), visible_revision: 0 });
     assert_eq!(presenter.view().row(0).unwrap().name, "shown");
     assert_eq!(presenter.view().scroll_hint(), Some(&ScrollAnchor::new(EntryName::new("shown").unwrap(), 7)));
 }
@@ -32,12 +32,12 @@ fn files(names: &[&str]) -> Arc<[Entry]> {
 
 /// Applies one same-folder reload of `tab` the way the workspace reports it.
 fn reload(presenter: &mut BrowserPresenter, tab: TabId, change: Option<RowChange>, names: &[&str]) {
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab, location: Location::root(), entries: files(names), changes: Some(change.into_iter().collect()), scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab, location: Location::root(), entries: files(names), changes: Some(change.into_iter().collect()), scroll_hint: None, visible_revision: 0 });
 }
 
 fn shown(names: &[&str]) -> BrowserPresenter {
     let mut presenter = BrowserPresenter::new(BrowserSide::Left);
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: TabId::new(0), location: Some(Location::root()), entries: files(names), selection: Default::default(), row: None, scroll_hint: None, loading: false, error: None });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: TabId::new(0), location: Some(Location::root()), entries: files(names), selection: Default::default(), row: None, scroll_hint: None, loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
     presenter
 }
 
@@ -70,14 +70,14 @@ fn an_unchanged_listing_repaints_relative_dates_after_time_advances() {
     let dated = Entry::with_metadata(EntryName::new("dated").unwrap(), EntryKind::File, EntryMetadata::new(Some(1_000_000_000 - 3_600), None));
     let missing = Entry::new(EntryName::new("missing").unwrap(), EntryKind::File);
     let entries: Arc<[Entry]> = Arc::from([dated, missing]);
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::clone(&entries), changes: None, scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: Arc::clone(&entries), changes: None, scroll_hint: None, visible_revision: 0 });
     let before = presenter.view().clone();
     assert_eq!(before.relative_age_position(0), Some(0.0));
     assert_eq!(before.relative_age_position(1), None);
     assert_eq!(before.cell_text(0, FolderItemsColumn::RelativeDate).as_deref(), Some("1 h"));
 
     now.fetch_add(86_400 - 3_600, Ordering::Relaxed);
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries, changes: Some(vec![]), scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries, changes: Some(vec![]), scroll_hint: None, visible_revision: 0 });
     let after = presenter.view();
     assert_eq!(after.update_from(&before), FolderItemsUpdate::Unchanged);
     assert!(after.relative_dates_changed_from(&before));
@@ -95,21 +95,21 @@ fn a_tab_switch_keeps_the_listings_captured_time() {
     let second = TabId::new(2);
     let dated = Entry::with_metadata(EntryName::new("dated").unwrap(), EntryKind::File, EntryMetadata::new(Some(1_000_000_000 - 3_600), None));
     let entries: Arc<[Entry]> = Arc::from([dated]);
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::clone(&entries), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, location: Location::root(), entries: Arc::clone(&entries), changes: Some(vec![]), scroll_hint: None });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::clone(&entries), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, location: Location::root(), entries: Arc::clone(&entries), changes: Some(vec![]), scroll_hint: None, visible_revision: 0 });
     assert_eq!(presenter.view().relative_age_position(0), Some(0.0));
 
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: second, location: Some(Location::root()), entries: Arc::from([]), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: second, location: Some(Location::root()), entries: Arc::from([]), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
     now.fetch_add(86_400, Ordering::Relaxed);
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::clone(&entries), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries: Arc::clone(&entries), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
     assert_eq!(presenter.view().relative_age_position(0), Some(0.0));
     assert_eq!(presenter.view().cell_text(0, FolderItemsColumn::RelativeDate).as_deref(), Some("1 h"));
 
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: second, location: Some(Location::root()), entries: Arc::from([]), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: second, location: Some(Location::root()), entries: Arc::from([]), selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
     now.fetch_add(86_400, Ordering::Relaxed);
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, location: Location::root(), entries: Arc::clone(&entries), changes: Some(vec![]), scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, location: Location::root(), entries: Arc::clone(&entries), changes: Some(vec![]), scroll_hint: None, visible_revision: 0 });
     now.fetch_add(86_400, Ordering::Relaxed);
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries, selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: first, location: Some(Location::root()), entries, selection: Selection::default(), row: None, scroll_hint: None, loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
     assert_eq!(presenter.view().cell_text(0, FolderItemsColumn::RelativeDate).as_deref(), Some("2 d"));
 }
 
@@ -117,7 +117,7 @@ fn a_tab_switch_keeps_the_listings_captured_time() {
 fn a_tab_switch_or_inconsistent_change_resets() {
     let mut presenter = shown(&["a", "b"]);
     let before = presenter.view().clone();
-    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: TabId::new(1), location: Some(Location::root()), entries: files(&["a", "b"]), selection: Default::default(), row: None, scroll_hint: None, loading: false, error: None });
+    presenter.apply(&Output::TabViewChanged { browser: BrowserSide::Left, tab: TabId::new(1), location: Some(Location::root()), entries: files(&["a", "b"]), selection: Default::default(), row: None, scroll_hint: None, loading: false, error: None, filter_text: String::new(), filter_status: dual_pane_application::FilterStatus::Ready, total_count: 0, visible_revision: 0 });
     assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
 
     let mut presenter = shown(&["a", "b"]);
@@ -130,12 +130,12 @@ fn a_tab_switch_or_inconsistent_change_resets() {
 fn a_listing_without_a_row_change_resets() {
     let mut presenter = shown(&["a", "b", "c"]);
     let before = presenter.view().clone();
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root().join(&EntryName::new("b").unwrap()), entries: files(&["x", "y"]), changes: None, scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root().join(&EntryName::new("b").unwrap()), entries: files(&["x", "y"]), changes: None, scroll_hint: None, visible_revision: 0 });
     assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
 
     let mut presenter = BrowserPresenter::new(BrowserSide::Left);
     let before = presenter.view().clone();
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: files(&["x", "y"]), changes: None, scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: Location::root(), entries: files(&["x", "y"]), changes: None, scroll_hint: None, visible_revision: 0 });
     assert_eq!(presenter.view().update_from(&before), FolderItemsUpdate::Reset);
 }
 
@@ -208,6 +208,6 @@ fn the_folder_name_is_the_last_location_component() {
     assert_eq!(shown(&[]).view().folder_name(), "/");
     let mut presenter = BrowserPresenter::new(BrowserSide::Left);
     let nested = Location::root().join(&EntryName::new("parent").unwrap()).join(&EntryName::new("child").unwrap());
-    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: nested, entries: files(&[]), changes: None, scroll_hint: None });
+    presenter.apply(&Output::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), location: nested, entries: files(&[]), changes: None, scroll_hint: None, visible_revision: 0 });
     assert_eq!(presenter.view().folder_name(), "child");
 }

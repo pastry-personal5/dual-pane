@@ -4,6 +4,7 @@
 //! the workspace, and returns application outputs and work requests. It never
 //! performs I/O, starts threads, sorts or diffs listings, or waits.
 
+mod filter;
 mod input;
 mod operations;
 mod output;
@@ -13,6 +14,7 @@ mod settings;
 mod work_request;
 mod workspace;
 
+pub use filter::{FilterFailure, FilterRequest, FilterResult, FilterStatus, project_filter};
 pub use input::{Command, Event, Input, ResolvedTarget};
 pub use operations::{ByteProgress, CleanupResult, FinalizeResult, NameProblem, OperationEffect, OperationErrorKind, OperationFailure, OperationJob, OperationOutcome, OperationProgress, OperationStatus, PendingDecision, PlannedItem, ScanFailure, ScanSkip, StepResult};
 pub use output::{Output, RowChange, listing_changes};

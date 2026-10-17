@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{BrowserChrome, MonitoringStatus, Output, PreviewView, RowChange};
+use dual_pane_application::{BrowserChrome, FilterStatus, MonitoringStatus, Output, PreviewView, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
@@ -43,6 +43,10 @@ pub struct BrowserViewModel {
     editor: Option<EditorRequest>,
     editor_revision: u64,
     entries: Arc<[Entry]>,
+    filter_text: String,
+    filter_status: FilterStatus,
+    total_count: usize,
+    visible_revision: u64,
     selection: Selection,
     cursor_row: Option<usize>,
     selection_revision: u64,
@@ -65,7 +69,7 @@ pub struct BrowserViewModel {
 
 impl Default for BrowserViewModel {
     fn default() -> Self {
-        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), selection: Selection::default(), cursor_row: None, selection_revision: 0, preview: PreviewView::Collapsed, preview_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
+        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), filter_text: String::new(), filter_status: FilterStatus::Ready, total_count: 0, visible_revision: 0, selection: Selection::default(), cursor_row: None, selection_revision: 0, preview: PreviewView::Collapsed, preview_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
     }
 }
 
@@ -240,6 +244,21 @@ impl BrowserViewModel {
 
     pub fn row_count(&self) -> usize {
         self.entries.len()
+    }
+    pub fn filter_text(&self) -> &str {
+        &self.filter_text
+    }
+    pub fn filter_status(&self) -> FilterStatus {
+        self.filter_status
+    }
+    pub fn total_count(&self) -> usize {
+        self.total_count
+    }
+    pub fn no_matches(&self) -> bool {
+        !self.filter_text.is_empty() && self.filter_status == FilterStatus::Ready && self.entries.is_empty() && self.total_count > 0
+    }
+    pub fn visible_revision(&self) -> u64 {
+        self.visible_revision
     }
 
     pub fn selection(&self) -> &Selection {
@@ -432,6 +451,10 @@ impl BrowserViewModel {
             "Loading…".to_owned()
         } else if let Some(error) = &self.error {
             error.clone()
+        } else if self.filter_status == FilterStatus::Updating {
+            "Updating filter…".to_owned()
+        } else if self.filter_status == FilterStatus::Failed {
+            "Filter unavailable — edit the text to retry.".to_owned()
         } else {
             match self.monitoring {
                 Some(MonitoringStatus::Periodic) => "Checking for changes periodically".to_owned(),
@@ -446,14 +469,13 @@ impl BrowserViewModel {
             self.summary = Summary::default();
             return;
         }
-        let count = item_count(self.entries.len());
+        let count = if self.filter_text.is_empty() { item_count(self.entries.len()) } else { format!("{} of {} Items", self.entries.len(), self.total_count) };
         let total = total_size(self.entries.iter());
-        self.summary = match self.selection.entries().len() {
+        let names = self.selection.entries().iter().collect::<HashSet<_>>();
+        let selected = self.entries.iter().filter(|entry| names.contains(entry.name())).count();
+        self.summary = match selected {
             0 => Summary { count, selected: "0 selected".to_owned(), size: total },
-            selected => {
-                let names = self.selection.entries().iter().collect::<HashSet<_>>();
-                Summary { count, selected: format!("{selected} selected"), size: format!("{} / {total}", total_size(self.entries.iter().filter(|entry| names.contains(entry.name())))) }
-            }
+            selected => Summary { count, selected: format!("{selected} selected"), size: format!("{} / {total}", total_size(self.entries.iter().filter(|entry| names.contains(entry.name())))) },
         };
     }
 
@@ -547,7 +569,7 @@ impl BrowserPresenter {
 
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
-            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
+            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
             Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
@@ -564,7 +586,7 @@ impl BrowserPresenter {
         };
         match output {
             Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => self.view.active_tab = Some(*tab),
-            Output::LoadingStarted { tab, .. } | Output::FolderItemsLoaded { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
+            Output::LoadingStarted { tab, .. } | Output::FolderItemsLoaded { tab, .. } | Output::VisibleItemsChanged { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
                 if self.view.active_tab.is_some_and(|active| active != *tab) {
                     return;
                 }
@@ -590,10 +612,14 @@ impl BrowserPresenter {
                 view.editor = Some(EditorRequest { command: *command, row, text: target.as_ref().map(|target| target.to_text_lossy().into_owned()).unwrap_or_default() });
                 view.editor_revision = view.editor_revision.wrapping_add(1);
             }
-            Output::TabViewChanged { tab, location, entries, selection, row, scroll_hint, loading, error, .. } => {
+            Output::TabViewChanged { tab, location, entries, selection, row, scroll_hint, loading, error, filter_text, filter_status, total_count, visible_revision, .. } => {
                 view.location.clone_from(location);
                 view.location_text = location.as_ref().map_or_else(String::new, location_text);
                 view.entries = Arc::clone(entries);
+                view.filter_text.clone_from(filter_text);
+                view.filter_status = *filter_status;
+                view.total_count = *total_count;
+                view.visible_revision = *visible_revision;
                 view.selection = selection.clone();
                 view.cursor_row = *row;
                 view.selection_revision = view.selection_revision.wrapping_add(1);
@@ -612,10 +638,14 @@ impl BrowserPresenter {
                 view.error = None;
                 view.base_status = "Loading…".to_owned();
             }
-            Output::FolderItemsLoaded { location, entries, changes, scroll_hint, .. } => {
+            Output::FolderItemsLoaded { location, entries, changes, scroll_hint, visible_revision, .. } => {
                 view.location = Some(location.clone());
                 view.location_text = location_text(location);
                 view.entries = Arc::clone(entries);
+                view.filter_text.clear();
+                view.filter_status = FilterStatus::Ready;
+                view.total_count = entries.len();
+                view.visible_revision = *visible_revision;
                 view.scroll_hint = scroll_hint.clone();
                 view.loading = false;
                 view.error = None;
@@ -624,6 +654,26 @@ impl BrowserPresenter {
                 view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
                 view.folder_items_delta = changes.clone();
                 view.listed_at = loaded_at.unwrap_or_else(|| (self.clock)());
+                view.refresh_summary();
+            }
+            Output::VisibleItemsChanged { location, entries, selection, row, scroll_hint, filter_text, filter_status, total_count, visible_revision, loading, error, .. } => {
+                view.location = Some(location.clone());
+                view.location_text = location_text(location);
+                view.entries = Arc::clone(entries);
+                view.selection = selection.clone();
+                view.cursor_row = *row;
+                view.scroll_hint = scroll_hint.clone();
+                view.filter_text.clone_from(filter_text);
+                view.filter_status = *filter_status;
+                view.total_count = *total_count;
+                view.visible_revision = *visible_revision;
+                view.loading = *loading;
+                view.error = error.as_ref().map(error_message);
+                view.base_status = if *loading { "Loading…".to_owned() } else { view.error.clone().unwrap_or_else(|| view.location_text.clone()) };
+                view.missing_folder = error.as_ref().is_some_and(|error| error.location() == location && is_missing(error.kind()));
+                view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
+                view.folder_items_delta = None;
+                view.selection_revision = view.selection_revision.wrapping_add(1);
                 view.refresh_summary();
             }
             Output::SelectionChanged { selection, row, .. } => {

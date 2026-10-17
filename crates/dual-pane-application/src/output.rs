@@ -1,4 +1,4 @@
-use crate::{ActionId, FavoriteEdit, FavoriteRejection, FavoritesRecords, Notice, OperationJob, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
+use crate::{ActionId, FavoriteEdit, FavoriteRejection, FavoritesRecords, FilterStatus, Notice, OperationJob, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, OperationCommand, OperationId, OperationRejection, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
@@ -86,6 +86,10 @@ pub enum Output {
         scroll_hint: Option<ScrollAnchor>,
         loading: bool,
         error: Option<ListingError>,
+        filter_text: String,
+        filter_status: FilterStatus,
+        total_count: usize,
+        visible_revision: u64,
     },
     LoadingStarted {
         browser: BrowserSide,
@@ -99,6 +103,22 @@ pub enum Output {
         entries: Arc<[Entry]>,
         changes: Option<Vec<RowChange>>,
         scroll_hint: Option<ScrollAnchor>,
+        visible_revision: u64,
+    },
+    VisibleItemsChanged {
+        browser: BrowserSide,
+        tab: TabId,
+        location: Location,
+        entries: Arc<[Entry]>,
+        selection: Selection,
+        row: Option<usize>,
+        scroll_hint: Option<ScrollAnchor>,
+        filter_text: String,
+        filter_status: FilterStatus,
+        total_count: usize,
+        visible_revision: u64,
+        loading: bool,
+        error: Option<ListingError>,
     },
     SelectionChanged {
         browser: BrowserSide,

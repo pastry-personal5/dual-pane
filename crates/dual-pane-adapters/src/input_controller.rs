@@ -177,7 +177,7 @@ impl InputController {
             UiEvent::CloseTab { tab } => Some(Command::CloseTab { browser, tab }),
             UiEvent::ReorderTab { tab, position } => Some(Command::ReorderTab { browser, tab, position }),
             UiEvent::Sort(sort) => Some(Command::SetSort { browser, tab: tab?, location: view.location()?.clone(), sort }),
-            UiEvent::Scrolled { row, offset } => Some(Command::UpdateScrollHint { browser, tab: tab?, scroll: row.and_then(|row| view.entry(row)).map(|entry| ScrollAnchor::new(entry.name().clone(), offset)) }),
+            UiEvent::Scrolled { row, offset } => Some(Command::UpdateScrollHint { browser, tab: tab?, row, scroll: row.and_then(|row| view.entry(row)).map(|entry| ScrollAnchor::new(entry.name().clone(), offset)) }),
             UiEvent::FileCommand(command) => {
                 let tab = tab?;
                 let kind = match command {

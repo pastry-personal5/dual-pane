@@ -50,6 +50,7 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Back Button | `back_button` |
 | Forward Button | `forward_button` |
 | Path Edit Control | `path_edit_control` |
+| Folder Items Filter Control | `folder_items_filter_control` |
 | Folder Pane | `folder_pane` |
 | Folder Pane Toolbar Row #1 | `folder_pane_toolbar_row_1` |
 | Folder Pane Toolbar Row #2 | `folder_pane_toolbar_row_2` |
@@ -122,6 +123,11 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Move to Trash | `MoveToTrash` | Catalogued; current command |
 | Delete Permanently | `DeletePermanently` | Catalogued; current command |
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
+| Focus Folder Items Filter | `FocusFolderItemsFilter` | Planned ID; `Command+F` default |
+| Copy Items | `CopyItems` | Planned ID; `Command+C` default with Folder Items List focus |
+| Cut Items | `CutItems` | Planned ID; `Command+X` default with Folder Items List focus |
+| Paste Items | `PasteItems` | Planned ID; `Command+V` default with Folder Items List focus |
+| Edit Path | `EditPath` | Planned ID; `Command+L` default |
 
 ## Phase 3 rendered components
 

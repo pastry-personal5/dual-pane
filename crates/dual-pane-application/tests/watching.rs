@@ -135,7 +135,7 @@ fn missing_location_can_return_without_losing_matching_visit_state() {
     let (tab, token) = read(&opened.work, BrowserSide::Left, &folder);
     load(&mut workspace, BrowserSide::Left, tab, token, &["a", "b"]);
     workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab, row: 1, name: name("b") }.into());
-    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab, scroll: Some(ScrollAnchor::new(name("b"), 6)) }.into());
+    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab, row: Some(1), scroll: Some(ScrollAnchor::new(name("b"), 6)) }.into());
 
     let invalidated = workspace.handle(Event::WatchedLocationInvalidated { location: folder.clone(), generation: watch }.into());
     let (_, failed_token) = read(&invalidated.work, BrowserSide::Left, &folder);

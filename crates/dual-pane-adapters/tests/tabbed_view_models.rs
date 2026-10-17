@@ -296,7 +296,7 @@ fn scrolling_records_an_anchor_for_the_active_tab() {
     session.show(BrowserSide::Left, path(&["work"]), (0..4).map(|index| file(&format!("item-{index}"), None, None)).collect());
     let command = session.controller.command(BrowserSide::Left, UiEvent::Scrolled { row: Some(2), offset: 5 }, session.left.view());
     let tab = session.left.view().active_tab().unwrap();
-    assert_eq!(command, Some(Command::UpdateScrollHint { browser: BrowserSide::Left, tab, scroll: Some(ScrollAnchor::new(name("item-2"), 5)) }));
+    assert_eq!(command, Some(Command::UpdateScrollHint { browser: BrowserSide::Left, tab, row: Some(2), scroll: Some(ScrollAnchor::new(name("item-2"), 5)) }));
     session.ui(BrowserSide::Left, UiEvent::Scrolled { row: Some(2), offset: 5 });
     session.ui(BrowserSide::Left, UiEvent::NewTab);
     session.deliver(BrowserSide::Left, vec![]);

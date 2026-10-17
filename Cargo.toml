@@ -16,3 +16,4 @@ proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 rusqlite = { version = "=0.38.0", default-features = false }
 tempfile = "=3.27.0"
 unicode-normalization = "=0.1.25"
+caseless = "=0.2.2"

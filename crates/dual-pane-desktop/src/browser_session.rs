@@ -233,7 +233,8 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                 None => return Ok(None),
             },
         };
-        let outputs = self.handle_all(command.into());
+        let input = if let Some((_, tab)) = command.visible_target() { Input::ObservedCommand { command, browser, tab, visible_revision: self.view(browser).visible_revision() } } else { command.into() };
+        let outputs = self.handle_all(input);
         for output in &outputs {
             match output {
                 Output::OperationChanged { job } if Some(job.id()) != previous => return Ok(Some(job.id())),
@@ -292,7 +293,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     pub fn submit_ui(&mut self, browser: BrowserSide, event: UiEvent) {
         self.submit(Command::ActivateBrowser { browser });
         if let Some(command) = self.controller.command(browser, event, self.view(browser)) {
-            self.submit(command);
+            self.submit_visible_command(browser, command);
         }
     }
 
@@ -300,6 +301,15 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     /// without the person acting on it, so it never activates that Browser.
     pub fn submit_view_state(&mut self, browser: BrowserSide, event: UiEvent) {
         if let Some(command) = self.controller.command(browser, event, self.view(browser)) {
+            self.submit_visible_command(browser, command);
+        }
+    }
+
+    fn submit_visible_command(&mut self, browser: BrowserSide, command: Command) {
+        if let Some((_, tab)) = command.visible_target() {
+            let visible_revision = self.view(browser).visible_revision();
+            self.submit(Input::ObservedCommand { command, browser, tab, visible_revision });
+        } else {
             self.submit(command);
         }
     }

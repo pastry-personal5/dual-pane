@@ -7,8 +7,8 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{Event, FavoriteProbeOutcome, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes};
-use dual_pane_domain::{BrowserSide, Entry, ListingErrorKind, Location, OperationId, RequestToken, SortSpec, TabId};
+use dual_pane_application::{Event, FavoriteProbeOutcome, FilterFailure, FilterRequest, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes, project_filter};
+use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, ListingErrorKind, Location, OperationId, RequestToken, SortSpec, TabId};
 
 use crate::location_probe::resolve_item;
 use crate::location_watcher::WatcherHandle;
@@ -50,6 +50,7 @@ pub struct Runtime {
     preview_jobs: [SyncSender<PreviewJob>; 2],
     preview_pending: [Option<PreviewJob>; 2],
     preview_outstanding: HashMap<(BrowserSide, u64), Arc<AtomicBool>>,
+    filter_lanes: Option<[FilterLane; 2]>,
     /// Reads per Browser that may be queued, running, or awaiting delivery.
     read_capacity: usize,
     delivery: Delivery,
@@ -75,6 +76,80 @@ struct Job {
 struct PreviewJob {
     request: PreviewRequest,
     cancelled: Arc<AtomicBool>,
+}
+
+struct FilterLane {
+    queue: Arc<(Mutex<FilterQueue>, Condvar)>,
+}
+
+#[derive(Default)]
+struct FilterQueue {
+    pending: VecDeque<FilterRequest>,
+    latest: HashMap<TabId, u64>,
+    closed: bool,
+}
+
+impl FilterLane {
+    fn start(browser: BrowserSide, delivery: Delivery) -> io::Result<Self> {
+        let queue = Arc::new((Mutex::new(FilterQueue::default()), Condvar::new()));
+        let worker_queue = Arc::clone(&queue);
+        thread::Builder::new().name(format!("filter-worker-{browser:?}")).spawn(move || {
+            loop {
+                let request = {
+                    let (lock, ready) = &*worker_queue;
+                    let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    while state.pending.is_empty() && !state.closed {
+                        state = ready.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
+                    if state.closed {
+                        break;
+                    }
+                    state.pending.pop_front()
+                };
+                let Some(request) = request else { continue };
+                let result = panic::catch_unwind(AssertUnwindSafe(|| project_filter(&request))).map_err(|_| FilterFailure::WorkerUnavailable);
+                let current = {
+                    let (lock, _) = &*worker_queue;
+                    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).latest.get(&request.tab).copied() == Some(request.generation)
+                };
+                if current {
+                    deliver_event(&delivery, Event::FilterProjected { request, result });
+                }
+            }
+        })?;
+        Ok(Self { queue })
+    }
+
+    fn enqueue(&self, request: FilterRequest) -> bool {
+        let (lock, ready) = &*self.queue;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.closed {
+            return false;
+        }
+        state.pending.retain(|pending| pending.tab != request.tab);
+        if state.pending.len() >= BrowserTabs::LIMIT {
+            return false;
+        }
+        state.latest.insert(request.tab, request.generation);
+        state.pending.push_back(request);
+        ready.notify_one();
+        true
+    }
+
+    fn cancel(&self, tab: TabId) {
+        let (lock, _) = &*self.queue;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.pending.retain(|pending| pending.tab != tab);
+        state.latest.remove(&tab);
+    }
+}
+
+impl Drop for FilterLane {
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).closed = true;
+        ready.notify_all();
+    }
 }
 
 const PENDING_PREVIEW_CAPACITY: usize = 1;
@@ -260,7 +335,8 @@ impl Runtime {
             preview_senders.push(sender);
         }
         let preview_jobs: [SyncSender<PreviewJob>; 2] = preview_senders.try_into().map_err(|_| io::Error::from(io::ErrorKind::Other))?;
-        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
+        let filter_lanes = Some([FilterLane::start(BrowserSide::Left, delivery.clone())?, FilterLane::start(BrowserSide::Right, delivery.clone())?]);
+        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes, read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
     }
 
     /// Starts the file-operation lane, which reports through this runtime.
@@ -323,6 +399,16 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
+            WorkRequest::ProjectFilter { request } => {
+                let index = preview_index(request.browser);
+                if self.filter_lanes.as_ref().is_some_and(|lanes| lanes[index].enqueue(request.clone())) { None } else { Some(Event::FilterProjected { request, result: Err(FilterFailure::WorkerUnavailable) }) }
+            }
+            WorkRequest::CancelFilter { browser, tab } => {
+                if let Some(lanes) = &self.filter_lanes {
+                    lanes[preview_index(browser)].cancel(tab);
+                }
+                None
+            }
             WorkRequest::ReadPreview { request } => {
                 let browser = request.browser;
                 let token = request.token;
@@ -599,7 +685,7 @@ fn wake(delivery: &Delivery) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::PreviewFinished { .. } | Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
+        Event::FilterProjected { .. } | Event::PreviewFinished { .. } | Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
@@ -738,6 +824,15 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn filter_projection_runs_on_the_bounded_worker_lane() {
+        let (mut runner, wakes) = runtime(source_factory(|_, _| None));
+        let request = FilterRequest { browser: BrowserSide::Left, tab: TabId::new(7), listing: RequestToken::first(), visibility_generation: 0, generation: 1, text: "STRASSE".into(), entries: vec![Entry::new(EntryName::new("Straße").unwrap(), dual_pane_domain::EntryKind::File), Entry::new(EntryName::new("other").unwrap(), dual_pane_domain::EntryKind::File)].into() };
+        assert!(runner.dispatch(WorkRequest::ProjectFilter { request: request.clone() }).is_none());
+        let events = wait(&mut runner, &wakes);
+        assert!(events.iter().any(|event| matches!(event, Event::FilterProjected { request: completed, result: Ok(result) } if completed == &request && result.indices.as_ref() == [0])));
     }
 
     struct Probe {
@@ -1123,7 +1218,7 @@ mod tests {
         let (_event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
         let delivery = Delivery { events: mpsc::channel().0, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
-        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], preview_pending: [None, None], preview_outstanding: HashMap::new(), read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
+        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes: None, read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
 
         assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());

@@ -1,0 +1,39 @@
+# P4-M1 architecture
+
+Status: Done
+
+This milestone records interface decisions and implementation boundaries without changing code. The [overview checklist](milestone-01-overview.md#completion-checklist) defines acceptance.
+
+## Ownership and handoff
+
+Trace each gesture from Qt through the controller to a Qt-free `Workspace::handle` transition and its output. A state-only action may produce no work request. Filtering is application-owned tab state; the desktop renders and focuses the control. Clipboard and drag payloads enter through a desktop adapter, but source and destination validation and transfer intent belong to the application. The existing operation workflow remains the only path to file mutation. A typed path-entry or visual-target command feeds ordinary tab navigation and history; filesystem validation and folder-option enumeration run on workers.
+
+The macOS clipboard carries Dual Pane's private transfer intent for internal Paste. File Copy also publishes a Finder-compatible file representation so Paste in Finder can copy the selected Items; that external Paste is performed by Finder and never becomes a Dual Pane operation. The adapter also reads file references copied in Finder for Paste into Dual Pane, which submits a Copy through the existing operation workflow and leaves Finder's sources in place. Cut does not export a promised move to Finder. The adapter must distinguish private intent from external file references and reject unsupported, malformed, or replaced contents. A drag is supported only when its source and destination are inside Dual Pane. Neither UI text nor an unverified path is sufficient source identity. The [file-operation safeguards](../product-behavior.md#file-operation-safeguards) and [data-safety invariants](../architecture.md#44-data-safety-invariants) apply to Dual Pane Paste and drop just as they do to direct commands.
+
+Record which state is transient, tab-local, shared across tabs, or persisted. In particular, distinguish a filter's text, selection and cursor, a clipboard Cut intent, a path-editor draft, expanded-column state, and a running operation. Once an operation starts, later tab, selection, clipboard, or drag changes cannot retarget its frozen source and destination. Worker-side checks still decide whether those paths remain usable; a confirmed folder is not a guarantee that it is still present or writable.
+
+## Policy scenario matrix
+
+This matrix fixes the Phase 4 policy and points to the milestone that must settle the remaining interaction and verification details before implementation. Exercise each row from both Browsers where applicable and include an inactive tab where one can be affected. The feature-milestone checklist will add exact command, feedback, state, and test evidence.
+
+| Scenario | Fixed policy and safety result | Owner milestone |
+|---|---|---|
+| Type, clear, switch tabs, then navigate a filtered tab | Case-insensitive current-folder name substring; tab switch retains text, successful different-folder navigation clears it, and relaunch resets it. The projection never changes the underlying listing or retargets an old row. | P4-M2 matching details; P4-M3 control and focus. |
+| Filtering hides selection or cursor; sort or watcher refresh follows | Hidden Items leave selection and cursor state. A command cannot act on an Item merely because it was selected before hiding. | P4-M2 anchor, scroll, count, and refresh details. |
+| Copy or Cut selected Items, change selection/tab/Browser, then Paste | Cut alone changes no file. Paste uses the active tab's confirmed folder; a started operation freezes exact source Items and destination. Later UI state cannot retarget it. | P4-M4 repeat and preflight; P4-M5 feedback. |
+| Copy selected Items in Dual Pane, quit or relaunch, then Paste in Finder | Copy publishes a Finder-compatible representation of the exact selection—multiple files, folders, packages, and symbolic links included—that remains usable until clipboard replacement. Finder owns the resulting copy; Dual Pane's Copy changes no file and promises no external move. The private internal intent still expires on relaunch. | P4-M5 native Finder verification. |
+| Copy files in Finder, switch to either Browser, then Paste | Paste accepts valid Finder file references as a Copy to the active tab's confirmed folder. Sources stay in place; the selected source set and destination freeze when the operation starts. Multiple files, folders, packages, and symbolic links are included. | P4-M4 external-source validation; P4-M5 native Finder verification. |
+| Replace clipboard contents, paste an unrelated format, or relaunch | Clipboard replacement invalidates the previous transfer. Relaunch invalidates Dual Pane's private intent, while a valid Finder file Copy remains eligible if the clipboard is unchanged. Unsupported or malformed content starts no operation. | P4-M4 state and validation; P4-M5 feedback. |
+| Paste into the source folder or an unavailable destination | Same-folder Paste is rejected with an explanation. A missing or changed destination cannot trigger unchecked self-copy, descendant transfer, or deletion; worker results handle races. | P4-M4 preflight; P4-M5 feedback. |
+| Conflict, permission error, cancel, or partial move during Paste | Existing decisions, verified-before-removal, cleanup, Notice, and refresh apply. A started Cut Paste consumes its intent at any terminal result; retry needs a new Cut. | P4-M4 transition details; P4-M5 presentation. |
+| Submit an absolute, `~/` home-relative, or tab-relative path; then switch tabs | All three forms are accepted. A relative path uses the submitting tab's confirmed folder captured at submission. Escape, focus loss, or tab switch discards an unsubmitted draft; a late read cannot replace a newer navigation or another tab's path. | P4-M6 editor feedback. |
+| Enter a missing, unreadable, non-directory, symlinked, package, or non-UTF-8 path | A failed submission retains typed text with an error and leaves the last successful listing and exact confirmed location intact. | P4-M6 validation and focus. |
+| Click an ancestor, expand/collapse, choose a sibling, or receive stale column options | Only successful navigation updates history; stale options cannot replace a newer view. Selecting a folder collapses the columns. | P4-M8 collapse timing, modes, and feedback. |
+| Drag selection to another Browser, tab, folder row, same folder, or descendant | Browser folder, folder row, and tab targets are supported; tab targets its confirmed folder. Move is default, Option copies. Hovering an inactive tab does not activate it. Only accepted drop creates a frozen intent. | P4-M7 same-folder/descendant and post-drop behavior. |
+| Drag changes source or target before drop, cancels, or supplies an external payload | Hover never mutates files. A stale, cancelled, or external drag cannot mutate files. | P4-M7 rejection feedback. |
+
+M2–M8 must capture success, rejection, stale-result, and cancellation sequences for their entry points, including visible and accessible feedback. Their plans link the fixed M1 rules rather than reproducing divergent versions. Each milestone records any implementation constraint the Qt bridge, macOS clipboard, or operation request contract reveals; a new dependency or build tool still requires separate approval.
+
+## Design choices after owner decisions
+
+M2–M8 choose the private clipboard representation, generation/provenance token, exact native-path transport, view revision identity, worker request shape, and stable action IDs within the accepted product behavior and existing compatibility rules. These are technical design details rather than separate owner decisions unless they change a visible outcome, add a dependency or build tool, or alter an existing architectural boundary. Document the selected design in the relevant feature milestone before implementing it.

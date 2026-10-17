@@ -12,9 +12,27 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [hidden-files-research.md](research/hidden-files-research.md) | Evidence for macOS metadata/service names, dotfiles, platform invisibility, and P3-M15 visibility settings. |
 | [ux-terms.md](ux-terms.md) | Canonical component and action names, code mappings, and naming exemptions. |
 | [ux-information-architecture.md](ux-information-architecture.md) | Standard Layout, Phase 3 containment, and the delivered P3-M14 Settings Window hierarchy. |
-| [ux-gui.md](ux-gui.md) | Interaction rules and delivered Phase 3 GUI behavior, including the Settings page grouping principle and shortcut editing. |
+| [ux-gui.md](ux-gui.md) | Interaction rules, delivered Phase 3 GUI behavior, and accepted Phase 4 planning decisions. |
 | [planned-repository-architecture.md](planned-repository-architecture.md) | Planned workspace tree, crate dependency and ownership rules, and repository naming conventions. |
 | [roadmap.md](roadmap.md) | Every phase, one line each, and the current phase status. |
+| [phase-4/phase-4.md](phase-4/phase-4.md) | Active Phase 4 goal, feature sequence, and exit criteria. |
+| [phase-4/milestone-01-overview.md](phase-4/milestone-01-overview.md) | P4-M1 accepted feature boundaries, deferred owner decisions, and checklist. |
+| [phase-4/milestone-01-architecture.md](phase-4/milestone-01-architecture.md) | P4-M1 policy scenarios, ownership map, and implementation handoffs. |
+| [phase-4/milestone-02-overview.md](phase-4/milestone-02-overview.md) | P4-M2 owner decisions and checklist for tab-local text filtering. |
+| [phase-4/milestone-02-architecture.md](phase-4/milestone-02-architecture.md) | P4-M2 Unicode matching, visible-row safety, projection work, and verification plan. |
+| [phase-4/milestone-03-overview.md](phase-4/milestone-03-overview.md) | P4-M3 checklist for text filtering controls and accessibility. |
+| [phase-4/milestone-03-architecture.md](phase-4/milestone-03-architecture.md) | P4-M3 filter UI, shortcuts, and view-model delivery. |
+| [phase-4/milestone-04-overview.md](phase-4/milestone-04-overview.md) | P4-M4 checklist for safe clipboard transfer workflow. |
+| [phase-4/milestone-04-architecture.md](phase-4/milestone-04-architecture.md) | P4-M4 clipboard intent and existing operation-engine handoff. |
+| [phase-4/milestone-05-overview.md](phase-4/milestone-05-overview.md) | P4-M5 checklist for Copy, Cut, Paste, and Finder clipboard interchange. |
+| [phase-4/milestone-05-architecture.md](phase-4/milestone-05-architecture.md) | P4-M5 macOS clipboard adapter, Finder Copy publishing and reading, and command routing. |
+| [phase-4/milestone-06-overview.md](phase-4/milestone-06-overview.md) | P4-M6 checklist for editable path navigation. |
+| [phase-4/milestone-06-architecture.md](phase-4/milestone-06-architecture.md) | P4-M6 path editor, validation, and navigation approach. |
+| [phase-4/milestone-07-overview.md](phase-4/milestone-07-overview.md) | P4-M7 checklist for safe file drag and drop. |
+| [phase-4/milestone-07-architecture.md](phase-4/milestone-07-architecture.md) | P4-M7 drag payload, target, and operation handoff. |
+| [phase-4/milestone-08-overview.md](phase-4/milestone-08-overview.md) | P4-M8 checklist and visual proposal for advanced path navigation. |
+| [phase-4/milestone-08-architecture.md](phase-4/milestone-08-architecture.md) | P4-M8 breadcrumb, column-loading, and tab-navigation approach. |
+| [phase-4/changelog.md](phase-4/changelog.md) | Phase 4 planning and later owner or design decisions. |
 | [archive/phases/phase-3/phase-3.md](archive/phases/phase-3/phase-3.md) | Completed Phase 3 goal, exit criteria, and milestone sequence. |
 | [archive/phases/phase-3/milestone-01-overview.md](archive/phases/phase-3/milestone-01-overview.md) | P3-M1 scope and executable completion checklist. |
 | [archive/phases/phase-3/milestone-01-architecture.md](archive/phases/phase-3/milestone-01-architecture.md) | P3-M1 naming and bridge migration approach. |

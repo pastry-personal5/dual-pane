@@ -33,7 +33,7 @@ fn stricter_visibility_clears_actions_then_reconciles_surviving_visit_state() {
     load(&mut workspace, BrowserSide::Left, tab, token, vec![entry("keep"), entry(".hidden")]);
     workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab, row: 0, name: name("keep") }.into());
     workspace.handle(Command::ToggleEntry { browser: BrowserSide::Left, tab, row: 1, name: name(".hidden") }.into());
-    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab, scroll: Some(ScrollAnchor::new(name("keep"), 3)) }.into());
+    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab, row: Some(0), scroll: Some(ScrollAnchor::new(name("keep"), 3)) }.into());
 
     let stricter = VisibilityPolicy { show_dotfiles: false, ..VisibilityPolicy::default() };
     let transition = workspace.handle(Command::SetVisibilityPolicy { visibility: stricter }.into());
@@ -221,7 +221,7 @@ fn closing_an_inactive_tab_preserves_the_active_tab_and_its_view() {
 #[test]
 fn selection_commands_before_the_first_listing_are_safe() {
     let mut workspace = Workspace::new();
-    for command in [Command::SelectAll { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }, Command::ClearSelection { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }, Command::UpdateScrollHint { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), scroll: Some(ScrollAnchor::new(name("item"), 4)) }] {
+    for command in [Command::SelectAll { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }, Command::ClearSelection { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }, Command::UpdateScrollHint { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: Some(0), scroll: Some(ScrollAnchor::new(name("item"), 4)) }] {
         assert_eq!(workspace.handle(command.into()).outputs, vec![]);
     }
 }
@@ -512,7 +512,7 @@ fn scroll_hint_is_exposed_when_history_and_tabs_are_restored() {
     let mut workspace = Workspace::new();
     let (first, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("one") }.into()).work);
     load(&mut workspace, BrowserSide::Left, first, token, vec![entry("anchor")]);
-    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), scroll: Some(ScrollAnchor::new(name("anchor"), 7)) }.into());
+    workspace.handle(Command::UpdateScrollHint { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left), row: Some(0), scroll: Some(ScrollAnchor::new(name("anchor"), 7)) }.into());
     let (_, token) = request(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: location("two") }.into()).work);
     load(&mut workspace, BrowserSide::Left, first, token, vec![]);
     let (_, token) = request(&workspace.handle(Command::GoBack { browser: BrowserSide::Left, tab: workspace.active_tab(BrowserSide::Left) }.into()).work);
