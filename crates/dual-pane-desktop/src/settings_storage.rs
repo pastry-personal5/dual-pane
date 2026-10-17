@@ -11,7 +11,7 @@ use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, BrowserSna
 use dual_pane_domain::{BrowserSide, EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(50);
 type BindingParameters = (&'static str, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>);
 
@@ -285,6 +285,16 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
     if version < 8 {
         tx.execute_batch("ALTER TABLE session_window ADD COLUMN left_preview_height INTEGER NOT NULL DEFAULT 0; ALTER TABLE session_window ADD COLUMN right_preview_height INTEGER NOT NULL DEFAULT 0;")?;
     }
+    if version < 9 {
+        let old_rename = vec![Shortcut::new(false, false, false, false, Key::Function(2))];
+        if stored_shortcuts(&tx, ActionId::RenameItem)? == old_rename {
+            replace_shortcuts(&tx, ActionId::RenameItem, &default_shortcuts(ActionId::RenameItem))?;
+        }
+        let old_trash = vec![Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)];
+        if stored_shortcuts(&tx, ActionId::MoveToTrash)? == old_trash {
+            replace_shortcuts(&tx, ActionId::MoveToTrash, &default_shortcuts(ActionId::MoveToTrash))?;
+        }
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     // Validate migrated records before committing the schema change. A
     // malformed old collection leaves the original database intact.
@@ -323,6 +333,31 @@ fn insert_binding(tx: &Transaction<'_>, binding: &ActionBinding) -> Result<(), r
 }
 fn insert_shortcut(tx: &Transaction<'_>, action: ActionId, position: usize, shortcut: Shortcut) -> Result<(), rusqlite::Error> {
     tx.execute("INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![action.as_str(), position as i64, i64::from(shortcut.command), i64::from(shortcut.shift), i64::from(shortcut.option), i64::from(shortcut.control), shortcut.key.as_text()])?;
+    Ok(())
+}
+
+fn stored_shortcuts(connection: &Connection, action: ActionId) -> Result<Vec<Shortcut>, rusqlite::Error> {
+    let mut statement = connection.prepare("SELECT command, shift, option, control, key FROM action_shortcut WHERE action = ?1 ORDER BY position")?;
+    statement
+        .query_map([action.as_str()], |row| {
+            let key: String = row.get(4)?;
+            let command = row.get::<_, i64>(0)? != 0;
+            let shift = row.get::<_, i64>(1)? != 0;
+            let option = row.get::<_, i64>(2)? != 0;
+            let control = row.get::<_, i64>(3)? != 0;
+            Ok(Key::parse(&key).map(|key| Shortcut::new(command, shift, option, control, key)))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map(|shortcuts| shortcuts.into_iter().flatten().collect())
+}
+
+fn replace_shortcuts(tx: &Transaction<'_>, action: ActionId, shortcuts: &[Shortcut]) -> Result<(), rusqlite::Error> {
+    tx.execute("DELETE FROM action_shortcut WHERE action = ?1", [action.as_str()])?;
+    for (position, shortcut) in shortcuts.iter().enumerate() {
+        insert_shortcut(tx, action, position, *shortcut)?;
+    }
+    let first = shortcuts.first().copied();
+    tx.execute("UPDATE action_binding SET command = ?2, shift = ?3, option = ?4, control = ?5, key = ?6 WHERE action = ?1", params![action.as_str(), first.map(|value| i64::from(value.command)), first.map(|value| i64::from(value.shift)), first.map(|value| i64::from(value.option)), first.map(|value| i64::from(value.control)), first.map(|value| value.key.as_text())])?;
     Ok(())
 }
 fn sort_field(field: SortField) -> i64 {
@@ -1007,6 +1042,48 @@ mod tests {
         assert_eq!(state.binding(ActionId::CloseTab), command_w());
         assert_eq!(state.binding(ActionId::CloseWindow), None);
         assert_eq!(state.binding(ActionId::NewTab), dual_pane_application::default_shortcut(ActionId::NewTab));
+        assert_no_collisions(&state);
+    }
+    #[test]
+    fn a_new_open_item_default_does_not_replace_an_existing_command_down_choice() {
+        let (_directory, path) = temp_database();
+        drop(SettingsDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.execute("DELETE FROM action_shortcut WHERE action = 'OpenItem'", []).unwrap();
+        connection.execute("DELETE FROM action_binding WHERE action = 'OpenItem'", []).unwrap();
+        connection.execute("UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'Down' WHERE action = 'NewFolder'", []).unwrap();
+        connection.execute("UPDATE action_shortcut SET command = 1, shift = 0, option = 0, control = 0, key = 'Down' WHERE action = 'NewFolder'", []).unwrap();
+        drop(connection);
+
+        let state = effective_bindings(&path);
+        assert_eq!(state.binding(ActionId::NewFolder), Some(Shortcut::new(true, false, false, false, Key::Down)));
+        assert_eq!(state.binding(ActionId::OpenItem), None);
+        assert_no_collisions(&state);
+    }
+    #[test]
+    fn version_eight_profiles_gain_new_rename_and_trash_factory_shortcuts() {
+        let (_directory, path) = temp_database();
+        drop(SettingsDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("DELETE FROM action_shortcut WHERE action IN ('RenameItem', 'MoveToTrash'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('RenameItem', 0, 0, 0, 0, 0, 'F2'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 0, 1, 0, 0, 'Delete'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 1, 0, 1, 0, 0, 'Forward Delete'); UPDATE action_binding SET command = 0, shift = 0, option = 0, control = 0, key = 'F2' WHERE action = 'RenameItem'; UPDATE action_binding SET command = 0, shift = 1, option = 0, control = 0, key = 'Delete' WHERE action = 'MoveToTrash'; PRAGMA user_version = 8;").unwrap();
+        drop(connection);
+
+        let state = effective_bindings(&path);
+        assert_eq!(state.shortcuts(ActionId::RenameItem), default_shortcuts(ActionId::RenameItem));
+        assert_eq!(state.shortcuts(ActionId::MoveToTrash), default_shortcuts(ActionId::MoveToTrash));
+        assert_no_collisions(&state);
+    }
+    #[test]
+    fn version_eight_profiles_keep_custom_rename_and_trash_shortcuts() {
+        let (_directory, path) = temp_database();
+        drop(SettingsDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("DELETE FROM action_shortcut WHERE action IN ('RenameItem', 'MoveToTrash'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('RenameItem', 0, 1, 0, 0, 0, 'J'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 1, 0, 0, 0, 'K'); UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'J' WHERE action = 'RenameItem'; UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'K' WHERE action = 'MoveToTrash'; PRAGMA user_version = 8;").unwrap();
+        drop(connection);
+
+        let state = effective_bindings(&path);
+        assert_eq!(state.shortcuts(ActionId::RenameItem), &[Shortcut::new(true, false, false, false, Key::Character('J'))]);
+        assert_eq!(state.shortcuts(ActionId::MoveToTrash), &[Shortcut::new(true, false, false, false, Key::Character('K'))]);
         assert_no_collisions(&state);
     }
     #[test]

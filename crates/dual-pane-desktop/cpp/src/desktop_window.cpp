@@ -701,7 +701,7 @@ class FolderItemsList final : public QTreeView {
             return;
         if (key == Qt::Key_Left)
             model_->goToParent();
-        else if (key == Qt::Key_Right || key == Qt::Key_Return || key == Qt::Key_Enter)
+        else if (key == Qt::Key_Right)
             model_->activateSelected();
     }
     void keyReleaseEvent(QKeyEvent *event) override {
@@ -3195,7 +3195,7 @@ class SettingsWindow final : public QDialog {
             return 0;
         if (id == QStringLiteral("NewTab") || id == QStringLiteral("CloseTab") || id == QStringLiteral("CloseWindow") || id == QStringLiteral("QuitApplication"))
             return 1;
-        if (id == QStringLiteral("NewFolder") || id == QStringLiteral("CopyToOtherBrowser") || id == QStringLiteral("MoveToOtherBrowser") || id == QStringLiteral("RenameItem") || id == QStringLiteral("MoveToTrash") || id == QStringLiteral("DeletePermanently") || id == QStringLiteral("ShowPackageContents"))
+        if (id == QStringLiteral("NewFolder") || id == QStringLiteral("CopyToOtherBrowser") || id == QStringLiteral("MoveToOtherBrowser") || id == QStringLiteral("RenameItem") || id == QStringLiteral("MoveToTrash") || id == QStringLiteral("DeletePermanently") || id == QStringLiteral("ShowPackageContents") || id == QStringLiteral("OpenItem"))
             return 2;
         if (id.startsWith(QStringLiteral("SortBy")))
             return 3;
@@ -4326,6 +4326,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     const std::array<std::pair<QString, int>, 5> file_commands = {{{QStringLiteral("CopyToOtherBrowser"), command_copy}, {QStringLiteral("MoveToOtherBrowser"), command_move}, {QStringLiteral("RenameItem"), command_rename}, {QStringLiteral("MoveToTrash"), command_trash}, {QStringLiteral("DeletePermanently"), command_delete}}};
     for (const auto &file_command : file_commands)
         list_handlers.insert(file_command.first, [models, command = file_command.second](int browser) { models.at(browser)->startFileCommand(command); });
+    list_handlers.insert(QStringLiteral("OpenItem"), [models](int browser) { models.at(browser)->activateSelected(); });
     ShortcutBinder shortcuts(&window, &bridge, handlers, {left_browser->view(), right_browser->view()}, list_handlers);
     settings_controller->set_capture_handler([&shortcuts](bool active) { shortcuts.setCapture(active); });
     QObject::connect(&bridge, &WorkspaceBridge::bindingsRevisionChanged, &window, [&shortcuts] { shortcuts.rebind(); });

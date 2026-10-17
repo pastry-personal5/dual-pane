@@ -679,7 +679,7 @@ fn shortcut_label(shortcut: Shortcut) -> String {
 fn rejection_text(rejection: Option<ShortcutRejection>) -> QString {
     match rejection {
         None => QString::default(),
-        Some(ShortcutRejection::Invalid) => QString::from("Use a supported key with Command, Control, or Option; function keys may stand alone. Shift+Backspace and Shift+Delete are defaults for Move to Trash."),
+        Some(ShortcutRejection::Invalid) => QString::from("Use a supported key with Command, Control, or Option; function keys may stand alone. Return for Rename Item and Shift+Backspace or Shift+Delete for Move to Trash are supported exceptions."),
         Some(ShortcutRejection::Reserved) => QString::from("This shortcut is reserved for Settings or macOS."),
         Some(ShortcutRejection::Duplicate) => QString::from("This action already has that shortcut."),
         Some(ShortcutRejection::Conflict(action)) => QString::from(format!("Already assigned to {}.", action_label(action)).as_str()),
@@ -737,6 +737,7 @@ mod tests {
         assert_eq!(sequence(ActionId::RefreshFolder).as_deref(), Some("Meta+R"));
         assert_eq!(sequence(ActionId::FocusOtherBrowser).as_deref(), Some("Alt+F"));
         assert_eq!(sequence(ActionId::NavigateParent).as_deref(), Some("Meta+Up"));
+        assert_eq!(sequence(ActionId::OpenItem).as_deref(), Some("Meta+Down"));
         assert_eq!(sequence(ActionId::QuitApplication).as_deref(), Some("Meta+Q"));
         assert_eq!(sequence(ActionId::NewFolder).as_deref(), Some("Shift+Meta+N"));
         assert_eq!(sequence(ActionId::CloseWindow), None);

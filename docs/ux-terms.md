@@ -103,7 +103,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Navigate Parent | `NavigateParent` | Catalogued; current command |
 | Close Window | `CloseWindow` | Catalogued; current command, no default shortcut |
 | Quit Application | `QuitApplication` | Catalogued; current command |
-| New Folder | `NewFolder` | Catalogued; current command |
+| New Folder | `NewFolder` | Catalogued; current command; `Shift+Command+N` default |
 | Sort by Name Ascending | `SortByNameAscending` | Catalogued; current command |
 | Sort by Name Descending | `SortByNameDescending` | Catalogued; current command |
 | Sort by Type Ascending | `SortByTypeAscending` | Catalogued; current command |
@@ -119,10 +119,11 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Refresh Folder | `RefreshFolder` | Catalogued; current command |
 | Copy to Other Browser | `CopyToOtherBrowser` | Catalogued; current command |
 | Move to Other Browser | `MoveToOtherBrowser` | Catalogued; current command |
-| Rename Item | `RenameItem` | Catalogued; current command |
-| Move to Trash | `MoveToTrash` | Catalogued; current command |
-| Delete Permanently | `DeletePermanently` | Catalogued; current command |
+| Rename Item | `RenameItem` | Catalogued; current command; F2 and Return defaults |
+| Move to Trash | `MoveToTrash` | Catalogued; current command; `Command+Delete`, Shift+Backspace, and Shift+Delete defaults |
+| Delete Permanently | `DeletePermanently` | Catalogued; current command; `Option+Command+Delete` default |
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
+| Open Item | `OpenItem` | Catalogued; current command; `Command+Down` default |
 | Focus Folder Items Filter | `FocusFolderItemsFilter` | Planned ID; `Command+F` default |
 | Copy Items | `CopyItems` | Planned ID; `Command+C` default with Folder Items List focus |
 | Cut Items | `CutItems` | Planned ID; `Command+X` default with Folder Items List focus |

@@ -33,12 +33,13 @@ pub enum ActionId {
     MoveToTrash,
     DeletePermanently,
     ShowPackageContents,
+    OpenItem,
 }
 
 impl ActionId {
     /// Every catalogued action. Later IDs are appended, so a shortcut held by
     /// an earlier action keeps it when bindings are validated in this order.
-    pub const ALL: [Self; 24] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents];
+    pub const ALL: [Self; 25] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -66,6 +67,7 @@ impl ActionId {
             Self::MoveToTrash => "MoveToTrash",
             Self::DeletePermanently => "DeletePermanently",
             Self::ShowPackageContents => "ShowPackageContents",
+            Self::OpenItem => "OpenItem",
         }
     }
 
@@ -76,7 +78,7 @@ impl ActionId {
     /// Where this action's shortcut acts.
     pub const fn scope(self) -> ShortcutScope {
         match self {
-            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents => ShortcutScope::FolderItemsList,
+            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents | Self::OpenItem => ShortcutScope::FolderItemsList,
             Self::QuitApplication => ShortcutScope::Application,
             Self::FocusOtherBrowser | Self::NavigateParent | Self::CloseWindow | Self::NewFolder | Self::SortByNameAscending | Self::SortByNameDescending | Self::SortByTypeAscending | Self::SortByTypeDescending | Self::SortByDateAscending | Self::SortByDateDescending | Self::SortBySizeAscending | Self::SortBySizeDescending | Self::NewTab | Self::CloseTab | Self::NavigateBack | Self::NavigateForward | Self::RefreshFolder => ShortcutScope::Window,
         }
@@ -169,7 +171,7 @@ impl Shortcut {
         (self.command && matches!(self.key, Key::Character('H' | 'M' | '`' | ','))) || (self.command && self.option && self.key == Key::Escape) || (self.command && self.shift && matches!(self.key, Key::Character('3' | '4' | '5'))) || (self.command && matches!(self.key, Key::Tab | Key::Space)) || (self.control && self.key == Key::Space) || (self.command && self.control && self.key == Key::Character('F'))
     }
     fn is_valid_for(self, action: ActionId) -> bool {
-        self.is_valid() || (action == ActionId::MoveToTrash && !self.command && self.shift && !self.option && !self.control && matches!(self.key, Key::Delete | Key::ForwardDelete))
+        self.is_valid() || (action == ActionId::RenameItem && !self.command && !self.shift && !self.option && !self.control && self.key == Key::Return) || (action == ActionId::MoveToTrash && !self.command && self.shift && !self.option && !self.control && matches!(self.key, Key::Delete | Key::ForwardDelete))
     }
 }
 
@@ -201,8 +203,9 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
         ActionId::CopyToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('C'))),
         ActionId::MoveToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('M'))),
         ActionId::RenameItem => Some(Shortcut::new(false, false, false, false, Key::Function(2))),
-        ActionId::MoveToTrash => Some(Shortcut::new(false, true, false, false, Key::Delete)),
+        ActionId::MoveToTrash => Some(Shortcut::new(true, false, false, false, Key::Delete)),
         ActionId::DeletePermanently => Some(Shortcut::new(true, false, true, false, Key::Delete)),
+        ActionId::OpenItem => Some(Shortcut::new(true, false, false, false, Key::Down)),
         // Command+W closes a tab; Close Window keeps its meaning but has no
         // default shortcut. Show Package Contents is a Context Menu command.
         ActionId::CloseWindow | ActionId::ShowPackageContents | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
@@ -210,7 +213,11 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
 }
 
 pub fn default_shortcuts(action: ActionId) -> Vec<Shortcut> {
-    if action == ActionId::MoveToTrash { vec![Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)] } else { default_shortcut(action).into_iter().collect() }
+    match action {
+        ActionId::RenameItem => vec![Shortcut::new(false, false, false, false, Key::Function(2)), Shortcut::new(false, false, false, false, Key::Return)],
+        ActionId::MoveToTrash => vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)],
+        _ => default_shortcut(action).into_iter().collect(),
+    }
 }
 
 pub fn default_shortcut_lists() -> Vec<ActionShortcuts> {
@@ -683,6 +690,8 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::NavigateBack), shortcut(false, true, Key::Left));
         assert_eq!(default_shortcut(ActionId::NavigateForward), shortcut(false, true, Key::Right));
         assert_eq!(default_shortcut(ActionId::RefreshFolder), shortcut(true, false, Key::Character('R')));
+        assert_eq!(default_shortcut(ActionId::NavigateParent), shortcut(true, false, Key::Up));
+        assert_eq!(default_shortcut(ActionId::OpenItem), shortcut(true, false, Key::Down));
         assert_eq!(default_shortcut(ActionId::CloseWindow), None);
         assert_eq!(validate_bindings(&default_bindings()).len(), ActionId::ALL.len());
         assert!(ActionId::ALL.iter().all(|action| ActionId::parse(action.as_str()) == Some(*action)));
@@ -693,14 +702,15 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::CopyToOtherBrowser), shortcut(false, true, Key::Character('C')));
         assert_eq!(default_shortcut(ActionId::MoveToOtherBrowser), shortcut(false, true, Key::Character('M')));
         assert_eq!(default_shortcut(ActionId::RenameItem), shortcut(false, false, Key::Function(2)));
-        assert_eq!(default_shortcut(ActionId::MoveToTrash), Some(Shortcut::new(false, true, false, false, Key::Delete)));
+        assert_eq!(default_shortcuts(ActionId::RenameItem), vec![Shortcut::new(false, false, false, false, Key::Function(2)), Shortcut::new(false, false, false, false, Key::Return)]);
+        assert_eq!(default_shortcuts(ActionId::MoveToTrash), vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)]);
         assert_eq!(default_shortcut(ActionId::DeletePermanently), shortcut(true, true, Key::Delete));
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
-        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 6..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents], "new IDs are appended");
+        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 7..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem], "new IDs are appended");
     }
     #[test]
     fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
-        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents];
+        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem];
         for action in ActionId::ALL {
             let expected = if list.contains(&action) {
                 ShortcutScope::FolderItemsList
@@ -718,7 +728,7 @@ mod tests {
         let older = ActionId::ALL[..18].iter().map(|action| ActionBinding { action: *action, shortcut: default_shortcut(*action) }).collect::<Vec<_>>();
         let mut state = SettingsState::new();
         state.apply(SettingsSnapshot { bindings: older, ..SettingsSnapshot::default() });
-        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents] {
+        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem] {
             assert_eq!(state.binding(action), default_shortcut(action), "{action:?}");
         }
         let taken = ActionBinding { action: ActionId::NewTab, shortcut: default_shortcut(ActionId::RenameItem) };
@@ -773,6 +783,13 @@ mod tests {
             assert!(shortcut.is_reserved(), "{shortcut:?}");
         }
         assert!(!Shortcut::new(false, false, false, false, Key::Function(24)).is_reserved());
+    }
+    #[test]
+    fn return_is_only_a_valid_unmodified_shortcut_for_rename() {
+        let enter = Shortcut::new(false, false, false, false, Key::Return);
+        let mut state = SettingsState::new();
+        assert_eq!(state.set_shortcuts(ActionId::RenameItem, vec![enter]), Ok(true));
+        assert_eq!(state.set_shortcuts(ActionId::OpenItem, vec![enter]), Err(ShortcutRejection::Invalid));
     }
     #[test]
     fn a_missing_binding_uses_its_default_unless_that_default_is_taken() {
