@@ -29,6 +29,7 @@ This document describes the current component hierarchy of Dual Pane. It records
       - Folder Pane Toolbar Row #1
       - Folder Pane Toolbar Row #2
       - Folder Pane Toolbar Row #3 with Back Button, Forward Button, Up Button, and sort controls
+      - Temporary Folder Items Filter Row with filter text and a far-right Close Filter Button
       - Folder Items List and Folder Items Context Menu
       - Missing Folder Overlay
     - Preview Pane Splitter

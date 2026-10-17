@@ -50,11 +50,12 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Back Button | `back_button` |
 | Forward Button | `forward_button` |
 | Path Edit Control | `path_edit_control` |
-| Folder Items Filter Control | `folder_items_filter_control` |
 | Folder Pane | `folder_pane` |
 | Folder Pane Toolbar Row #1 | `folder_pane_toolbar_row_1` |
 | Folder Pane Toolbar Row #2 | `folder_pane_toolbar_row_2` |
 | Folder Pane Toolbar Row #3 | `folder_pane_toolbar_row_3` |
+| Folder Items Filter Row | `folder_items_filter_row` |
+| Close Filter Button | `close_filter_button` |
 | Up Button | `up_button` |
 | Name Ascending Sort Button | `name_ascending_sort_button` |
 | Name Descending Sort Button | `name_descending_sort_button` |
