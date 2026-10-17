@@ -215,7 +215,7 @@ auto style_sheet() -> QString {
       QToolButton#favoriteGroupMenuButton:disabled, QToolButton#addFavoriteItemButton:disabled { color:#6F757D; background:transparent; }
       QWidget#sidebar[windowActive="false"] QToolButton#favoriteGroupMenuButton, QWidget#sidebar[windowActive="false"] QToolButton#addFavoriteItemButton { color:#8A9099; background:#1B1D21; }
       QLabel#applicationTitle { background:transparent; color:%3; font-size:24px; font-weight:600; padding:10px 16px; }
-      QToolButton#sortControl:hover:enabled:!checked, QToolButton#newTabButton:hover:enabled, QToolButton#closeTabButton:hover:enabled, QToolButton#newGroupButton:hover:enabled, QFrame#operationPanel QToolButton:hover:enabled, QFrame#operationDecisionCard QPushButton:hover:enabled { background:%11; }
+      QToolButton#sortControl:hover:enabled:!checked, QToolButton#newTabButton:hover:enabled, QToolButton#closeTabButton:hover:enabled, QToolButton#newGroupButton:hover:enabled, QFrame#operationPanel QToolButton:hover:enabled { background:%11; }
       QLabel#folderPaneToolbarRow1, QWidget#folderPaneToolbarRow2, QWidget#folderPaneToolbarRow3, QWidget#folderPaneToolbarRow2 QLabel, QWidget#folderPaneToolbarRow2 QLineEdit, QWidget#folderPaneToolbarRow2 QToolButton, QWidget#folderPaneToolbarRow3 QLabel, QWidget#folderPaneToolbarRow3 QLineEdit, QWidget#folderPaneToolbarRow3 QToolButton { background:%1; }
       QLabel#folderPaneToolbarRow1[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QToolButton { background:%2; }
       QLabel#folderPaneToolbarRow1[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QToolButton { background:%9; }
@@ -245,8 +245,16 @@ auto style_sheet() -> QString {
       QLabel#nameEditorError { color:%8; background:%1; }
       QWidget#newFolderRow { background:%2; }
       QWidget#operationPanelStrip { background:%1; border-top:1px solid %4; }
-      QFrame#operationPanel { background:%2; border:1px solid %4; }
+      QFrame#operationPanel, QFrame#operationPanel QLabel, QFrame#operationPanel QCheckBox { background:%2; color:%3; }
+      QFrame#operationPanel { border:1px solid %4; }
+      QFrame#operationPanel QPushButton { background:%1; color:%3; border:1px solid %4; border-radius:4px; padding:4px 8px; }
+      QFrame#operationPanel QPushButton:hover:enabled { background:%11; }
+      QFrame#operationPanel QPushButton:disabled { color:%7; }
+      QProgressBar#operationProgressIndicator { background:%1; border:1px solid %4; border-radius:3px; min-height:6px; max-height:6px; }
+      QProgressBar#operationProgressIndicator::chunk { background:%5; border-radius:2px; }
       QFrame#operationDecisionCard { background:%1; border:1px solid %8; }
+      QFrame#operationDecisionCard QLabel, QFrame#operationDecisionCard QCheckBox { background:%1; color:%3; }
+      QFrame#operationDecisionCard QPushButton { background:%2; color:%3; }
       QWidget#floatingOperationPanel { background:%1; color:%3; }
       QLabel#operationPanelTitle { font-weight:bold; }
       QDialog#settingsWindow { background:%1; color:%3; }
@@ -2461,6 +2469,10 @@ class FloatingPanelWindow final : public QWidget {
   public:
     FloatingPanelWindow(OperationPanel *panel, OperationsModel *ops, const bool *quitting, QWidget *workspace) : QWidget(workspace, Qt::Window), panel_(panel), ops_(ops), quitting_(quitting), workspace_(workspace) {
         setObjectName(QStringLiteral("floatingOperationPanel"));
+        // A top-level child window does not inherit the workspace's style
+        // sheet on every platform. Apply the dark theme at this window root
+        // so its panel and dynamically created decision buttons stay legible.
+        setStyleSheet(style_sheet());
         setAttribute(Qt::WA_ShowWithoutActivating);
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
