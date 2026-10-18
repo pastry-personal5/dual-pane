@@ -221,11 +221,11 @@ impl<R: WorkRunner> WorkspaceSession<R> {
 
     pub fn submit_clipboard_observed(&mut self, browser: BrowserSide, action: Option<ClipboardAction>, tab: TabId, visible_revision: u64) {
         self.submit(Command::ActivateBrowser { browser });
-        let command = match action {
-            Some(action) => Command::CaptureClipboard { browser, tab, action },
-            None => Command::PasteClipboard { browser, tab },
+        match action {
+            Some(action) => self.submit(Input::ObservedCommand { command: Command::CaptureClipboard { browser, tab, action }, browser, tab, visible_revision }),
+            // Paste targets the confirmed folder, not visible rows, so it has no observation to validate.
+            None => self.submit(Command::PasteClipboard { browser, tab }),
         };
-        self.submit(Input::ObservedCommand { command, browser, tab, visible_revision });
     }
 
     pub fn observe_clipboard(&mut self, generation: dual_pane_application::ClipboardGeneration, offer: dual_pane_application::ClipboardOffer) {
@@ -644,6 +644,18 @@ mod tests {
 
         session.observe_clipboard(ClipboardGeneration::new(2), ClipboardOffer::Unsupported);
         assert!(!session.clipboard_command_available(BrowserSide::Left, None), "replacement by unsupported content disables Paste");
+    }
+
+    #[test]
+    fn an_observed_paste_reaches_the_clipboard_read() {
+        use dual_pane_application::{ClipboardGeneration, ClipboardOffer};
+
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("base"));
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("alpha")]), changes: None });
+        session.observe_clipboard(ClipboardGeneration::new(1), ClipboardOffer::Files);
+        session.submit_clipboard_observed(BrowserSide::Left, None, TabId::new(0), 0);
+        assert!(session.runner.dispatched.iter().any(|request| matches!(request, WorkRequest::ReadClipboard { .. })), "Paste must start a clipboard read");
     }
 
     #[test]

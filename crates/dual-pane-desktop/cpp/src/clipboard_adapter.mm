@@ -12,6 +12,8 @@ namespace dual_pane_desktop {
 namespace {
 NSString *const private_type_name = @"org.dual-pane.private-transfer";
 constexpr std::uint8_t wire_version = 1;
+/// Read-result flag: the pasteboard changed during every read attempt.
+constexpr std::uint8_t busy_flag = 8;
 constexpr int seam_replace_with_string = 0, seam_replace_with_file_url_lines = 1, seam_replace_with_private_bytes = 2, seam_append_string_item = 3, seam_replace_with_file_reference_url = 4;
 
 void append_u32(QByteArray &bytes, std::uint32_t value) {
@@ -232,51 +234,68 @@ auto clipboard_publish(const QByteArray &request) -> QByteArray {
                 return finish(false);
             [items addObject:item];
         }
-        [pasteboard clearContents];
-        return finish([pasteboard writeObjects:items]);
+        // Clearing takes ownership and returns this write's generation. A
+        // later read of changeCount could report another application's write.
+        const NSInteger written = [pasteboard clearContents];
+        if (![pasteboard writeObjects:items])
+            return finish(false);
+        append_u64(result, static_cast<std::uint64_t>(written));
+        result.append('\1');
+        return result;
     }
 }
 
 auto clipboard_read() -> QByteArray {
     @autoreleasepool {
         NSPasteboard *pasteboard = active_pasteboard();
-        QByteArray result;
-        append_u64(result, static_cast<std::uint64_t>(pasteboard.changeCount));
-        std::optional<std::uint64_t> transfer;
-        bool malformed = false;
-        QList<QByteArray> paths;
-        NSArray<NSPasteboardItem *> *items = pasteboard.pasteboardItems;
-        for (NSPasteboardItem *item in items) {
-            bool supported_item = false;
-            if ([item.types containsObject:private_type()] && !transfer) {
-                transfer = decode_token([item dataForType:private_type()]);
-                if (!transfer)
+        // A snapshot belongs to a generation only if no write landed while
+        // its items were read; a pasteboard that keeps changing reads as busy.
+        constexpr int attempts = 3;
+        for (int attempt = 0; attempt < attempts; ++attempt) {
+            const NSInteger generation = pasteboard.changeCount;
+            std::optional<std::uint64_t> transfer;
+            bool malformed = false;
+            QList<QByteArray> paths;
+            for (NSPasteboardItem *item in pasteboard.pasteboardItems) {
+                bool supported_item = false;
+                if ([item.types containsObject:private_type()] && !transfer) {
+                    transfer = decode_token([item dataForType:private_type()]);
+                    if (!transfer)
+                        malformed = true;
+                    supported_item = true;
+                }
+                if (![item.types containsObject:NSPasteboardTypeFileURL]) {
+                    if (!supported_item)
+                        malformed = true;
+                    continue;
+                }
+                const auto path = decode_file_url([item stringForType:NSPasteboardTypeFileURL]);
+                if (!path) {
                     malformed = true;
-                supported_item = true;
+                    continue;
+                }
+                paths.append(*path);
             }
-            if (![item.types containsObject:NSPasteboardTypeFileURL]) {
-                if (!supported_item)
-                    malformed = true;
+            if (pasteboard.changeCount != generation)
                 continue;
+            QByteArray result;
+            append_u64(result, static_cast<std::uint64_t>(generation));
+            const std::uint8_t flags = (transfer ? 1U : 0U) | (!paths.isEmpty() ? 2U : 0U) | (malformed ? 4U : 0U);
+            result.append(static_cast<char>(flags));
+            if (transfer)
+                append_u64(result, *transfer);
+            append_u32(result, static_cast<std::uint32_t>(paths.size()));
+            for (const QByteArray &path : paths) {
+                append_u32(result, static_cast<std::uint32_t>(path.size()));
+                result.append(path);
             }
-            supported_item = true;
-            const auto path = decode_file_url([item stringForType:NSPasteboardTypeFileURL]);
-            if (!path) {
-                malformed = true;
-                continue;
-            }
-            paths.append(*path);
+            return result;
         }
-        std::uint8_t flags = (transfer ? 1U : 0U) | (!paths.isEmpty() ? 2U : 0U) | (malformed ? 4U : 0U);
-        result.append(static_cast<char>(flags));
-        if (transfer)
-            append_u64(result, *transfer);
-        append_u32(result, static_cast<std::uint32_t>(paths.size()));
-        for (const QByteArray &path : paths) {
-            append_u32(result, static_cast<std::uint32_t>(path.size()));
-            result.append(path);
-        }
-        return result;
+        QByteArray busy;
+        append_u64(busy, static_cast<std::uint64_t>(pasteboard.changeCount));
+        busy.append(static_cast<char>(busy_flag));
+        append_u32(busy, 0);
+        return busy;
     }
 }
 

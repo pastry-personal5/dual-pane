@@ -406,7 +406,17 @@ impl Workspace {
     }
     pub fn paste_availability(&self, browser: BrowserSide, tab: TabId) -> Result<(), ClipboardRejection> {
         self.paste_destination(browser, tab)?;
-        if self.clipboard_offer.supports_paste() { Ok(()) } else { Err(ClipboardRejection::UnsupportedContent) }
+        match self.clipboard_offer {
+            ClipboardOffer::Unsupported => Err(ClipboardRejection::UnsupportedContent),
+            // Private data alone has no file fallback, so only this launch's
+            // current transfer, or a publication not yet reported, can paste.
+            ClipboardOffer::Private if self.latest_publication.is_none() => match self.current_transfer.filter(|(_, generation)| self.clipboard_generation == Some(*generation)).and_then(|(transfer, _)| self.transfers.get(&transfer)) {
+                None => Err(ClipboardRejection::UnknownPrivateTransfer),
+                Some(captured) if captured.reserved => Err(ClipboardRejection::TransferReserved),
+                Some(_) => Ok(()),
+            },
+            ClipboardOffer::Private | ClipboardOffer::Files | ClipboardOffer::PrivateAndFiles => Ok(()),
+        }
     }
     fn clipboard_roots(&self, browser: BrowserSide, tab: TabId) -> Result<Arc<[OperationRoot]>, ClipboardRejection> {
         if self.active_tab(browser) != tab {
@@ -461,9 +471,9 @@ impl Workspace {
         }
     }
     fn clipboard_presentation(&self) -> Output {
-        // A started Cut keeps its cue after a clipboard replacement, until its operation ends.
-        let current_cut = self.current_transfer.map(|(transfer, _)| transfer).filter(|transfer| self.transfers.get(transfer).is_some_and(|captured| captured.action == ClipboardAction::Cut));
-        let pending_cut = current_cut.or_else(|| self.cut_operations.values().copied().next()).and_then(|transfer| self.transfers.get(&transfer)).map_or_else(|| Arc::from([]), |captured| Arc::clone(&captured.roots));
+        // Only the Cut the clipboard holds now is pending, including while its
+        // Paste runs; replacement, a newer Copy or Cut, or its end clears it.
+        let pending_cut = self.current_transfer.and_then(|(transfer, _)| self.transfers.get(&transfer)).filter(|captured| captured.action == ClipboardAction::Cut).map_or_else(|| Arc::from([]), |captured| Arc::clone(&captured.roots));
         Output::ClipboardPresentationChanged { offer: self.clipboard_offer, pending_cut }
     }
     fn capture_clipboard(&mut self, browser: BrowserSide, tab: TabId, action: ClipboardAction) -> Transition {
@@ -550,9 +560,23 @@ impl Workspace {
     fn clipboard_read(&mut self, request: ClipboardRequestId, generation: ClipboardGeneration, snapshot: ClipboardSnapshot) -> Transition {
         let Some(pending) = self.pending_paste.as_mut().filter(|pending| pending.request == request) else { return Transition::default() };
         let browser = pending.browser;
-        if self.clipboard_generation.is_some_and(|current| current != generation) {
+        // An untaken read says nothing about the content or its generation.
+        if matches!(snapshot, ClipboardSnapshot::Unavailable) {
             self.pending_paste = None;
-            return Transition::output(Output::ClipboardRejected { browser: Some(browser), request: Some(request), reason: ClipboardRejection::ClipboardReplaced });
+            return Transition::output(Output::ClipboardRejected { browser: Some(browser), request: Some(request), reason: ClipboardRejection::ClipboardBusy });
+        }
+        if let Some(current) = self.clipboard_generation.filter(|current| *current != generation) {
+            // A newer read saw a replacement nobody reported yet; adopt it so a retry reads current content.
+            let offer = match &snapshot {
+                ClipboardSnapshot::Private { .. } => ClipboardOffer::Private,
+                ClipboardSnapshot::ExternalFiles { .. } => ClipboardOffer::Files,
+                ClipboardSnapshot::PrivateAndExternal { .. } => ClipboardOffer::PrivateAndFiles,
+                ClipboardSnapshot::Unsupported | ClipboardSnapshot::Unavailable => ClipboardOffer::Unsupported,
+            };
+            let mut transition = if generation > current { self.clipboard_changed(generation, offer) } else { Transition::default() };
+            self.pending_paste = None;
+            transition.outputs.push(Output::ClipboardRejected { browser: Some(browser), request: Some(request), reason: ClipboardRejection::ClipboardReplaced });
+            return transition;
         }
         self.clipboard_generation = Some(generation);
         pending.generation = Some(generation);
@@ -770,24 +794,20 @@ impl Workspace {
     }
     fn operation_finished(&mut self, id: OperationId, before: &OperationStatus, outcome: OperationOutcome) -> Transition {
         let origin = self.operation_origins.remove(&id);
-        let mut cut_consumed = false;
+        let mut transition = Transition::default();
         if let Some(transfer) = self.cut_operations.remove(&id) {
-            cut_consumed = true;
             self.transfers.remove(&transfer);
             if self.current_transfer.is_some_and(|current| current.0 == transfer) {
                 self.current_transfer = None;
             }
+            transition.outputs.push(self.clipboard_presentation());
         }
         // A pending confirmation or a refused name closes without having
         // changed anything, so it leaves no summary.
         if matches!(before, OperationStatus::AwaitingConfirmation { .. } | OperationStatus::NameCollision { .. } | OperationStatus::NameRejected { .. }) {
-            return Transition::default();
+            return transition;
         }
-        let Some(job) = self.operations.job(id).cloned() else { return Transition::default() };
-        let mut transition = Transition::default();
-        if cut_consumed {
-            transition.outputs.push(self.clipboard_presentation());
-        }
+        let Some(job) = self.operations.job(id).cloned() else { return transition };
         if outcome == OperationOutcome::Succeeded
             && let OperationKind::Rename { to: name } | OperationKind::NewFolder { name } = job.intent().kind()
             && let Some((browser, tab)) = origin

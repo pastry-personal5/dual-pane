@@ -121,7 +121,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Copy to Other Browser | `CopyToOtherBrowser` | Catalogued; current command |
 | Move to Other Browser | `MoveToOtherBrowser` | Catalogued; current command |
 | Rename Item | `RenameItem` | Catalogued; current command; F2 and Return defaults |
-| Move to Trash | `MoveToTrash` | Catalogued; current command; `Command+Delete`, Shift+Backspace, and Shift+Delete defaults |
+| Move to Trash | `MoveToTrash` | Catalogued; current command; `Command+Delete`, `Command+Forward Delete`, Shift+Backspace, and Shift+Forward Delete defaults |
 | Delete Permanently | `DeletePermanently` | Catalogued; current command; `Option+Command+Delete` default |
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
 | Open Item | `OpenItem` | Catalogued; current command; `Command+Down` default |

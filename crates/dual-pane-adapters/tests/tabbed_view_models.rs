@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, FavoritesEvent, FolderItemsColumn, GroupMotion, InputController, SelectionMovement, UiEvent, WorkspacePresenter, favorite_rejection_text};
-use dual_pane_application::{ClipboardAction, ClipboardGeneration, ClipboardOffer, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, SettingsFailure, SettingsSnapshot, WorkRequest, Workspace};
+use dual_pane_application::{ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, SettingsFailure, SettingsSnapshot, TransferId, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryMetadata, EntryName, ListingErrorKind, Location, ScrollAnchor, SortDirection, SortField, SortSpec};
 use jiff::tz::TimeZone;
 
@@ -518,6 +518,26 @@ fn the_pending_cut_count_yields_to_transient_feedback_loading_and_errors() {
     };
     session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: ListingErrorKind::PermissionDenied });
     assert!(!session.left.view().status_text().contains("ready to move"));
+}
+
+#[test]
+fn an_unavailable_paste_reports_its_specific_reason_briefly_in_the_pasting_browser() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Right, path(&["destination"]), vec![]);
+    session.submit(Command::ActivateBrowser { browser: BrowserSide::Right });
+    let tab = session.workspace.active_tab(BrowserSide::Right);
+    let left_status = session.left.view().status_text().to_owned();
+    for (generation, offer, snapshot, reason) in [(2, ClipboardOffer::Unsupported, ClipboardSnapshot::Unsupported, "The clipboard does not contain files that can be pasted."), (3, ClipboardOffer::Private, ClipboardSnapshot::Private { transfer: TransferId::new(99) }, "That Dual Pane transfer is no longer available.")] {
+        session.submit(Event::ClipboardChanged { generation: ClipboardGeneration::new(generation), offer });
+        session.submit(Command::PasteClipboard { browser: BrowserSide::Right, tab });
+        let Some(WorkRequest::ReadClipboard { request }) = session.work.iter().rev().find(|work| matches!(work, WorkRequest::ReadClipboard { .. })).cloned() else { panic!("a clipboard read") };
+        session.submit(Event::ClipboardRead { request, generation: ClipboardGeneration::new(generation), snapshot });
+        assert_eq!(session.right.view().status_text(), reason);
+        assert_eq!(session.left.view().status_text(), left_status, "only the pasting Browser reports it");
+        let token = session.right.view().status_token();
+        session.right.expire_status(token);
+        assert_eq!(session.right.view().status_text(), "/destination", "the reason is brief");
+    }
 }
 
 #[test]

@@ -227,7 +227,7 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
 pub fn default_shortcuts(action: ActionId) -> Vec<Shortcut> {
     match action {
         ActionId::RenameItem => vec![Shortcut::new(false, false, false, false, Key::Function(2)), Shortcut::new(false, false, false, false, Key::Return)],
-        ActionId::MoveToTrash => vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)],
+        ActionId::MoveToTrash => vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(true, false, false, false, Key::ForwardDelete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)],
         _ => default_shortcut(action).into_iter().collect(),
     }
 }
@@ -715,7 +715,7 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::MoveToOtherBrowser), shortcut(false, true, Key::Character('M')));
         assert_eq!(default_shortcut(ActionId::RenameItem), shortcut(false, false, Key::Function(2)));
         assert_eq!(default_shortcuts(ActionId::RenameItem), vec![Shortcut::new(false, false, false, false, Key::Function(2)), Shortcut::new(false, false, false, false, Key::Return)]);
-        assert_eq!(default_shortcuts(ActionId::MoveToTrash), vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)]);
+        assert_eq!(default_shortcuts(ActionId::MoveToTrash), vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(true, false, false, false, Key::ForwardDelete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)]);
         assert_eq!(default_shortcut(ActionId::DeletePermanently), shortcut(true, true, Key::Delete));
         assert_eq!(default_shortcut(ActionId::FocusFolderItemsFilter), shortcut(true, false, Key::Character('F')));
         assert_eq!(default_shortcut(ActionId::CopyItems), shortcut(true, false, Key::Character('C')));

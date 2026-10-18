@@ -10,7 +10,7 @@ Two Browsers sit side by side. Each Browser browses its own directory, and futur
 
 The [product behavior](docs/product-behavior.md) defines included features, file-operation safeguards, session recovery, and exclusions. The [UX documents](docs/ux-terms.md) define the current interface.
 
-Dual Pane shows two independently browsable Browsers with compact, edge-to-edge layouts. `Command+Up` opens the parent folder; `Command+Down` enters the single selected folder or opens the single selected file with its default app. Return renames the selected Item, `Shift+Command+N` creates a folder, `Command+Delete` moves selected Items to Trash, and `Option+Command+Delete` deletes them permanently. `Command+W` closes the active tab; `Command+Q` quits the app; `Control+Command+F` toggles full screen.
+Dual Pane shows two independently browsable Browsers with compact, edge-to-edge layouts. `Command+Up` opens the parent folder; `Command+Down` enters the single selected folder or opens the single selected file with its default app. Return renames the selected Item, `Shift+Command+N` creates a folder, `Command+Delete` or `Command+Forward Delete` moves selected Items to Trash, and `Option+Command+Delete` deletes them permanently. `Command+W` closes the active tab; `Command+Q` quits the app; `Control+Command+F` toggles full screen.
 
 Version v3.0.0 adds:
 

@@ -5,8 +5,13 @@
 # runs a debug build against a disposable profile and works only inside
 # temporary folders. You perform each gesture in Dual Pane and Finder; the
 # script stages fixtures and verifies the results (content hashes, symbolic
-# link targets, unchanged sources). Paste the printed summary into the P4-M5
-# acceptance evidence.
+# link targets, unchanged sources) or asks you to confirm what you saw. Paste
+# the printed summary into the P4-M5 acceptance evidence.
+#
+# The temporary folder is also the profile's Home, so each Browser's Home tab
+# lists source and destination. Dual Pane launches with the Left Browser at
+# source; open destination in the Right Browser once. Staging empties the
+# folders in place, so both Browsers keep showing them between scenarios.
 #
 #   scripts/clipboard-acceptance.sh              run every scenario
 #   scripts/clipboard-acceptance.sh list         list scenario names
@@ -18,7 +23,10 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 nfc_name="unicode-caf$(printf '\303\251').txt"
 items="plain.txt $nfc_name folder Tool.app link-to-plain dangling-link"
-scenarios="copy-to-finder copy-to-finder-after-quit-and-relaunch finder-to-dual-pane finder-to-dual-pane-after-relaunch within-and-across-browsers conflict-and-cancel private-expiry replacement non-file-content cut-is-not-a-finder-move"
+scenarios="copy-to-finder copy-to-finder-after-quit-and-relaunch finder-to-dual-pane finder-to-dual-pane-after-relaunch within-and-across-browsers conflict-and-cancel private-expiry replacement non-file-content cut-is-not-a-finder-move context-menus text-editor-focus cancel-running-paste"
+staged_dirs="source destination finder-source finder-out finder-out-quit finder-out-relaunch"
+# Files in the cancellation fixture: enough that a Paste runs long enough to cancel.
+cancel_files=${CANCEL_FILES:-8000}
 
 work=""
 app_pid=""
@@ -29,6 +37,10 @@ cleanup() {
         kill "$app_pid" 2>/dev/null || true
     fi
     if [ -n "$work" ]; then
+        # Keep the summary after the temporary folders are removed.
+        if [ -f "$work/results" ]; then
+            cp "$work/results" "${TMPDIR:-/tmp}/dual-pane-clipboard-acceptance-last-results.txt"
+        fi
         rm -rf "$work"
     fi
 }
@@ -104,6 +116,102 @@ manifest_all() {
     done
 }
 
+# expect_no_partials ROOT: no operation temporary remains anywhere under ROOT.
+expect_no_partials() {
+    leftovers=$(find "$1" -name '.dual-pane-*' 2>/dev/null)
+    if [ -z "$leftovers" ]; then
+        return 0
+    fi
+    echo "  partial artifacts left: $leftovers"
+    return 1
+}
+
+# make_many DIR: COUNT one-byte files in folders of 100, for cancellation.
+make_many() {
+    mkdir -p "$1"
+    made=0
+    while [ "$made" -lt "$cancel_files" ]; do
+        folder="$1/d$((made / 100))"
+        mkdir -p "$folder"
+        printf x >"$folder/f$made"
+        made=$((made + 1))
+    done
+}
+
+# many_paths ROOT: the sorted paths of ROOT/many, relative to ROOT.
+many_paths() {
+    (cd "$1" && find many | LC_ALL=C sort)
+}
+
+# expect_many_subset SOURCE_ROOT DESTINATION_ROOT: every path a cancelled
+# Paste left under DESTINATION_ROOT/many exists in the source, and every file
+# there is whole. An absent destination folder is an empty subset.
+expect_many_subset() {
+    if [ ! -e "$2/many" ]; then
+        return 0
+    fi
+    many_paths "$1" >"$work/many.source"
+    many_paths "$2" >"$work/many.destination"
+    extra=$(LC_ALL=C comm -13 "$work/many.source" "$work/many.destination")
+    broken=$(find "$2/many" -type f ! -size 1c)
+    if [ -z "$extra$broken" ]; then
+        return 0
+    fi
+    echo "  not in the source: $extra"
+    echo "  incomplete files: $broken"
+    return 1
+}
+
+# expect_many_unchanged ROOT BASELINE_FILE
+expect_many_unchanged() {
+    if many_paths "$1" | diff - "$2" >/dev/null && [ -z "$(find "$1/many" -type f ! -size 1c)" ]; then
+        return 0
+    fi
+    echo "  source many changed"
+    return 1
+}
+
+clipboard_types() {
+    osascript -e 'clipboard info' 2>/dev/null || true
+}
+
+has_file_url() {
+    printf '%s' "$1" | grep -q furl
+}
+
+expect_no_file_url() {
+    types=$(clipboard_types)
+    if has_file_url "$types"; then
+        echo "  clipboard types: $types"
+        return 1
+    fi
+    return 0
+}
+
+# confirm LABEL QUESTION: records the operator's yes or no.
+confirm() {
+    printf '%s [y/n] ' "$2"
+    read -r reply
+    case "$reply" in
+    y | Y | yes) record PASS "$1" ;;
+    *) record FAIL "$1" ;;
+    esac
+}
+
+# empty_dir DIR: empties a staged folder in place, so a Browser showing it
+# never sees it go missing. Refuses anything outside the temporary folder.
+empty_dir() {
+    case "$1" in
+    "$work"/?*) [ -n "$work" ] ;;
+    *) false ;;
+    esac || {
+        echo "Refusing to empty $1"
+        exit 3
+    }
+    mkdir -p "$1"
+    find "$1" -mindepth 1 -delete
+}
+
 # expect_absent ROOT NAME...
 expect_absent() {
     root=$1
@@ -143,7 +251,7 @@ pause() {
 }
 
 launch_app() {
-    DUAL_PANE_TEST_PROFILE="$profile" "$repo_root/target/debug/dual-pane-desktop" &
+    DUAL_PANE_TEST_PROFILE="$profile" "$repo_root/target/debug/dual-pane-desktop" "$work/source" &
     app_pid=$!
     sleep 2
 }
@@ -163,8 +271,9 @@ quit_app() {
 }
 
 stage() {
-    rm -rf "$work/source" "$work/destination" "$work/finder-source" "$work/finder-out"
-    mkdir -p "$work/source" "$work/destination" "$work/finder-source" "$work/finder-out"
+    for dir in $staged_dirs; do
+        empty_dir "$work/$dir"
+    done
     make_fixtures "$work/source"
     make_fixtures "$work/finder-source"
     manifest_all "$work/source" >"$work/source.manifest"
@@ -173,8 +282,8 @@ stage() {
     echo "  Right Browser target:  $work/destination"
     echo "  Finder source folder:  $work/finder-source"
     echo "  Finder paste target:   $work/finder-out"
-    echo "  Dual Pane: use Command+L to type a folder path; re-open both Browsers' folders"
-    echo "  if they show a missing folder after staging."
+    echo "  Dual Pane: the Left Browser starts at source. If the Right Browser is not at"
+    echo "  destination, open destination from its Home tab ($work)."
 }
 
 scenario_copy_to_finder() {
@@ -263,9 +372,28 @@ scenario_private_expiry() {
 
 scenario_replacement() {
     stage
-    pause "In the LEFT Browser select plain.txt and press Command+C. The script will now replace the clipboard with text, as another app would."
+    pause "In the LEFT Browser select plain.txt and press Command+C. Do NOT paste yet. Next the script replaces the clipboard with text, as another app would."
+    # Separate a Paste made before the replacement from one that ignored it.
+    if ! expect_absent "$work/destination" plain.txt >/dev/null; then
+        record FAIL "Replacement scenario invalid: plain.txt was pasted before the clipboard was replaced"
+        return
+    fi
+    types=$(clipboard_types)
+    echo "  Clipboard types after Dual Pane Copy: $types"
+    if ! has_file_url "$types"; then
+        record FAIL "Replacement scenario invalid: Dual Pane Copy left no file URL to replace"
+        return
+    fi
     printf 'replaced by another application' | pbcopy
-    pause "Focus the RIGHT Browser at $work/destination and press Command+V. Paste must be refused with an explanation."
+    types=$(clipboard_types)
+    echo "  Clipboard types after replacement: $types"
+    if has_file_url "$types"; then
+        record FAIL "Replacement left a file URL on the clipboard (script could not replace it)"
+    fi
+    pause "Press Command+V exactly once in the RIGHT Browser at $work/destination. Paste must be refused with an explanation."
+    if ! expect_absent "$work/destination" plain.txt; then
+        echo "  destination now holds: $(ls "$work/destination" | tr '\n' ' ')"
+    fi
     check "Replacement prevented any Paste" expect_absent "$work/destination" plain.txt
 }
 
@@ -289,6 +417,51 @@ scenario_cut_is_not_a_finder_move() {
     fi
     pause "Focus the Finder window finder-out. Edit > Paste Item must be unavailable."
     check "Cut sources stay in place" expect_unchanged "$work/source" "$work/source.manifest"
+}
+
+scenario_context_menus() {
+    stage
+    mkdir "$work/destination/inner"
+    printf 'text, not files' | pbcopy
+    pause "The clipboard holds text. In the LEFT Browser right-click plain.txt, read the menu, then press Escape to close it."
+    confirm "Selected-row menu order" "Did it start with Copy Items, Cut Items, Paste Items, then a separator, then Copy to Other Browser, Move to Other Browser, and Rename Item?"
+    confirm "Selected-row menu enablement" "Were Copy Items and Cut Items enabled and Paste Items disabled?"
+    pause "Right-click plain.txt again and choose Copy Items."
+    check "Copy Items published a file URL" has_file_url "$(clipboard_types)"
+    pause "In the RIGHT Browser at $work/destination right-click the empty space below the rows, read the menu, then press Escape."
+    confirm "Empty-space menu" "Did it show only Paste Items, a separator, and New Folder, with Paste Items enabled?"
+    pause "In the RIGHT Browser right-click the folder row inner and choose Paste Items."
+    check "Menu Paste copied into the active folder" expect_copied "$work/source" "$work/destination" plain.txt
+    check "Menu Paste ignored the right-clicked folder row" expect_absent "$work/destination/inner" plain.txt
+}
+
+scenario_text_editor_focus() {
+    stage
+    printf 'typed-text' | pbcopy
+    pause "Click plain.txt in the LEFT Browser, press Command+F to focus the filter row, press Command+V once, read the filter row, then press Escape."
+    confirm "Command+V in the filter row pastes text" "Did the filter row show typed-text?"
+    pause "Select plain.txt in the LEFT Browser and press Return to rename it. Press Command+A, then Command+C, then Escape to cancel the rename."
+    check "Command+C in the rename editor copies text" test "$(pbpaste)" = plain.txt
+    check "Command+C in the rename editor publishes no file URL" expect_no_file_url
+    pause "Select plain.txt, press Return, press Command+V once, then Escape to cancel the rename."
+    confirm "Command+V in the rename editor pastes text" "Did the rename editor show the pasted text before Escape?"
+    check "Editor shortcuts started no file operation" expect_unchanged "$work/source" "$work/source.manifest"
+    check "Editor shortcuts pasted nothing into the destination" test -z "$(ls -A "$work/destination")"
+}
+
+scenario_cancel_running_paste() {
+    stage
+    make_many "$work/source/many"
+    many_paths "$work/source" >"$work/many.baseline"
+    pause "In the LEFT Browser select the folder many ($cancel_files files) and press Command+C. Focus the RIGHT Browser, press Command+V, and click Cancel in its Operation Panel as soon as the panel appears. Wait until the panel shows the result."
+    if [ -e "$work/destination/many" ] && many_paths "$work/destination" | diff - "$work/many.baseline" >/dev/null; then
+        record FAIL "Cancellation not exercised: the Paste finished before Cancel (rerun with CANCEL_FILES set higher)"
+    else
+        record PASS "Cancelled Paste stopped before copying every item"
+    fi
+    check "Cancelled Paste left no partial artifacts" expect_no_partials "$work/destination"
+    check "Items a cancelled Paste completed are whole and come from the source" expect_many_subset "$work/source" "$work/destination"
+    check "Cancelled Paste left sources unchanged" expect_many_unchanged "$work/source" "$work/many.baseline"
 }
 
 run_scenario() {
@@ -318,6 +491,28 @@ self_test() {
     if expect_absent "$work/b" plain.txt >/dev/null; then echo "self-test: a present name must be reported"; exit 1; fi
     printf 'x' >>"$work/a/plain.txt"
     if expect_unchanged "$work/a" "$work/a.manifest" >/dev/null; then echo "self-test: a changed source must be detected"; exit 1; fi
+    empty_dir "$work/b"
+    { [ -d "$work/b" ] && [ -z "$(ls -A "$work/b")" ]; } || { echo "self-test: a staged folder must be emptied in place"; exit 1; }
+    if (empty_dir "/tmp/outside") >/dev/null; then echo "self-test: a folder outside the work folder must be refused"; exit 1; fi
+    cancel_files=250
+    make_many "$work/a/many"
+    [ "$(find "$work/a/many" -type f | wc -l | tr -d ' ')" = 250 ] || { echo "self-test: the cancellation fixture must hold every file"; exit 1; }
+    many_paths "$work/a" >"$work/many.baseline"
+    expect_many_unchanged "$work/a" "$work/many.baseline" || { echo "self-test: an untouched fixture must match"; exit 1; }
+    expect_many_subset "$work/a" "$work/b" || { echo "self-test: an absent destination is an empty subset"; exit 1; }
+    mkdir -p "$work/b/many/d0"
+    printf x >"$work/b/many/d0/f0"
+    expect_many_subset "$work/a" "$work/b" || { echo "self-test: a completed part must be a subset"; exit 1; }
+    expect_no_partials "$work/b" || { echo "self-test: no partials must pass"; exit 1; }
+    : >"$work/b/many/d0/f1"
+    if expect_many_subset "$work/a" "$work/b" >/dev/null; then echo "self-test: an incomplete file must be detected"; exit 1; fi
+    rm "$work/b/many/d0/f1"
+    printf x >"$work/b/many/d0/extra"
+    if expect_many_subset "$work/a" "$work/b" >/dev/null; then echo "self-test: a path missing from the source must be detected"; exit 1; fi
+    : >"$work/b/many/.dual-pane-0-1-2.partial"
+    if expect_no_partials "$work/b" >/dev/null; then echo "self-test: a partial artifact must be detected"; exit 1; fi
+    printf x >>"$work/a/many/d1/f100"
+    if expect_many_unchanged "$work/a" "$work/many.baseline" >/dev/null; then echo "self-test: a changed fixture must be detected"; exit 1; fi
     echo "self-test passed"
 }
 
@@ -345,11 +540,15 @@ if [ "$answer" != "replace clipboard" ]; then
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/dual-pane-clipboard-acceptance.XXXXXX")
-profile="$work/profile"
-mkdir -p "$profile"
+# The profile is the work folder, so a Home tab lists every staged folder.
+profile="$work"
+for dir in $staged_dirs; do
+    mkdir -p "$work/$dir"
+done
 cd "$repo_root"
 cargo build -q -p dual-pane-desktop
 launch_app
+pause "Dual Pane opened with the Left Browser at $work/source. In the Right Browser open destination from its Home tab ($work), then continue."
 
 selected=${*:-$scenarios}
 for name in $selected; do

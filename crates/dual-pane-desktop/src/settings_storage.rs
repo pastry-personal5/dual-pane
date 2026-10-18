@@ -11,7 +11,11 @@ use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, BrowserSna
 use dual_pane_domain::{BrowserSide, EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
+/// Move to Trash factory lists as the migrations that introduced them wrote
+/// them, so a later default never changes what an earlier step writes.
+const VERSION_NINE_TRASH: [Shortcut; 3] = [Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)];
+const VERSION_TEN_TRASH: [Shortcut; 4] = [Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(true, false, false, false, Key::ForwardDelete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)];
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(50);
 type BindingParameters = (&'static str, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>);
 
@@ -292,7 +296,15 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
         }
         let old_trash = vec![Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)];
         if stored_shortcuts(&tx, ActionId::MoveToTrash)? == old_trash {
-            replace_shortcuts(&tx, ActionId::MoveToTrash, &default_shortcuts(ActionId::MoveToTrash))?;
+            replace_shortcuts(&tx, ActionId::MoveToTrash, &VERSION_NINE_TRASH)?;
+        }
+    }
+    if version < 10 {
+        // Command+Forward Delete joins an unchanged version 9 Move to Trash
+        // list, unless the person already gave it to another action.
+        let taken: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM action_shortcut WHERE action <> 'MoveToTrash' AND command = 1 AND shift = 0 AND option = 0 AND control = 0 AND key = 'Forward Delete')", [], |row| row.get(0))?;
+        if !taken && stored_shortcuts(&tx, ActionId::MoveToTrash)? == VERSION_NINE_TRASH {
+            replace_shortcuts(&tx, ActionId::MoveToTrash, &VERSION_TEN_TRASH)?;
         }
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -1085,6 +1097,49 @@ mod tests {
         assert_eq!(state.shortcuts(ActionId::RenameItem), &[Shortcut::new(true, false, false, false, Key::Character('J'))]);
         assert_eq!(state.shortcuts(ActionId::MoveToTrash), &[Shortcut::new(true, false, false, false, Key::Character('K'))]);
         assert_no_collisions(&state);
+    }
+    #[test]
+    fn version_nine_profiles_gain_command_forward_delete_for_trash() {
+        let (_directory, path) = temp_database();
+        drop(SettingsDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("DELETE FROM action_shortcut WHERE action = 'MoveToTrash'; INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 1, 0, 0, 0, 'Delete'), ('MoveToTrash', 1, 0, 1, 0, 0, 'Delete'), ('MoveToTrash', 2, 0, 1, 0, 0, 'Forward Delete'); PRAGMA user_version = 9;").unwrap();
+        drop(connection);
+
+        let state = effective_bindings(&path);
+        assert_eq!(state.shortcuts(ActionId::MoveToTrash), default_shortcuts(ActionId::MoveToTrash));
+        assert_no_collisions(&state);
+    }
+    #[test]
+    fn version_nine_profiles_keep_custom_trash_shortcuts() {
+        let (_directory, path) = temp_database();
+        drop(SettingsDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("DELETE FROM action_shortcut WHERE action = 'MoveToTrash'; INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 1, 0, 0, 0, 'Delete'), ('MoveToTrash', 1, 0, 1, 0, 0, 'Delete'); PRAGMA user_version = 9;").unwrap();
+        drop(connection);
+
+        let state = effective_bindings(&path);
+        assert_eq!(state.shortcuts(ActionId::MoveToTrash), &[Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete)]);
+    }
+    #[test]
+    fn command_forward_delete_held_by_another_action_stays_there() {
+        let command_forward_delete = Shortcut::new(true, false, false, false, Key::ForwardDelete);
+        let prior_trash = "INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 1, 0, 0, 0, 'Delete'), ('MoveToTrash', 1, 0, 1, 0, 0, 'Delete'), ('MoveToTrash', 2, 0, 1, 0, 0, 'Forward Delete');";
+        let version_three_trash = "INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 0, 1, 0, 0, 'Delete'), ('MoveToTrash', 1, 0, 1, 0, 0, 'Forward Delete');";
+        for (version, trash) in [(8, version_three_trash), (9, prior_trash)] {
+            let (_directory, path) = temp_database();
+            drop(SettingsDatabase::open(&path).unwrap());
+            let connection = Connection::open(&path).unwrap();
+            // Open Item loads after Move to Trash, so a conflicting trash list
+            // would win and drop this custom shortcut.
+            connection.execute_batch(&format!("DELETE FROM action_shortcut WHERE action IN ('MoveToTrash', 'OpenItem'); {trash} INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('OpenItem', 0, 1, 0, 0, 0, 'Forward Delete'); UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'Forward Delete' WHERE action = 'OpenItem'; PRAGMA user_version = {version};")).unwrap();
+            drop(connection);
+
+            let state = effective_bindings(&path);
+            assert_eq!(state.shortcuts(ActionId::OpenItem), &[command_forward_delete], "version {version}");
+            assert_eq!(state.shortcuts(ActionId::MoveToTrash), &[Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)], "version {version}");
+            assert_no_collisions(&state);
+        }
     }
     #[test]
     fn version_two_moves_command_w_from_close_window_to_close_tab() {

@@ -3603,7 +3603,7 @@ class SettingsWindow final : public QDialog {
         auto font = QApplication::font("QLabel");
         font.setPixelSize(10);
         const QFontMetrics metrics(font);
-        const auto longest_supported_shortcut = QStringLiteral("Control+Option+Shift+Command+Backspace");
+        const auto longest_supported_shortcut = QStringLiteral("Control+Option+Shift+Command+Forward Delete");
         return metrics.horizontalAdvance(longest_supported_shortcut) + 6 + 18;
     }
     static auto shortcut_table_width() -> int {
@@ -3800,7 +3800,7 @@ class SettingsWindow final : public QDialog {
 
 class SettingsWindowController final : public QObject {
   public:
-    explicit SettingsWindowController(QWidget *owner, WorkspaceBridge *bridge = nullptr) : QObject(owner), owner_(owner), bridge_(bridge), shortcut_(new QShortcut(QKeySequence(Qt::META | Qt::Key_Comma), owner)) {
+    explicit SettingsWindowController(QWidget *owner, WorkspaceBridge *bridge = nullptr) : QObject(owner), owner_(owner), bridge_(bridge), shortcut_(new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma), owner)) {
         shortcut_->setContext(Qt::WindowShortcut);
         shortcut_->setEnabled(false);
         QObject::connect(shortcut_, &QShortcut::activated, this, [this] { present(); });
@@ -3860,6 +3860,8 @@ auto run_settings_window_checks(QApplication &app) -> int {
                 failed = true;
             }
         };
+        // Qt names the Command key Control on macOS.
+        check(controller.shortcut()->key() == QKeySequence(Qt::CTRL | Qt::Key_Comma), "Command+, opens Settings");
         check(!gear.isEnabled() && !controller.shortcut()->isEnabled(), "initial availability");
         controller.present();
         check(controller.dialog() == nullptr, "unavailable entry");
@@ -3951,14 +3953,15 @@ auto run_settings_window_checks(QApplication &app) -> int {
         QLabel feedback(&owner);
         bool capturing = false;
         int submissions = 0;
-        ShortcutCapture capture(&owner, [&submissions](int key, int flags) { ++submissions; return key == Qt::Key_A && flags == 1 ? QString() : QStringLiteral("Invalid"); }, [&capturing](bool active) { capturing = active; }, [](QWidget *) {}, &feedback);
+        // Qt reports Command as ControlModifier on macOS, which capture encodes as flag 2.
+        ShortcutCapture capture(&owner, [&submissions](int key, int flags) { ++submissions; return key == Qt::Key_A && flags == 2 ? QString() : QStringLiteral("Invalid"); }, [&capturing](bool active) { capturing = active; }, [](QWidget *) {}, &feedback);
         capture.show();
         capture.click();
         check(capturing, "capture starts");
         QKeyEvent invalid(QEvent::KeyPress, Qt::Key_B, Qt::NoModifier);
         QApplication::sendEvent(&capture, &invalid);
         check(capturing && submissions == 1 && feedback.text() == QStringLiteral("Invalid"), "invalid input stays in capture");
-        QKeyEvent accepted(QEvent::KeyPress, Qt::Key_A, Qt::MetaModifier);
+        QKeyEvent accepted(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier);
         QApplication::sendEvent(&capture, &accepted);
         check(!capturing && submissions == 2 && feedback.text().isEmpty(), "accepted input leaves capture");
         capture.click();

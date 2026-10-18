@@ -224,7 +224,7 @@ fn a_started_cut_keeps_its_cue_until_the_operation_reaches_a_terminal_result() {
 }
 
 #[test]
-fn a_running_cut_keeps_its_cue_when_the_clipboard_is_replaced() {
+fn replacing_the_clipboard_clears_a_running_cuts_cue() {
     let mut workspace = Workspace::new();
     let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
     let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
@@ -237,10 +237,28 @@ fn a_running_cut_keeps_its_cue_when_the_clipboard_is_replaced() {
     let WorkRequest::Operation(OperationEffect::Scan { id, generation, .. }) = started.work.into_iter().next().unwrap() else { panic!("move scan") };
 
     let replaced = workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(9), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
-    assert!(!replaced.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "replacement does not clear a running Cut's cue");
+    assert!(replaced.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "replacement clears the cue while the Cut still runs");
 
     let finished = workspace.handle(Event::OperationExecutorUnavailable { id, generation }.into());
-    assert!(finished.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "terminal consumption still clears the cue");
+    assert!(!finished.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if !pending_cut.is_empty())), "the move ending brings no cue back");
+}
+
+#[test]
+fn a_newer_copy_clears_a_running_cuts_cue() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, cut, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    publish(&mut workspace, request, cut, 8);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(8), snapshot: ClipboardSnapshot::Private { transfer: cut } }.into());
+
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Left }.into());
+    let (request, copy, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Copy);
+    let prepared = workspace.handle(Event::ClipboardPublished { request, transfer: copy, generation: ClipboardGeneration::new(9), succeeded: true }.into());
+    assert!(prepared.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "a Copy replaces the running Cut's cue");
 }
 
 #[test]
@@ -323,4 +341,82 @@ fn an_inactive_tab_cannot_capture_or_supply_a_paste_destination() {
     assert_eq!(workspace.paste_availability(BrowserSide::Left, old), Err(ClipboardRejection::StaleTab));
     let stale = workspace.handle(Input::ObservedCommand { command: Command::CaptureClipboard { browser: BrowserSide::Left, tab: old, action: ClipboardAction::Copy }, browser: BrowserSide::Left, tab: old, visible_revision: revision });
     assert!(matches!(stale.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::StaleObservation, .. }]));
+}
+
+#[test]
+fn a_read_that_finds_an_unreported_replacement_adopts_it_so_a_retry_succeeds() {
+    let mut workspace = Workspace::new();
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(1), offer: dual_pane_application::ClipboardOffer::Files }.into());
+
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let sources: Arc<[Location]> = Arc::from(vec![path(&["elsewhere", "file"])]);
+    let rejected = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(2), snapshot: ClipboardSnapshot::ExternalFiles { sources: Arc::clone(&sources) } }.into());
+    assert!(rejected.outputs.iter().any(|output| matches!(output, Output::ClipboardRejected { reason: ClipboardRejection::ClipboardReplaced, .. })));
+
+    let retry = request_paste(&mut workspace, BrowserSide::Right, right);
+    let started = workspace.handle(Event::ClipboardRead { request: retry, generation: ClipboardGeneration::new(2), snapshot: ClipboardSnapshot::ExternalFiles { sources } }.into());
+    assert!(matches!(started.work.as_slice(), [WorkRequest::PreflightClipboard { .. }]), "the retry is no longer rejected as replaced");
+}
+
+#[test]
+fn a_newer_cut_alone_holds_the_cue_while_an_earlier_cut_runs() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("one", EntryKind::File), ("two", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("one") }.into());
+    let (request, first, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    publish(&mut workspace, request, first, 8);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(8), snapshot: ClipboardSnapshot::Private { transfer: first } }.into());
+
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Left }.into());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 1, name: name("two") }.into());
+    let (request, second, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    let prepared = workspace.handle(Event::ClipboardPublished { request, transfer: second, generation: ClipboardGeneration::new(9), succeeded: true }.into());
+    assert!(prepared.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.len() == 1 && pending_cut[0].source == path(&["source", "two"]))), "only the newer Cut is pending");
+}
+
+#[test]
+fn a_private_only_offer_enables_paste_only_for_this_launchs_unreserved_current_transfer() {
+    use dual_pane_application::ClipboardOffer;
+
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(3), offer: ClipboardOffer::Private }.into());
+    assert_eq!(workspace.paste_availability(BrowserSide::Right, right), Err(ClipboardRejection::UnknownPrivateTransfer), "a token left by an earlier launch cannot paste");
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(4), offer: ClipboardOffer::PrivateAndFiles }.into());
+    assert_eq!(workspace.paste_availability(BrowserSide::Right, right), Ok(()), "colocated file URLs may still paste as a Copy");
+
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Left }.into());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, cut, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(5), offer: ClipboardOffer::Private }.into());
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    assert_eq!(workspace.paste_availability(BrowserSide::Right, right), Ok(()), "an unreported publication may be the observed content");
+    publish(&mut workspace, request, cut, 5);
+    assert_eq!(workspace.paste_availability(BrowserSide::Right, right), Ok(()));
+
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let started = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(5), snapshot: ClipboardSnapshot::Private { transfer: cut } }.into());
+    assert_eq!(workspace.paste_availability(BrowserSide::Right, right), Err(ClipboardRejection::TransferReserved));
+    let WorkRequest::Operation(OperationEffect::Scan { id, generation, .. }) = started.work.into_iter().next().unwrap() else { panic!("move scan") };
+    workspace.handle(Event::OperationExecutorUnavailable { id, generation }.into());
+    assert_eq!(workspace.paste_availability(BrowserSide::Right, right), Err(ClipboardRejection::UnknownPrivateTransfer), "a consumed Cut cannot paste again");
+}
+
+#[test]
+fn an_unavailable_read_reports_busy_even_with_a_stale_generation() {
+    let mut workspace = Workspace::new();
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(6), offer: dual_pane_application::ClipboardOffer::Files }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let rejected = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(7), snapshot: ClipboardSnapshot::Unavailable }.into());
+    assert!(matches!(rejected.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::ClipboardBusy, .. }]));
+    assert_eq!(workspace.paste_availability(BrowserSide::Right, right), Ok(()), "an untaken read changes no observed state");
 }

@@ -506,8 +506,7 @@ impl ffi::WorkspaceBridge {
     }
     fn add_action_shortcut(mut self: Pin<&mut Self>, index: i32, key: i32, modifiers: i32) -> QString {
         let Some(action) = action_at(index) else { return QString::from("Unknown action") };
-        let key = capture_key(key);
-        let shortcut = Shortcut::new(modifiers & 1 != 0, modifiers & 8 != 0, modifiers & 4 != 0, modifiers & 2 != 0, key);
+        let shortcut = captured_shortcut(key, modifiers);
         let result = with_session(|session| {
             let mut shortcuts = session.shortcuts(action);
             shortcuts.push(shortcut);
@@ -642,6 +641,13 @@ fn action_at(index: i32) -> Option<ActionId> {
     usize::try_from(index).ok().and_then(|index| ActionId::ALL.get(index).copied())
 }
 
+/// The shortcut a capture recorded. Its flags name Qt modifiers: 1 Meta, 2
+/// Control, 4 Alt, 8 Shift. On macOS Qt's Control is Command and its Meta is
+/// Control, the same swap [`key_sequence`] applies in reverse.
+fn captured_shortcut(key: i32, modifiers: i32) -> Shortcut {
+    Shortcut::new(modifiers & 2 != 0, modifiers & 8 != 0, modifiers & 4 != 0, modifiers & 1 != 0, capture_key(key))
+}
+
 fn capture_key(key: i32) -> Key {
     match key {
         0x01000000 => Key::Escape,
@@ -705,7 +711,7 @@ fn shortcut_label(shortcut: Shortcut) -> String {
 fn rejection_text(rejection: Option<ShortcutRejection>) -> QString {
     match rejection {
         None => QString::default(),
-        Some(ShortcutRejection::Invalid) => QString::from("Use a supported key with Command, Control, or Option; function keys may stand alone. Return for Rename Item and Shift+Backspace or Shift+Delete for Move to Trash are supported exceptions."),
+        Some(ShortcutRejection::Invalid) => QString::from("Use a supported key with Command, Control, or Option; function keys may stand alone. Return for Rename Item and Shift+Backspace or Shift+Forward Delete for Move to Trash are supported exceptions."),
         Some(ShortcutRejection::Reserved) => QString::from("This shortcut is reserved for Settings or macOS."),
         Some(ShortcutRejection::Duplicate) => QString::from("This action already has that shortcut."),
         Some(ShortcutRejection::Conflict(action)) => QString::from(format!("Already assigned to {}.", action_label(action)).as_str()),
@@ -722,11 +728,11 @@ fn action_label(action: ActionId) -> String {
     label
 }
 
-/// Qt portable key-sequence text for `shortcut`. Native macOS key events use
-/// `MetaModifier` for Command and `ControlModifier` for Control.
+/// Qt portable key-sequence text for `shortcut`. Qt swaps the keys on macOS:
+/// `ControlModifier` (`Ctrl+`) is Command and `MetaModifier` (`Meta+`) is Control.
 pub(crate) fn key_sequence(shortcut: Shortcut) -> String {
     let mut text = String::new();
-    for (held, name) in [(shortcut.control, "Ctrl+"), (shortcut.option, "Alt+"), (shortcut.shift, "Shift+"), (shortcut.command, "Meta+")] {
+    for (held, name) in [(shortcut.command, "Ctrl+"), (shortcut.option, "Alt+"), (shortcut.shift, "Shift+"), (shortcut.control, "Meta+")] {
         if held {
             text.push_str(name);
         }
@@ -754,19 +760,39 @@ mod tests {
     use dual_pane_application::{ActionId, default_shortcut};
 
     #[test]
+    fn captured_qt_modifiers_become_the_keys_a_person_held() {
+        let key_c = i32::from(b'C');
+        assert_eq!(captured_shortcut(key_c, 2), Shortcut::new(true, false, false, false, Key::Character('C')), "Qt Control is Command");
+        assert_eq!(captured_shortcut(key_c, 1), Shortcut::new(false, false, false, true, Key::Character('C')), "Qt Meta is Control");
+        assert_eq!(captured_shortcut(key_c, 4 | 8), Shortcut::new(false, true, true, false, Key::Character('C')));
+        for shortcut in [captured_shortcut(key_c, 2), captured_shortcut(key_c, 1 | 2 | 4 | 8)] {
+            assert_eq!(captured_shortcut(key_c, qt_flags(&key_sequence(shortcut))), shortcut, "capture and key sequence agree on {}", key_sequence(shortcut));
+        }
+    }
+
+    /// The capture flags Qt reports for the modifiers in a portable sequence.
+    fn qt_flags(sequence: &str) -> i32 {
+        [("Meta+", 1), ("Ctrl+", 2), ("Alt+", 4), ("Shift+", 8)].iter().filter(|(name, _)| sequence.contains(name)).map(|(_, flag)| flag).sum()
+    }
+
+    #[test]
     fn delivered_shortcuts_map_to_qt_key_sequences() {
         let sequence = |action| default_shortcut(action).map(key_sequence);
-        assert_eq!(sequence(ActionId::NewTab).as_deref(), Some("Meta+T"));
-        assert_eq!(sequence(ActionId::CloseTab).as_deref(), Some("Meta+W"));
+        assert_eq!(sequence(ActionId::NewTab).as_deref(), Some("Ctrl+T"));
+        assert_eq!(sequence(ActionId::CloseTab).as_deref(), Some("Ctrl+W"));
         assert_eq!(sequence(ActionId::NavigateBack).as_deref(), Some("Alt+Left"));
         assert_eq!(sequence(ActionId::NavigateForward).as_deref(), Some("Alt+Right"));
-        assert_eq!(sequence(ActionId::RefreshFolder).as_deref(), Some("Meta+R"));
+        assert_eq!(sequence(ActionId::RefreshFolder).as_deref(), Some("Ctrl+R"));
         assert_eq!(sequence(ActionId::FocusOtherBrowser).as_deref(), Some("Alt+F"));
-        assert_eq!(sequence(ActionId::NavigateParent).as_deref(), Some("Meta+Up"));
-        assert_eq!(sequence(ActionId::OpenItem).as_deref(), Some("Meta+Down"));
-        assert_eq!(sequence(ActionId::QuitApplication).as_deref(), Some("Meta+Q"));
-        assert_eq!(sequence(ActionId::NewFolder).as_deref(), Some("Shift+Meta+N"));
+        assert_eq!(sequence(ActionId::NavigateParent).as_deref(), Some("Ctrl+Up"));
+        assert_eq!(sequence(ActionId::OpenItem).as_deref(), Some("Ctrl+Down"));
+        assert_eq!(sequence(ActionId::QuitApplication).as_deref(), Some("Ctrl+Q"));
+        assert_eq!(sequence(ActionId::NewFolder).as_deref(), Some("Ctrl+Shift+N"));
+        assert_eq!(sequence(ActionId::CopyItems).as_deref(), Some("Ctrl+C"));
+        assert_eq!(sequence(ActionId::CutItems).as_deref(), Some("Ctrl+X"));
+        assert_eq!(sequence(ActionId::PasteItems).as_deref(), Some("Ctrl+V"));
         assert_eq!(sequence(ActionId::CloseWindow), None);
+        assert_eq!(default_shortcuts(ActionId::MoveToTrash).into_iter().map(key_sequence).collect::<Vec<_>>(), ["Ctrl+Backspace", "Ctrl+Delete", "Shift+Backspace", "Shift+Delete"], "Qt's Delete is Forward Delete");
         assert_eq!(key_sequence(Shortcut::new(true, false, true, true, Key::Delete)), "Ctrl+Alt+Meta+Backspace");
         assert_eq!(key_sequence(Shortcut::new(false, false, false, false, Key::Function(2))), "F2");
     }

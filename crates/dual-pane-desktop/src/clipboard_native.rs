@@ -40,10 +40,19 @@ pub fn publish(transfer: TransferId, action: ClipboardAction, roots: Option<&[Op
 }
 
 pub fn read() -> (ClipboardGeneration, ClipboardSnapshot) {
-    let bytes = ffi::clipboard_read().as_ref().to_vec();
-    let mut cursor = Cursor::new(&bytes);
+    decode_read(ffi::clipboard_read().as_ref())
+}
+
+/// Read result: the generation, a flag byte (1 private token, 2 file URLs,
+/// 4 malformed, 8 changed during every attempt), the token when flagged, then
+/// a counted list of length-prefixed paths.
+fn decode_read(bytes: &[u8]) -> (ClipboardGeneration, ClipboardSnapshot) {
+    let mut cursor = Cursor::new(bytes);
     let Some(generation) = cursor.u64() else { return (generation_and_offer().0, ClipboardSnapshot::Unsupported) };
     let Some(flags) = cursor.byte() else { return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported) };
+    if flags & 8 != 0 {
+        return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unavailable);
+    }
     let transfer = if flags & 1 != 0 { cursor.u64().map(TransferId::new) } else { None };
     let Some(count) = cursor.u32() else { return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported) };
     // Every path carries a four-byte length, so a larger count cannot be honest.
@@ -154,6 +163,14 @@ mod tests {
         let location = Location::from_components([EntryName::new(b"one".to_vec()).unwrap(), EntryName::new(b"raw\xff".to_vec()).unwrap()]);
         assert_eq!(location_from_absolute_bytes(&path_bytes(&location)), Some(location));
         assert_eq!(location_from_absolute_bytes(b"relative"), None);
+    }
+
+    #[test]
+    fn a_read_that_kept_changing_is_unavailable_rather_than_a_snapshot() {
+        let mut bytes = 9_u64.to_le_bytes().to_vec();
+        bytes.push(8);
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(decode_read(&bytes), (ClipboardGeneration::new(9), ClipboardSnapshot::Unavailable));
     }
 
     #[test]
