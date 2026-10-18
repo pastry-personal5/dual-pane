@@ -44,7 +44,7 @@ pub fn project_filter(request: &FilterRequest) -> FilterResult {
         return FilterResult { indices: (0..request.entries.len()).collect::<Vec<_>>().into(), entries: Arc::clone(&request.entries) };
     }
     let needle = comparable(&request.text);
-    let indices = request.entries.iter().enumerate().filter_map(|(index, entry)| comparable(&entry.name().to_text_lossy()).contains(&needle).then_some(index)).collect::<Vec<_>>();
+    let indices = request.entries.iter().enumerate().filter_map(|(index, entry)| comparable(&entry.name().to_text_lossy()).starts_with(&needle).then_some(index)).collect::<Vec<_>>();
     let entries = indices.iter().map(|&index| request.entries[index].clone()).collect::<Vec<_>>();
     FilterResult { indices: indices.into(), entries: entries.into() }
 }
@@ -69,12 +69,14 @@ mod tests {
         assert_eq!(&*project_filter(&request("strasse", names)).indices, &[2]);
         assert_eq!(&*project_filter(&request(" a ", names)).indices, &[3]);
         assert_eq!(project_filter(&request("x", names)).entries.len(), 0);
+        assert_eq!(project_filter(&request("fé", names)).entries.len(), 0, "a middle-of-name match is not a prefix match");
+        assert!(project_filter(&request("pha", &[b"alpha"])).entries.is_empty(), "matching text in the middle of a name is rejected");
         assert_eq!(project_filter(&request("", names)).entries.len(), names.len());
     }
 
     #[test]
     fn lossy_names_match_but_keep_distinct_byte_identities() {
-        let request = request("�", &[b"a\xff", b"a\xfe"]);
+        let request = request("�", &[b"\xffa", b"\xfea"]);
         let result = project_filter(&request);
         assert_eq!(result.entries.len(), 2);
         assert_ne!(result.entries[0].name(), result.entries[1].name());

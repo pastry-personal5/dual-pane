@@ -1,6 +1,6 @@
 # P4-M3 architecture
 
-Status: Planned
+Status: Active
 
 The Qt Folder Items Filter Row edits application-owned tab state through a typed controller event and renders the resulting view model. The [overview checklist](milestone-03-overview.md#completion-checklist) defines acceptance.
 
@@ -38,13 +38,13 @@ Place the temporary Folder Items Filter Row immediately below Folder Pane Toolba
 
 Apply model and row updates on the GUI thread. While projection work runs, show the blank list and updating cue without clearing application-owned visit state; block Item and selection-dependent actions. A failed or cancelled projection remains blank and blocked and exposes the presenter's retryable filter-failure status to sighted and assistive-technology users. For a successful zero-result projection, leave the Folder Items List visually empty: do not insert a synthetic row or overlay. Keep the filter row visible, publish the zero-result count, and announce the result through accessibility.
 
-When Folder Items List has keyboard focus, route an unmodified printable text event other than Space into the active tab's filter and focus the Folder Items Filter Row for subsequent text input. Consume the initiating text exactly once; do not synthesize a second key press. Append subsequent printable input to the query, so `a` followed by `p` produces `Starts with: ap`. Leave Space, movement, activation, modified shortcuts, and inline editor input with their existing owners. The remaining owner review decides how text composition is committed; the desktop must not guess from a physical key code when the event supplies text.
+When Folder Items List has keyboard focus, route an unmodified printable text event other than Space into the active tab's filter and focus the Folder Items Filter Row for subsequent text input. Consume the initiating text exactly once; do not synthesize a second key press. Append subsequent printable input to the query, so `a` followed by `p` produces `Starts with: ap`. IME preedit is displayed in the focused text editor and does not update the query; committed text updates it once. Leave Space, movement, activation, modified shortcuts, and inline editor input with their existing owners.
 
 Activating the Close Filter Button submits an empty query for the tab shown by that row, restores the complete current projection, and hides the row. Use signal blocking or an equivalent explicit rendering guard when applying `filter_text`, changing tabs, showing or hiding the row, or applying an asynchronous result. Only user-originated edits enter the filter-edit handoff. Capture the observed tab before dispatch so a queued edit or close signal cannot alter a different tab. A tab with a nonempty query shows its row when activated without briefly rendering the previous tab's text or rows.
 
 ## Shortcut catalogue and focus command
 
-Append `FocusFolderItemsFilter` to `ActionId::ALL`; do not insert it before an existing stable action. Give it visible name **Focus Folder Items Filter**, Window scope, and the `Command+F` factory default. Wire the action through `settings.rs`, settings snapshot/storage compatibility, `workspace_bridge.rs`, the Keyboard Shortcuts Settings navigation group, `ShortcutBinder`, and the active-Browser handler in `desktop_window.cpp`. The handler shows and focuses that Browser's Folder Items Filter Row even when the query is empty. If focus leaves or the person switches tabs while the query is still empty, the final behavior follows the remaining owner focus decision; a nonempty query always remains tab-local and restores its row.
+Append `FocusFolderItemsFilter` to `ActionId::ALL`; do not insert it before an existing stable action. Give it visible name **Focus Folder Items Filter**, Window scope, and the `Command+F` factory default. Wire the action through `settings.rs`, settings snapshot/storage compatibility, `workspace_bridge.rs`, the Keyboard Shortcuts Settings navigation group, `ShortcutBinder`, and the active-Browser handler in `desktop_window.cpp`. The handler shows and focuses that Browser's Folder Items Filter Row even when the query is empty. An empty row hides on focus loss or tab switch and preserves the new focus; a nonempty query remains tab-local and restores its row.
 
 Loading an older profile adds the missing action under the existing compatibility rules without disturbing customized or deliberately unbound actions and without taking `Command+F` from an accepted existing binding. Reset restores the factory default subject to the normal conflict rules. Tests cover catalogue append order, parsing and persistence, old-profile completion, default restoration, conflict rejection, settings presentation, handler routing to the active Browser, and rebinding.
 

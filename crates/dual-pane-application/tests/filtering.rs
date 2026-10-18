@@ -68,7 +68,7 @@ fn observed(browser: BrowserSide, tab: TabId, visible_revision: u64, command: Co
 #[test]
 fn unicode_and_invalid_bytes_keep_exact_row_identities() {
     let mut workspace = Workspace::new();
-    let tab = loaded(&mut workspace, BrowserSide::Left, folder("a"), &["Café".as_bytes(), "cafe\u{301}".as_bytes(), "Straße".as_bytes(), b"bad\xff", b"bad\xfe"]);
+    let tab = loaded(&mut workspace, BrowserSide::Left, folder("a"), &["Café".as_bytes(), "cafe\u{301}".as_bytes(), "Straße".as_bytes(), b"\xffbad", b"\xfebad"]);
     let (request, revision) = filter(&mut workspace, BrowserSide::Left, tab, "CAFE");
     let output = finish(&mut workspace, request);
     assert!(matches!(&output.outputs[0], Output::VisibleItemsChanged { entries, total_count: 5, filter_status: FilterStatus::Ready, .. } if entries.len() == 2));
@@ -81,9 +81,9 @@ fn unicode_and_invalid_bytes_keep_exact_row_identities() {
     assert_ne!(result.entries[0].name(), result.entries[1].name());
     let output = workspace.handle(Event::FilterProjected { request, result: Ok(result) }.into());
     let Output::VisibleItemsChanged { visible_revision, .. } = &output.outputs[0] else { panic!("visible output") };
-    assert!(workspace.handle(observed(BrowserSide::Left, tab, revision, Command::SelectEntry { browser: BrowserSide::Left, tab, row: 0, name: name(b"bad\xff") })).outputs.is_empty());
-    workspace.handle(observed(BrowserSide::Left, tab, *visible_revision, Command::SelectEntry { browser: BrowserSide::Left, tab, row: 0, name: name(b"bad\xff") }));
-    assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name(b"bad\xff")]);
+    assert!(workspace.handle(observed(BrowserSide::Left, tab, revision, Command::SelectEntry { browser: BrowserSide::Left, tab, row: 0, name: name(b"\xffbad") })).outputs.is_empty());
+    workspace.handle(observed(BrowserSide::Left, tab, *visible_revision, Command::SelectEntry { browser: BrowserSide::Left, tab, row: 0, name: name(b"\xffbad") }));
+    assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name(b"\xffbad")]);
 }
 
 #[test]
@@ -94,9 +94,9 @@ fn pending_failure_retry_and_clear_preserve_only_visible_selection() {
     let ready = finish(&mut workspace, request);
     let Output::VisibleItemsChanged { visible_revision, .. } = &ready.outputs[0] else { panic!("visible output") };
     workspace.handle(observed(BrowserSide::Left, tab, *visible_revision, Command::SelectAll { browser: BrowserSide::Left, tab }));
-    assert_eq!(workspace.selection(BrowserSide::Left).entries().len(), 2);
+    assert_eq!(workspace.selection(BrowserSide::Left).entries().len(), 1);
     let (request, pending_revision) = filter(&mut workspace, BrowserSide::Left, tab, "alp");
-    assert_eq!(workspace.selection(BrowserSide::Left).entries().len(), 2, "temporary blank rows keep visit state");
+    assert_eq!(workspace.selection(BrowserSide::Left).entries().len(), 1, "temporary blank rows keep visit state");
     assert!(workspace.operation_availability(BrowserSide::Left, tab, OperationKind::MoveToTrash).is_err());
     assert!(workspace.handle(observed(BrowserSide::Left, tab, pending_revision, Command::SelectAll { browser: BrowserSide::Left, tab })).outputs.is_empty());
     let failed = workspace.handle(Event::FilterProjected { request: request.clone(), result: Err(FilterFailure::WorkerUnavailable) }.into());
@@ -302,13 +302,13 @@ fn stricter_visibility_clears_filtered_rows_before_the_replacement_read() {
 fn sort_and_watcher_refresh_reproject_in_the_new_sorted_order() {
     let mut workspace = Workspace::new();
     let location = folder("items");
-    let tab = loaded(&mut workspace, BrowserSide::Left, location.clone(), &[b"alpha", b"beta"]);
+    let tab = loaded(&mut workspace, BrowserSide::Left, location.clone(), &[b"alpha", b"alpine"]);
     let (request, _) = filter(&mut workspace, BrowserSide::Left, tab, "a");
     finish(&mut workspace, request);
     let sort = SortSpec::new(SortField::Name, SortDirection::Descending);
     let transition = workspace.handle(Command::SetSort { browser: BrowserSide::Left, tab, location: location.clone(), sort }.into());
     let (_, _, token) = read(&transition);
-    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: entries(&[b"beta", b"alpha"]), changes: None }.into());
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: entries(&[b"alpine", b"alpha"]), changes: None }.into());
     let request = loaded
         .work
         .iter()
@@ -318,10 +318,10 @@ fn sort_and_watcher_refresh_reproject_in_the_new_sorted_order() {
         })
         .unwrap();
     assert_eq!(request.text, "a");
-    assert!(matches!(&finish(&mut workspace, request).outputs[0], Output::VisibleItemsChanged { entries, .. } if entries[0].name() == &name("beta")));
+    assert!(matches!(&finish(&mut workspace, request).outputs[0], Output::VisibleItemsChanged { entries, .. } if entries[0].name() == &name("alpine")));
     let watch = workspace.handle(Event::LocationInvalidated { location }.into());
     let (_, _, token) = read(&watch);
-    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: entries(&[b"gamma", b"beta", b"alpha"]), changes: None }.into());
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: entries(&[b"apricot", b"alpine", b"alpha"]), changes: None }.into());
     let request = loaded
         .work
         .iter()

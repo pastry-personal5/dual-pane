@@ -37,6 +37,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
 #include <QtGui/QImage>
+#include <QtGui/QInputMethodEvent>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPaintEvent>
@@ -65,6 +66,7 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
+#include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QSplitterHandle>
 #include <QtWidgets/QStackedWidget>
@@ -617,7 +619,14 @@ class FolderItemsList final : public QTreeView {
         verticalScrollBar()->installEventFilter(this);
         horizontalScrollBar()->installEventFilter(this);
         connect(model_, &FolderItemsListModel::selectionRevisionChanged, this, [this] { synchronize_selection(); });
-        connect(model_, &QAbstractItemModel::modelAboutToBeReset, this, [this] { icons_->invalidate(); });
+        connect(model_, &QAbstractItemModel::modelAboutToBeReset, this, [this] {
+            icons_->invalidate();
+            if (quick_look_gesture_.active()) {
+                quick_look_gesture_.interrupted(quick_look_gesture_.generation());
+                stop_quick_look_timer();
+                quick_look_->dismiss();
+            }
+        });
         connect(model_, &QAbstractItemModel::modelReset, this, [this] {
             synchronize_selection();
             restore_scroll();
@@ -630,6 +639,8 @@ class FolderItemsList final : public QTreeView {
     /// for empty space when `row` is -1.
     void setMenuHandler(std::function<void(const QPoint &, int)> handler) { menu_handler_ = std::move(handler); }
     void setQuickLookFailureHandler(std::function<void()> handler) { quick_look_failure_handler_ = std::move(handler); }
+    void setTypeToFilterHandler(std::function<void(const QString &)> handler) { type_to_filter_handler_ = std::move(handler); }
+    void setInputMethodHandler(std::function<void(const QString &, const QString &, const QList<QInputMethodEvent::Attribute> &)> handler) { input_method_handler_ = std::move(handler); }
 
     /// Moves keyboard focus here, which activates this Browser.
     void focusList() {
@@ -711,6 +722,13 @@ class FolderItemsList final : public QTreeView {
             model_->goToParent();
         else if (key == Qt::Key_Right)
             model_->activateSelected();
+        else if (!event->text().isEmpty() && std::all_of(event->text().cbegin(), event->text().cend(), [](QChar character) { return character.isPrint(); }) && type_to_filter_handler_)
+            type_to_filter_handler_(event->text());
+    }
+    void inputMethodEvent(QInputMethodEvent *event) override {
+        event->accept();
+        if (input_method_handler_)
+            input_method_handler_(event->preeditString(), event->commitString(), event->attributes());
     }
     void keyReleaseEvent(QKeyEvent *event) override {
         if (event->key() != Qt::Key_Space) {
@@ -718,6 +736,12 @@ class FolderItemsList final : public QTreeView {
             return;
         }
         event->accept();
+        if (quick_look_gesture_.active() && (model_->activeTabId() != quick_look_tab_ || model_->visibleRevision() != quick_look_revision_)) {
+            quick_look_gesture_.interrupted(quick_look_gesture_.generation());
+            stop_quick_look_timer();
+            quick_look_->dismiss();
+            return;
+        }
         const auto release = quick_look_gesture_.released(quick_look_gesture_.generation(), event->isAutoRepeat());
         if (release != QuickLookGesture::Release::Ignored)
             stop_quick_look_timer();
@@ -746,13 +770,21 @@ class FolderItemsList final : public QTreeView {
         const QuickLookItem item{index.data(native_path_role).toByteArray(), index.data(native_directory_role).toBool()};
         if (quick_look_gesture_.press(item, true, false) && quick_look_gesture_.held()) {
             const auto generation = quick_look_gesture_.generation();
+            const auto observed_tab = model_->activeTabId();
+            const auto observed_revision = model_->visibleRevision();
+            quick_look_tab_ = observed_tab;
+            quick_look_revision_ = observed_revision;
             auto *timer = new QTimer(this);
             timer->setSingleShot(true);
             timer->setTimerType(Qt::PreciseTimer);
-            connect(timer, &QTimer::timeout, this, [this, timer, generation] {
+            connect(timer, &QTimer::timeout, this, [this, timer, generation, observed_tab, observed_revision] {
                 if (quick_look_timer_ == timer)
                     quick_look_timer_ = nullptr;
                 timer->deleteLater();
+                if (model_->activeTabId() != observed_tab || model_->visibleRevision() != observed_revision) {
+                    quick_look_gesture_.interrupted(generation);
+                    return;
+                }
                 (void)quick_look_gesture_.hold_elapsed(generation);
             });
             quick_look_timer_ = timer;
@@ -835,9 +867,13 @@ class FolderItemsList final : public QTreeView {
     std::function<void(const std::array<bool, column_count> &)> columns_handler_;
     std::function<void(const QPoint &, int)> menu_handler_;
     std::function<void()> quick_look_failure_handler_;
+    std::function<void(const QString &)> type_to_filter_handler_;
+    std::function<void(const QString &, const QString &, const QList<QInputMethodEvent::Attribute> &)> input_method_handler_;
     std::unique_ptr<QuickLookPreviewController> quick_look_;
     QuickLookGesture quick_look_gesture_;
     QPointer<QTimer> quick_look_timer_;
+    std::uint64_t quick_look_tab_ = 0;
+    std::uint64_t quick_look_revision_ = 0;
     bool restoring_ = false;
 };
 
@@ -1205,6 +1241,32 @@ class ElidedStatusLabel final : public QLabel {
     QString full_text_;
 };
 
+class FolderFilterTextEdit final : public QLineEdit {
+  public:
+    explicit FolderFilterTextEdit(QWidget *parent) : QLineEdit(parent) {}
+    void setEscapeHandler(std::function<void()> handler) { escape_handler_ = std::move(handler); }
+    void setFocusLossHandler(std::function<void()> handler) { focus_loss_handler_ = std::move(handler); }
+
+  protected:
+    void keyPressEvent(QKeyEvent *event) override {
+        if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && escape_handler_) {
+            event->accept();
+            escape_handler_();
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+    void focusOutEvent(QFocusEvent *event) override {
+        QLineEdit::focusOutEvent(event);
+        if (focus_loss_handler_)
+            QTimer::singleShot(0, this, [this] { if (!hasFocus()) focus_loss_handler_(); });
+    }
+
+  private:
+    std::function<void()> escape_handler_;
+    std::function<void()> focus_loss_handler_;
+};
+
 class FolderPane final : public QFrame {
   public:
     FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)) {
@@ -1293,6 +1355,36 @@ class FolderPane final : public QFrame {
         command_layout->addWidget(sort_groups.at(1));
         command_layout->addWidget(sort_groups.at(2));
         command_layout->addWidget(sort_groups.at(3));
+        filter_row_ = new QWidget(this);
+        filter_row_->setObjectName(QStringLiteral("folderItemsFilterRow"));
+        filter_row_->setAccessibleName(QStringLiteral("Folder Items Filter Row"));
+        auto *filter_layout = new QHBoxLayout(filter_row_);
+        filter_layout->setContentsMargins(6, 2, 4, 2);
+        filter_layout->setSpacing(6);
+        auto *filter_prefix = new QLabel(QStringLiteral("Starts with:"), filter_row_);
+        filter_prefix->setObjectName(QStringLiteral("filterPrefix"));
+        filter_input_ = new FolderFilterTextEdit(filter_row_);
+        filter_input_->setObjectName(QStringLiteral("folderItemsFilterText"));
+        filter_input_->setProperty("filterTextEditor", true);
+        filter_input_->setAccessibleName(QStringLiteral("Folder Items Filter Text"));
+        filter_input_->setPlaceholderText(QStringLiteral("Type a name prefix"));
+        filter_input_->setClearButtonEnabled(false);
+        filter_input_->setMinimumWidth(40);
+        filter_input_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        filter_status_ = new QLabel(filter_row_);
+        filter_status_->setObjectName(QStringLiteral("filterResultStatus"));
+        filter_status_->setAccessibleName(QStringLiteral("Filter Results"));
+        auto *close_filter = new QToolButton(filter_row_);
+        close_filter->setObjectName(QStringLiteral("closeFilterButton"));
+        close_filter->setText(QStringLiteral("×"));
+        close_filter->setToolTip(QStringLiteral("Close Filter"));
+        close_filter->setAccessibleName(QStringLiteral("Close Filter Button"));
+        close_filter->setFixedSize(24, 22);
+        filter_layout->addWidget(filter_prefix);
+        filter_layout->addWidget(filter_input_, 1);
+        filter_layout->addWidget(filter_status_);
+        filter_layout->addWidget(close_filter);
+        filter_row_->hide();
         view_->setObjectName(QStringLiteral("folderItemsList"));
         view_->setAccessibleName(QStringLiteral("Folder Items List"));
         auto *status = new ElidedStatusLabel(this);
@@ -1308,6 +1400,7 @@ class FolderPane final : public QFrame {
         layout->addWidget(title);
         layout->addWidget(summary);
         layout->addWidget(commands);
+        layout->addWidget(filter_row_);
         layout->addWidget(new_folder_row_);
         layout->addWidget(view_, 1);
         QObject::connect(model, &FolderItemsListModel::folderNameChanged, this, [title, model] { title->setText(model->getFolderName()); });
@@ -1354,6 +1447,77 @@ class FolderPane final : public QFrame {
         update_toolbar();
         QObject::connect(model, &FolderItemsListModel::toolbarStateChanged, this, update_toolbar);
         QObject::connect(model, &FolderItemsListModel::sortChoiceChanged, this, [this, model] { update_sort(model); });
+        previous_filter_tab_ = model->activeTabId();
+        const auto refresh_filter = [this, model] {
+            const auto tab = model->activeTabId();
+            const bool tab_changed = tab != previous_filter_tab_;
+            previous_filter_tab_ = tab;
+            const auto &text = model->getFilterText();
+            {
+                const QSignalBlocker blocker(filter_input_);
+                filter_input_->setText(text);
+            }
+            if (!text.isEmpty())
+                filter_row_->show();
+            else if (tab_changed)
+                filter_row_->hide();
+            if (model->getFilterStatus() == 1)
+                filter_status_->setText(QStringLiteral("Updating…"));
+            else if (model->getFilterStatus() == 2)
+                filter_status_->setText(QStringLiteral("Filter unavailable; edit to retry"));
+            else if (model->getNoFilterMatches())
+                filter_status_->setText(QStringLiteral("No matches"));
+            else if (text.isEmpty())
+                filter_status_->setText(QStringLiteral("%1 items").arg(model->getFilterResultCount()));
+            else
+                filter_status_->setText(QStringLiteral("%1 matches").arg(model->getFilterResultCount()));
+            filter_input_->setAccessibleDescription(QStringLiteral("Starts with %1. %2").arg(text, filter_status_->text()));
+            filter_status_->setAccessibleDescription(filter_status_->text());
+            const auto announcement_text = QStringLiteral("Starts with %1. %2").arg(text, filter_status_->text());
+            if (filter_row_->isVisible() && announcement_text != last_filter_announcement_) {
+                last_filter_announcement_ = announcement_text;
+                QAccessibleAnnouncementEvent announcement(filter_row_, announcement_text);
+                QAccessible::updateAccessibility(&announcement);
+            }
+        };
+        QObject::connect(model, &FolderItemsListModel::filterViewChanged, this, refresh_filter);
+        QObject::connect(filter_input_, &QLineEdit::textChanged, this, [this, model](const QString &text) {
+            const auto observed_tab = model->activeTabId();
+            model->editFilterText(observed_tab, text);
+        });
+        QObject::connect(close_filter, &QToolButton::clicked, this, [this, model] {
+            const auto observed_tab = model->activeTabId();
+            const QString empty;
+            model->editFilterText(observed_tab, empty);
+            filter_row_->hide();
+            view_->focusList();
+        });
+        filter_input_->setFocusLossHandler([this, model] {
+            if (model->getFilterText().isEmpty() && !filter_row_->isAncestorOf(QApplication::focusWidget()))
+                filter_row_->hide();
+        });
+        filter_input_->setEscapeHandler([this, model] {
+            const auto observed_tab = model->activeTabId();
+            const QString empty;
+            model->editFilterText(observed_tab, empty);
+            filter_row_->hide();
+            view_->focusList();
+        });
+        view_->setTypeToFilterHandler([this, model](const QString &text) {
+            const auto observed_tab = model->activeTabId();
+            model->editFilterText(observed_tab, model->getFilterText() + text);
+            filter_row_->show();
+            filter_input_->setFocus(Qt::OtherFocusReason);
+        });
+        view_->setInputMethodHandler([this](const QString &preedit, const QString &commit, const QList<QInputMethodEvent::Attribute> &attributes) {
+            filter_row_->show();
+            filter_input_->setFocus(Qt::OtherFocusReason);
+            QInputMethodEvent forwarded(preedit, attributes);
+            if (!commit.isEmpty())
+                forwarded.setCommitString(commit);
+            QApplication::sendEvent(filter_input_, &forwarded);
+        });
+        refresh_filter();
         update_sort(model);
         QObject::connect(back, &QToolButton::clicked, model, [this, model] {
             view_->focusList();
@@ -1385,6 +1549,10 @@ class FolderPane final : public QFrame {
     [[nodiscard]] auto view() const -> FolderItemsList * { return view_; }
     [[nodiscard]] auto status() const -> ElidedStatusLabel * { return status_; }
     [[nodiscard]] auto new_folder_row() const -> QWidget * { return new_folder_row_; }
+    void focus_filter() {
+        filter_row_->show();
+        filter_input_->setFocus(Qt::ShortcutFocusReason);
+    }
 
   private:
     void update_sort(FolderItemsListModel *model) {
@@ -1396,6 +1564,11 @@ class FolderPane final : public QFrame {
     }
 
     FolderItemsList *view_;
+    QWidget *filter_row_ = nullptr;
+    FolderFilterTextEdit *filter_input_ = nullptr;
+    QLabel *filter_status_ = nullptr;
+    std::uint64_t previous_filter_tab_ = 0;
+    QString last_filter_announcement_;
     ElidedStatusLabel *status_ = nullptr;
     QWidget *new_folder_row_ = nullptr;
     std::array<QWidget *, 4> sort_groups_{};
@@ -1739,6 +1912,7 @@ class Browser final : public QWidget {
     [[nodiscard]] auto view() const -> FolderItemsList * { return folder_->view(); }
     [[nodiscard]] auto folder() const -> FolderPane * { return folder_; }
     [[nodiscard]] auto editors() const -> NameEditController * { return editors_; }
+    void focus_filter() { folder_->focus_filter(); }
     [[nodiscard]] auto preview_splitter() const -> ThinSplitter * { return preview_splitter_; }
     [[nodiscard]] auto preview_height() const -> int { return chosen_preview_height_; }
     void set_preview_changed_handler(std::function<void()> handler) { preview_changed_ = std::move(handler); }
@@ -1802,12 +1976,14 @@ class Browser final : public QWidget {
     /// disabled; empty space offers New Folder.
     void show_menu(const QPoint &at, int row) {
         QMenu menu(this);
+        const auto observed_tab = model_->activeTabId();
+        const auto observed_revision = model_->visibleRevision();
         menu.setObjectName(QStringLiteral("folderItemsContextMenu"));
         menu.setAccessibleName(QStringLiteral("Folder Items Context Menu"));
-        const auto add = [this, &menu](const QString &text, int command) {
+        const auto add = [this, &menu, observed_tab, observed_revision](const QString &text, int command) {
             auto *action = menu.addAction(text);
             action->setEnabled(model_->fileCommandAvailable(command));
-            QObject::connect(action, &QAction::triggered, this, [this, command] { model_->startFileCommand(command); });
+            QObject::connect(action, &QAction::triggered, this, [this, command, observed_tab, observed_revision] { model_->startFileCommandObserved(command, observed_tab, observed_revision); });
         };
         if (row >= 0) {
             add(QStringLiteral("Copy to Other Browser"), command_copy);
@@ -1820,7 +1996,7 @@ class Browser final : public QWidget {
             add(QStringLiteral("Delete Permanently"), command_delete);
             if (model_->rowIsPackage(row)) {
                 menu.addSeparator();
-                QObject::connect(menu.addAction(QStringLiteral("Show Package Contents")), &QAction::triggered, this, [this, row] { model_->showPackageContents(row); });
+                QObject::connect(menu.addAction(QStringLiteral("Show Package Contents")), &QAction::triggered, this, [this, row, observed_tab, observed_revision] { model_->showPackageContentsObserved(row, observed_tab, observed_revision); });
             }
         } else {
             add(QStringLiteral("New Folder"), command_new_folder);
@@ -3203,7 +3379,7 @@ class SettingsWindow final : public QDialog {
         return name;
     }
     static auto shortcut_group(const QString &id) -> int {
-        if (id == QStringLiteral("FocusOtherBrowser") || id == QStringLiteral("NavigateParent") || id == QStringLiteral("NavigateBack") || id == QStringLiteral("NavigateForward") || id == QStringLiteral("RefreshFolder"))
+        if (id == QStringLiteral("FocusOtherBrowser") || id == QStringLiteral("FocusFolderItemsFilter") || id == QStringLiteral("NavigateParent") || id == QStringLiteral("NavigateBack") || id == QStringLiteral("NavigateForward") || id == QStringLiteral("RefreshFolder"))
             return 0;
         if (id == QStringLiteral("NewTab") || id == QStringLiteral("CloseTab") || id == QStringLiteral("CloseWindow") || id == QStringLiteral("QuitApplication"))
             return 1;
@@ -4305,6 +4481,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     const auto active_model = [&bridge, models] { return models.at(bridge.getActiveBrowser() == 0 ? 0 : 1); };
     QHash<QString, ShortcutBinder::Handler> handlers;
     handlers.insert(QStringLiteral("FocusOtherBrowser"), [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 1 : 0)->view()->focusList(); });
+    handlers.insert(QStringLiteral("FocusFolderItemsFilter"), [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->focus_filter(); });
     handlers.insert(QStringLiteral("NavigateParent"), [active_model] { active_model()->goToParent(); });
     handlers.insert(QStringLiteral("CloseWindow"), [&window] { window.close(); });
     handlers.insert(QStringLiteral("ToggleFullScreen"), [&window] {
@@ -4354,7 +4531,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
 
     // Focus entering any control inside a Browser activates that Browser.
     QObject::connect(&app, &QApplication::focusChanged, &window, [browsers, models, &shortcuts](QWidget *, QWidget *now) {
-        shortcuts.setEditing(now != nullptr && now->property("inlineEditor").toBool());
+        shortcuts.setEditing(now != nullptr && (now->property("inlineEditor").toBool() || now->property("filterTextEditor").toBool()));
         for (int browser = 0; browser < 2; ++browser)
             if (inside(now, browsers.at(browser)))
                 models.at(browser)->activateBrowser();

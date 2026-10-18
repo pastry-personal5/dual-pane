@@ -290,6 +290,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         self.sidebar.apply_chrome(&self.workspace.workspace_chrome());
     }
 
+    #[cfg(test)]
     pub fn submit_ui(&mut self, browser: BrowserSide, event: UiEvent) {
         self.submit(Command::ActivateBrowser { browser });
         if let Some(command) = self.controller.command(browser, event, self.view(browser)) {
@@ -297,14 +298,58 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         }
     }
 
+    /// Submits a gesture using the view the native model had displayed when
+    /// the gesture arrived. The application validates this observation after
+    /// any newer projection or tab activation.
+    pub fn submit_observed_ui(&mut self, browser: BrowserSide, event: UiEvent, shown: BrowserViewModel) {
+        self.submit(Command::ActivateBrowser { browser });
+        let Some(command) = self.controller.command(browser, event, &shown) else { return };
+        if let Some((_, tab)) = command.visible_target() {
+            self.submit(Input::ObservedCommand { command, browser, tab, visible_revision: shown.visible_revision() });
+        } else {
+            self.submit(command);
+        }
+    }
+
+    /// Records a scroll hint against the rows the native model displayed.
+    pub fn submit_observed_view_state(&mut self, browser: BrowserSide, event: UiEvent, shown: BrowserViewModel) {
+        let Some(command) = self.controller.command(browser, event, &shown) else { return };
+        if let Some((_, tab)) = command.visible_target() {
+            self.submit(Input::ObservedCommand { command, browser, tab, visible_revision: shown.visible_revision() });
+        }
+    }
+
+    /// Uses a menu gesture's original observation even if its action arrives
+    /// after the view has changed.
+    pub fn submit_ui_at_observation(&mut self, browser: BrowserSide, event: UiEvent, tab: u64, visible_revision: u64) {
+        let Some(command) = self.controller.command(browser, event, self.view(browser)) else { return };
+        if command.visible_target().is_some() {
+            self.submit(Input::ObservedCommand { command, browser, tab: dual_pane_domain::TabId::new(tab), visible_revision });
+        } else {
+            self.submit(command);
+        }
+    }
+
+    /// Applies a filter edit only to the tab whose row produced the edit.
+    /// A delayed Qt signal cannot retarget a newly active tab.
+    pub fn set_filter_text_observed(&mut self, browser: BrowserSide, observed_tab: u64, text: String) {
+        let tab = dual_pane_domain::TabId::new(observed_tab);
+        if self.view(browser).active_tab() != Some(tab) {
+            return;
+        }
+        self.submit(Command::SetFilterText { browser, tab, text });
+    }
+
     /// Records view state, such as a scroll position, that a Browser reports
     /// without the person acting on it, so it never activates that Browser.
+    #[cfg(test)]
     pub fn submit_view_state(&mut self, browser: BrowserSide, event: UiEvent) {
         if let Some(command) = self.controller.command(browser, event, self.view(browser)) {
             self.submit_visible_command(browser, command);
         }
     }
 
+    #[cfg(test)]
     fn submit_visible_command(&mut self, browser: BrowserSide, command: Command) {
         if let Some((_, tab)) = command.visible_target() {
             let visible_revision = self.view(browser).visible_revision();
@@ -386,7 +431,7 @@ mod tests {
     use std::sync::Arc;
 
     use dual_pane_adapters::{FavoritesEvent, SelectionMovement};
-    use dual_pane_application::{Command, Event, WorkRequest};
+    use dual_pane_application::{Command, Event, WorkRequest, project_filter};
     use dual_pane_domain::OperationCommand;
     use dual_pane_domain::{Entry, EntryKind, EntryName, ListingErrorKind, RequestToken, Selection, SortSpec, TabId};
 
@@ -436,6 +481,62 @@ mod tests {
         assert_eq!(view.status_text(), status);
         assert_eq!(view.is_loading(), loading);
         assert_eq!(view.folder_items_revision(), revision);
+    }
+
+    #[test]
+    fn delayed_native_gestures_keep_the_revision_of_the_displayed_rows() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("base"));
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("alpha"), entry("beta")]), changes: None });
+        let old_view = session.view(BrowserSide::Left).clone();
+        session.submit(Command::SetFilterText { browser: BrowserSide::Left, tab: TabId::new(0), text: "alpha".into() });
+        let request = session
+            .runner
+            .dispatched
+            .iter()
+            .rev()
+            .find_map(|work| match work {
+                WorkRequest::ProjectFilter { request } => Some(request.clone()),
+                _ => None,
+            })
+            .expect("filter projection");
+        session.submit(Event::FilterProjected { result: Ok(project_filter(&request)), request });
+
+        session.submit_observed_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 }, old_view.clone());
+        assert!(session.view(BrowserSide::Left).selection().entries().is_empty(), "an old row gesture cannot select after projection");
+        session.submit_ui_at_observation(BrowserSide::Left, UiEvent::FileCommand(OperationCommand::Copy), old_view.active_tab().unwrap().value(), old_view.visible_revision());
+        assert!(session.operations.view().panels().is_empty(), "an old selection command cannot start after projection");
+    }
+
+    #[test]
+    fn delayed_filter_edits_cannot_retarget_a_different_active_tab() {
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("base"));
+        let first = session.view(BrowserSide::Left).active_tab().unwrap();
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: first, token: RequestToken::first(), entries: Arc::from(vec![entry("first")]), changes: None });
+        session.submit(Command::NewTab { browser: BrowserSide::Left });
+        let second = session.view(BrowserSide::Left).active_tab().unwrap();
+        assert_ne!(first, second);
+        let token = session
+            .runner
+            .dispatched
+            .iter()
+            .rev()
+            .find_map(|work| match work {
+                WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab, token, .. } if *tab == second => Some(*token),
+                _ => None,
+            })
+            .expect("new tab read");
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: second, token, entries: Arc::from(vec![entry("alpha")]), changes: None });
+
+        session.set_filter_text_observed(BrowserSide::Left, first.value(), "wrong tab".into());
+        assert_eq!(session.view(BrowserSide::Left).active_tab(), Some(second));
+        assert_eq!(session.view(BrowserSide::Left).filter_text(), "");
+
+        session.set_filter_text_observed(BrowserSide::Left, second.value(), "right tab".into());
+        assert_eq!(session.view(BrowserSide::Left).filter_text(), "right tab");
+        session.submit(Command::ActivateTab { browser: BrowserSide::Left, tab: first });
+        assert_eq!(session.view(BrowserSide::Left).filter_text(), "");
     }
 
     #[test]

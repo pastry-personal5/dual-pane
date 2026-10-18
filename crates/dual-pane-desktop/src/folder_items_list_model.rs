@@ -42,6 +42,10 @@ pub mod ffi {
         #[qproperty(QString, summary_count_text, cxx_name = "summaryCountText", READ, NOTIFY)]
         #[qproperty(QString, summary_selected_text, cxx_name = "summarySelectedText", READ, NOTIFY)]
         #[qproperty(QString, summary_size_text, cxx_name = "summarySizeText", READ, NOTIFY)]
+        #[qproperty(QString, filter_text, cxx_name = "filterText", READ, NOTIFY)]
+        #[qproperty(i32, filter_status, cxx_name = "filterStatus", READ, NOTIFY)]
+        #[qproperty(i32, filter_result_count, cxx_name = "filterResultCount", READ, NOTIFY)]
+        #[qproperty(bool, no_filter_matches, cxx_name = "noFilterMatches", READ, NOTIFY)]
         #[qproperty(i32, cursor_row, cxx_name = "cursorRow", READ, NOTIFY)]
         #[qproperty(i32, selection_revision, cxx_name = "selectionRevision", READ, NOTIFY)]
         #[qproperty(i32, preview_revision, cxx_name = "previewRevision", READ, NOTIFY)]
@@ -98,6 +102,10 @@ pub mod ffi {
         #[qsignal]
         #[cxx_name = "sessionChanged"]
         fn session_changed(self: Pin<&mut FolderItemsListModel>);
+        /// Emitted after the row, filter text, count, and status are coherent.
+        #[qsignal]
+        #[cxx_name = "filterViewChanged"]
+        fn filter_view_changed(self: Pin<&mut FolderItemsListModel>);
 
         #[cxx_name = "setRightBrowser"]
         fn set_right_browser(self: Pin<&mut FolderItemsListModel>);
@@ -116,6 +124,16 @@ pub mod ffi {
         fn preview_image_pixels(self: &FolderItemsListModel) -> QByteArray;
         #[cxx_name = "activateBrowser"]
         fn activate_browser(self: Pin<&mut FolderItemsListModel>);
+        #[cxx_name = "activeTabId"]
+        fn active_tab_id(self: &FolderItemsListModel) -> u64;
+        #[cxx_name = "visibleRevision"]
+        fn visible_revision(self: &FolderItemsListModel) -> u64;
+        #[cxx_name = "editFilterText"]
+        fn edit_filter_text(self: Pin<&mut FolderItemsListModel>, observed_tab: u64, text: &QString);
+        #[cxx_name = "startFileCommandObserved"]
+        fn start_file_command_observed(self: Pin<&mut FolderItemsListModel>, command: i32, tab: u64, visible_revision: u64);
+        #[cxx_name = "showPackageContentsObserved"]
+        fn show_package_contents_observed(self: Pin<&mut FolderItemsListModel>, row: i32, tab: u64, visible_revision: u64);
 
         #[cxx_name = "selectRow"]
         fn select_row(self: Pin<&mut FolderItemsListModel>, row: i32);
@@ -297,6 +315,10 @@ pub struct FolderItemsListModelRust {
     summary_count_text: QString,
     summary_selected_text: QString,
     summary_size_text: QString,
+    filter_text: QString,
+    filter_status: i32,
+    filter_result_count: i32,
+    no_filter_matches: bool,
     cursor_row: i32,
     selection_revision: i32,
     preview_revision: i32,
@@ -312,7 +334,7 @@ pub struct FolderItemsListModelRust {
 }
 impl Default for FolderItemsListModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default() }
+        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), filter_text: QString::default(), filter_status: 0, filter_result_count: 0, no_filter_matches: false, cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default() }
     }
 }
 
@@ -410,6 +432,14 @@ impl ffi::FolderItemsListModel {
         let folder_name = QString::from(shown.folder_name());
         let summary = shown.summary();
         let (count, selected, size) = (QString::from(summary.count.as_str()), QString::from(summary.selected.as_str()), QString::from(summary.size.as_str()));
+        let filter_text = QString::from(shown.filter_text());
+        let filter_status = match shown.filter_status() {
+            dual_pane_application::FilterStatus::Ready => 0,
+            dual_pane_application::FilterStatus::Updating => 1,
+            dual_pane_application::FilterStatus::Failed => 2,
+        };
+        let filter_result_count = qt_int(shown.row_count());
+        let no_filter_matches = shown.no_matches();
         self.as_mut().set_cursor_row(cursor);
         self.as_mut().set_selection_revision(selection);
         self.as_mut().set_preview_revision(preview);
@@ -419,6 +449,10 @@ impl ffi::FolderItemsListModel {
         self.as_mut().set_summary_count_text(count);
         self.as_mut().set_summary_selected_text(selected);
         self.as_mut().set_summary_size_text(size);
+        self.as_mut().set_filter_text(filter_text);
+        self.as_mut().set_filter_status(filter_status);
+        self.as_mut().set_filter_result_count(filter_result_count);
+        self.as_mut().set_no_filter_matches(no_filter_matches);
         self.as_mut().set_toolbar_state(flags);
         self.as_mut().set_sort_choice(sort);
         self.as_mut().set_tabs_revision(tabs);
@@ -426,6 +460,7 @@ impl ffi::FolderItemsListModel {
         self.as_mut().set_status_token(token);
         self.as_mut().set_missing_folder(missing);
         self.as_mut().set_editor_revision(editor);
+        self.as_mut().filter_view_changed();
     }
     /// Replaces the shown view, notifying Qt of only the rows that changed
     /// when the new listing is a same-folder reload of the shown one.
@@ -483,6 +518,31 @@ impl ffi::FolderItemsListModel {
     }
     fn activate_browser(mut self: Pin<&mut Self>) {
         self.as_mut().submit_ui(UiEvent::FocusBrowser);
+    }
+    fn active_tab_id(&self) -> u64 {
+        self.rust().shown.active_tab().map_or(0, dual_pane_domain::TabId::value)
+    }
+    fn visible_revision(&self) -> u64 {
+        self.rust().shown.visible_revision()
+    }
+    fn edit_filter_text(mut self: Pin<&mut Self>, observed_tab: u64, text: &QString) {
+        let browser = self.rust().browser;
+        with_session(|session| session.set_filter_text_observed(browser, observed_tab, text.to_string()));
+        self.as_mut().session_changed();
+    }
+    fn start_file_command_observed(mut self: Pin<&mut Self>, command: i32, tab: u64, visible_revision: u64) {
+        if let Some(command) = operation_command(command) {
+            let browser = self.rust().browser;
+            with_session(|session| session.submit_ui_at_observation(browser, UiEvent::FileCommand(command), tab, visible_revision));
+            self.as_mut().session_changed();
+        }
+    }
+    fn show_package_contents_observed(mut self: Pin<&mut Self>, row: i32, tab: u64, visible_revision: u64) {
+        if let Ok(row) = usize::try_from(row) {
+            let browser = self.rust().browser;
+            with_session(|session| session.submit_ui_at_observation(browser, UiEvent::ShowPackageContents { row }, tab, visible_revision));
+            self.as_mut().session_changed();
+        }
     }
     fn select_row(self: Pin<&mut Self>, row: i32) {
         self.row_event(row, |row| UiEvent::SelectRow { row });
@@ -564,11 +624,13 @@ impl ffi::FolderItemsListModel {
     /// so nothing is refreshed.
     fn update_scroll(self: Pin<&mut Self>, row: i32, offset: i32) {
         let browser = self.rust().browser;
-        with_session(|session| session.submit_view_state(browser, UiEvent::Scrolled { row: usize::try_from(row).ok(), offset }));
+        let shown = self.rust().shown.clone();
+        with_session(|session| session.submit_observed_view_state(browser, UiEvent::Scrolled { row: usize::try_from(row).ok(), offset }, shown));
     }
     fn submit_ui(mut self: Pin<&mut Self>, event: UiEvent) {
         let browser = self.rust().browser;
-        with_session(|session| session.submit_ui(browser, event));
+        let shown = self.rust().shown.clone();
+        with_session(|session| session.submit_observed_ui(browser, event, shown));
         self.as_mut().session_changed();
     }
 
@@ -773,6 +835,30 @@ impl ffi::FolderItemsListModel {
         if self.rust().summary_size_text != text {
             self.as_mut().rust_mut().get_mut().summary_size_text = text;
             self.summary_size_text_changed();
+        }
+    }
+    fn set_filter_text(mut self: Pin<&mut Self>, text: QString) {
+        if self.rust().filter_text != text {
+            self.as_mut().rust_mut().get_mut().filter_text = text;
+            self.filter_text_changed();
+        }
+    }
+    fn set_filter_status(mut self: Pin<&mut Self>, value: i32) {
+        if self.rust().filter_status != value {
+            self.as_mut().rust_mut().get_mut().filter_status = value;
+            self.filter_status_changed();
+        }
+    }
+    fn set_filter_result_count(mut self: Pin<&mut Self>, value: i32) {
+        if self.rust().filter_result_count != value {
+            self.as_mut().rust_mut().get_mut().filter_result_count = value;
+            self.filter_result_count_changed();
+        }
+    }
+    fn set_no_filter_matches(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().no_filter_matches != value {
+            self.as_mut().rust_mut().get_mut().no_filter_matches = value;
+            self.no_filter_matches_changed();
         }
     }
 }

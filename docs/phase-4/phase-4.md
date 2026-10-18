@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, and safe drag and drop.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed the P4-M1 decision milestone and the Qt-free filtering model in P4-M2. The desktop filter control remains planned for P4-M3. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed the P4-M1 decision milestone and the Qt-free filtering model in P4-M2; P4-M3 is active. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -55,7 +55,7 @@ Plan: [overview](milestone-02-overview.md), [architecture](milestone-02-architec
 
 ### P4-M3: Deliver text filtering UI
 
-Status: Planned
+Status: Active
 Goal: Add an accessible filter control and feedback to each Browser, wired to the tab-local state.
 Plan: [overview](milestone-03-overview.md), [architecture](milestone-03-architecture.md)
 

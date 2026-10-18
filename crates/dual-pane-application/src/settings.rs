@@ -34,12 +34,13 @@ pub enum ActionId {
     DeletePermanently,
     ShowPackageContents,
     OpenItem,
+    FocusFolderItemsFilter,
 }
 
 impl ActionId {
     /// Every catalogued action. Later IDs are appended, so a shortcut held by
     /// an earlier action keeps it when bindings are validated in this order.
-    pub const ALL: [Self; 25] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem];
+    pub const ALL: [Self; 26] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem, Self::FocusFolderItemsFilter];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -68,6 +69,7 @@ impl ActionId {
             Self::DeletePermanently => "DeletePermanently",
             Self::ShowPackageContents => "ShowPackageContents",
             Self::OpenItem => "OpenItem",
+            Self::FocusFolderItemsFilter => "FocusFolderItemsFilter",
         }
     }
 
@@ -80,7 +82,7 @@ impl ActionId {
         match self {
             Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents | Self::OpenItem => ShortcutScope::FolderItemsList,
             Self::QuitApplication => ShortcutScope::Application,
-            Self::FocusOtherBrowser | Self::NavigateParent | Self::CloseWindow | Self::NewFolder | Self::SortByNameAscending | Self::SortByNameDescending | Self::SortByTypeAscending | Self::SortByTypeDescending | Self::SortByDateAscending | Self::SortByDateDescending | Self::SortBySizeAscending | Self::SortBySizeDescending | Self::NewTab | Self::CloseTab | Self::NavigateBack | Self::NavigateForward | Self::RefreshFolder => ShortcutScope::Window,
+            Self::FocusOtherBrowser | Self::FocusFolderItemsFilter | Self::NavigateParent | Self::CloseWindow | Self::NewFolder | Self::SortByNameAscending | Self::SortByNameDescending | Self::SortByTypeAscending | Self::SortByTypeDescending | Self::SortByDateAscending | Self::SortByDateDescending | Self::SortBySizeAscending | Self::SortBySizeDescending | Self::NewTab | Self::CloseTab | Self::NavigateBack | Self::NavigateForward | Self::RefreshFolder => ShortcutScope::Window,
         }
     }
 }
@@ -192,6 +194,7 @@ pub enum ShortcutRejection {
 pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
     match action {
         ActionId::FocusOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('F'))),
+        ActionId::FocusFolderItemsFilter => Some(Shortcut::new(true, false, false, false, Key::Character('F'))),
         ActionId::NavigateParent => Some(Shortcut::new(true, false, false, false, Key::Up)),
         ActionId::QuitApplication => Some(Shortcut::new(true, false, false, false, Key::Character('Q'))),
         ActionId::NewFolder => Some(Shortcut::new(true, true, false, false, Key::Character('N'))),
@@ -705,8 +708,9 @@ mod tests {
         assert_eq!(default_shortcuts(ActionId::RenameItem), vec![Shortcut::new(false, false, false, false, Key::Function(2)), Shortcut::new(false, false, false, false, Key::Return)]);
         assert_eq!(default_shortcuts(ActionId::MoveToTrash), vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)]);
         assert_eq!(default_shortcut(ActionId::DeletePermanently), shortcut(true, true, Key::Delete));
+        assert_eq!(default_shortcut(ActionId::FocusFolderItemsFilter), shortcut(true, false, Key::Character('F')));
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
-        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 7..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem], "new IDs are appended");
+        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 8..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::FocusFolderItemsFilter], "new IDs are appended");
     }
     #[test]
     fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
@@ -722,6 +726,17 @@ mod tests {
             assert_eq!(action.scope(), expected, "{action:?}");
         }
         assert_eq!(ActionId::NewFolder.scope(), ShortcutScope::Window, "New Folder stays window-wide");
+    }
+    #[test]
+    fn focus_filter_default_is_appended_and_respects_older_bindings() {
+        let command_f = default_shortcut(ActionId::FocusFolderItemsFilter).unwrap();
+        assert_eq!(ActionId::ALL.last(), Some(&ActionId::FocusFolderItemsFilter));
+        assert_eq!(ActionId::FocusFolderItemsFilter.scope(), ShortcutScope::Window);
+        let mut old = SettingsState::new();
+        old.apply(SettingsSnapshot { bindings: vec![ActionBinding { action: ActionId::FocusOtherBrowser, shortcut: Some(command_f) }], ..SettingsSnapshot::default() });
+        assert_eq!(old.binding(ActionId::FocusFolderItemsFilter), None, "compatibility must not take a shortcut already accepted from an older profile");
+        let mut defaults = SettingsState::new();
+        assert_eq!(defaults.set_shortcuts(ActionId::FocusFolderItemsFilter, vec![default_shortcut(ActionId::FocusOtherBrowser).unwrap()]), Err(ShortcutRejection::Conflict(ActionId::FocusOtherBrowser)));
     }
     #[test]
     fn settings_saved_before_the_file_commands_load_their_defaults() {
