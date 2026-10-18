@@ -101,7 +101,8 @@ auto utf8_bytes(NSString *value) -> std::optional<QByteArray> {
 
 /// The exact path bytes of a local `file://` URL, or nothing when the text is
 /// not one: another scheme or host, relative form, query or fragment, control
-/// character, bad percent escape, or NUL.
+/// character, bad percent escape, NUL, or an encoded slash, which no file name
+/// can contain and would silently become a different path.
 auto decode_file_url_text(const QByteArray &text) -> std::optional<QByteArray> {
     if (text.size() < 8 || text.left(7).toLower() != QByteArrayLiteral("file://"))
         return std::nullopt;
@@ -124,7 +125,7 @@ auto decode_file_url_text(const QByteArray &text) -> std::optional<QByteArray> {
             return std::nullopt;
         const int high = hex_value(static_cast<unsigned char>(text.at(index + 1)));
         const int low = hex_value(static_cast<unsigned char>(text.at(index + 2)));
-        if (high < 0 || low < 0 || (high == 0 && low == 0))
+        if (high < 0 || low < 0 || (high == 0 && low == 0) || (high == 2 && low == 15))
             return std::nullopt;
         path.append(static_cast<char>((high << 4) | low));
         index += 2;

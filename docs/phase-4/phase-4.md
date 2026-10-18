@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, and safe drag and drop.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, and the clipboard-transfer model in P4-M4; P4-M3 and P4-M5 remain active. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, and the clipboard-transfer model in P4-M4, and clipboard delivery in P4-M5; P4-M3 remains active. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -67,7 +67,7 @@ Plan: [overview](milestone-04-overview.md), [architecture](milestone-04-architec
 
 ### P4-M5: Deliver clipboard commands
 
-Status: Active
+Status: Done
 Goal: Expose Copy, Cut, and Paste in the desktop interface, including file Copy and Paste between Dual Pane and Finder in both directions.
 Plan: [overview](milestone-05-overview.md), [architecture](milestone-05-architecture.md)
 
