@@ -8,10 +8,11 @@ use std::sync::{Mutex, OnceLock};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, favorite_rejection_text, reader_start_failure_status};
-use dual_pane_application::{ActionId, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, default_shortcuts};
+use dual_pane_application::{ActionId, Command, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, default_shortcuts};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
+use crate::launch_target::LaunchTarget;
 use crate::operation_journal::{Journal, journal_path};
 use crate::operation_lane::{STEP_BUDGET, Services};
 use crate::operation_step::NativeFileSystem;
@@ -256,14 +257,17 @@ pub struct WorkspaceBridgeRust {
 impl ffi::WorkspaceBridge {
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
-        let BrowserStartup { home, settings_path, source_factory, location_probe, launch } = *startup;
+        let BrowserStartup { home, settings_path, source_factory, location_probe, launch, target } = *startup;
         match Runtime::start(source_factory, location_probe, Box::new(ffi::schedule_gui_drain)) {
             Ok(mut runtime) => {
                 // Without the lane, operations fail closed with a Notice.
                 let journal = Journal::new(settings_path.as_deref().map(journal_path), launch);
                 runtime.attach_operations(Services { fs: std::sync::Arc::new(NativeFileSystem), journal, budget: STEP_BUDGET }).ok();
                 let settings = settings_path.and_then(|path| SettingsWorker::start_with_wake(path, Box::new(ffi::schedule_gui_drain)).ok());
-                let coordinator = WorkspaceSession::with_settings(runtime, home, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
+                let mut coordinator = WorkspaceSession::with_settings(runtime, home, settings, DRAIN_SLICE, DRAIN_TIME_BUDGET);
+                if let Some(LaunchTarget { folder, select }) = target {
+                    coordinator.submit(Command::OpenLaunchTarget { folder, select });
+                }
                 *SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(coordinator);
                 self.as_mut().session_changed();
             }

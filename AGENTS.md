@@ -50,6 +50,7 @@ The desktop requires Qt 6.11.2+ and dynamically links its Widgets framework thro
 ```sh
 make build                                   # Cargo build
 make run                                     # launch the two-Browser Qt Widgets window
+make install                                 # link the release binary as ~/.local/bin/dual-pane (BIN_DIR overrides)
 make test                                    # Cargo tests
 make fmt                                     # Rust and C++ formatters
 make fmt-check                               # formatter checks

@@ -79,6 +79,8 @@ pub struct Workspace {
     /// The Item to select once a refreshed listing shows it, after a
     /// successful Rename or New Folder.
     pending_selection: Option<PendingSelection>,
+    /// The command-line target waiting for the launch session restore.
+    launch_target: Option<LaunchTarget>,
     /// The latest link activation waiting for its target to resolve.
     pending_open: Option<(BrowserSide, TabId, RequestToken)>,
     /// Set once quitting was accepted; no new operation starts.
@@ -119,6 +121,11 @@ impl Default for PreviewSlot {
 }
 fn same_preview_target(left: &PreviewRequest, right: &PreviewRequest) -> bool {
     left.browser == right.browser && left.tab == right.tab && left.listing == right.listing && left.name == right.name && left.location == right.location && left.target_width == right.target_width && left.target_height == right.target_height
+}
+#[derive(Debug, Clone)]
+struct LaunchTarget {
+    folder: Location,
+    select: Option<EntryName>,
 }
 #[derive(Debug, Clone)]
 struct PendingSelection {
@@ -203,10 +210,10 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, journal_available: true, pending_selection: None, launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
-        let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
+        let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::OpenLaunchTarget { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
         let mut transition = match input {
             Input::Command(command) => {
                 if let Command::CaptureClipboard { browser, .. } = command {
@@ -254,6 +261,10 @@ impl Workspace {
             Command::RetryJournal => Transition { outputs: vec![], work: vec![WorkRequest::ReopenJournal] },
             Command::Quit { confirmed } => self.quit(confirmed),
             Command::ActivateBrowser { browser } => self.activate_browser(browser),
+            Command::OpenLaunchTarget { folder, select } => {
+                self.launch_target = Some(LaunchTarget { folder, select });
+                if self.launch_completed { self.apply_launch_target() } else { Transition::default() }
+            }
             Command::ActivateTab { browser, tab } => self.activate_tab(browser, tab),
             Command::NewTab { browser } => self.new_tab(browser),
             Command::CloseTab { browser, tab } => self.close_tab(browser, tab),
@@ -1019,16 +1030,53 @@ impl Workspace {
         let Some(location) = self.location(browser).cloned() else {
             return Transition::default();
         };
+        self.open_tab_at(browser, location).unwrap_or_default()
+    }
+    /// Adds an active tab that reads `location`, or `None` at the tab limit.
+    fn open_tab_at(&mut self, browser: BrowserSide, location: Location) -> Option<Transition> {
         let id = TabId::new(self.next_tab);
         let state = self.browser_mut(browser);
         if !state.order.insert_active(id) {
-            return Transition::default();
+            return None;
         }
         state.tabs.push(TabState::new(id));
         self.next_tab += 1;
         let mut transition = self.navigate(browser, location, None);
         transition.outputs.insert(0, Output::TabsChanged { browser, active_tab: id });
         transition.outputs.insert(1, self.tab_view(browser, id));
+        Some(transition)
+    }
+    /// Shows the command-line target in the Left Browser once the launch
+    /// session exists, and forgets it.
+    fn apply_launch_target(&mut self) -> Transition {
+        let Some(LaunchTarget { folder, select }) = self.launch_target.take() else { return Transition::default() };
+        let side = BrowserSide::Left;
+        let existing = self.browser(side).tabs.iter().find(|tab| tab.folder_items.as_ref().map(|items| &items.location).or(tab.requested.as_ref()) == Some(&folder)).map(|tab| tab.id);
+        let mut transition = self.activate_browser(side);
+        let tab = match existing {
+            Some(tab) => {
+                transition.append(self.activate_tab(side, tab));
+                tab
+            }
+            None => match self.open_tab_at(side, folder.clone()) {
+                Some(opened) => {
+                    transition.append(opened);
+                    self.active_tab(side)
+                }
+                None => {
+                    let tab = self.active_tab(side);
+                    transition.append(self.navigate(side, folder.clone(), None));
+                    tab
+                }
+            },
+        };
+        if let Some(name) = select {
+            self.pending_selection = Some(PendingSelection { browser: side, tab, folder: folder.clone(), name });
+            // A tab that already shows the folder rereads it so the file is selected as the listing arrives.
+            if existing.is_some() {
+                transition.append(self.refresh_tab(side, tab));
+            }
+        }
         transition
     }
     fn close_tab(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
@@ -1308,6 +1356,7 @@ impl Workspace {
                 SessionSnapshot::Absent => transition.append(self.fallback_home()),
             }
             transition.outputs.push(Output::SessionRestored { active_browser: self.active_browser, layout: self.layout });
+            transition.append(self.apply_launch_target());
             // Presentation can report its initial layout while settings are
             // still loading. The completed launch makes that already-known
             // layout eligible for the first independent session save.
@@ -1387,6 +1436,7 @@ impl Workspace {
             self.launch_completed = true;
             transition.append(self.fallback_home());
             transition.outputs.push(Output::SessionRestored { active_browser: self.active_browser, layout: None });
+            transition.append(self.apply_launch_target());
         }
         transition
     }
@@ -1415,6 +1465,7 @@ impl Workspace {
         let mut transition = self.fallback_home();
         transition.append(self.add_notice(NoticeKind::SettingsLoadTimedOut));
         transition.outputs.push(Output::SessionRestored { active_browser: self.active_browser, layout: None });
+        transition.append(self.apply_launch_target());
         transition
     }
     fn fallback_home(&mut self) -> Transition {

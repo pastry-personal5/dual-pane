@@ -1,10 +1,19 @@
-.PHONY: build run test fmt fmt-check lint-rust lint-cpp check
+.PHONY: build run install test fmt fmt-check lint-rust lint-cpp check
+
+BIN_DIR ?= $(HOME)/.local/bin
 
 build:
 	cargo build
 
 run:
 	cargo run -p dual-pane-desktop
+
+# Links the release binary as `dual-pane` so a rebuild updates the command.
+install:
+	cargo build --release -p dual-pane-desktop
+	mkdir -p "$(BIN_DIR)"
+	ln -sf "$(CURDIR)/target/release/dual-pane-desktop" "$(BIN_DIR)/dual-pane"
+	@echo "Installed $(BIN_DIR)/dual-pane"
 
 test:
 	cargo test

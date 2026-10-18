@@ -84,6 +84,14 @@ pub enum Command {
     ActivateBrowser {
         browser: BrowserSide,
     },
+    /// Shows `folder` in the Left Browser as requested on the command line,
+    /// with `select` selected when it names a file inside it. An open tab on
+    /// the folder is activated instead of duplicated. It waits for the
+    /// session restore at launch and applies once.
+    OpenLaunchTarget {
+        folder: Location,
+        select: Option<EntryName>,
+    },
     ActivateTab {
         browser: BrowserSide,
         tab: TabId,

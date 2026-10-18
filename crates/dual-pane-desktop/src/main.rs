@@ -2,6 +2,7 @@ mod browser_session;
 mod clipboard_native;
 mod folder_items;
 mod folder_items_list_model;
+mod launch_target;
 mod location_probe;
 mod location_watcher;
 mod native_calls;
@@ -18,7 +19,7 @@ pub mod settings_storage;
 mod workspace_bridge;
 
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -29,6 +30,17 @@ use crate::folder_items::ListingRules;
 use crate::operation_journal::{LaunchId, is_launch_temporary};
 use crate::runtime::{FolderItemsSource, FolderItemsSourceFactory, LocationProbe};
 fn main() -> ExitCode {
+    let target = match env::current_dir().map_err(|error| format!("cannot read the working directory: {error}")).and_then(|cwd| launch_target::parse(env::args_os().skip(1), &cwd, env::var_os("HOME").map(PathBuf::from).as_deref())) {
+        Ok(launch_target::Launch::Run(target)) => target,
+        Ok(launch_target::Launch::Help) => {
+            println!("{}", launch_target::USAGE);
+            return ExitCode::SUCCESS;
+        }
+        Err(message) => {
+            eprintln!("dual-pane: {message}");
+            return ExitCode::from(2);
+        }
+    };
     // Debug verification uses a disposable profile without changing HOME for
     // the process or touching the person's normal settings database.
     #[cfg(debug_assertions)]
@@ -51,7 +63,7 @@ fn main() -> ExitCode {
     });
     let settings_path = profile.as_ref().map(|path| settings_storage::application_support_database_path(Path::new(path)));
     let location_probe: LocationProbe = Box::new(location_probe::probe_directory);
-    let startup = BrowserStartup { home, settings_path, source_factory, location_probe, launch };
+    let startup = BrowserStartup { home, settings_path, source_factory, location_probe, launch, target };
     let status = workspace_bridge::ffi::run_desktop(Box::new(startup));
 
     u8::try_from(status).map_or(ExitCode::FAILURE, ExitCode::from)

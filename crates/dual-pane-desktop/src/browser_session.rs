@@ -36,6 +36,8 @@ pub struct BrowserStartup {
     pub location_probe: LocationProbe,
     /// This launch's identity, carried by every operation temporary.
     pub launch: LaunchId,
+    /// The folder or file named on the command line, shown in the Left Browser.
+    pub target: Option<crate::launch_target::LaunchTarget>,
 }
 
 /// Opens an item with its default application on the GUI thread and reports

@@ -56,6 +56,16 @@ make build
 make run
 ```
 
+`make install` builds a release binary and links it as `~/.local/bin/dual-pane` (override with `BIN_DIR=...`; make sure that folder is on your `PATH`). Then:
+
+```sh
+dual-pane              # open normally
+dual-pane <folder>     # show the folder in the left Browser
+dual-pane <file>       # show the file's folder with the file selected
+```
+
+The path may be relative or start with `~`. A missing or unreadable path, or more than one path, prints an error and exits without opening a window.
+
 ## Development
 
 ```sh
