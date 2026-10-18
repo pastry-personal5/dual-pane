@@ -542,11 +542,16 @@ impl Workspace {
             return Transition::output(self.clipboard_presentation());
         }
         let previous = self.current_transfer.take();
-        self.pending_paste = None;
         if let Some((previous, _)) = previous {
             self.discard_transfer_if_unused(previous);
         }
-        Transition::output(self.clipboard_presentation())
+        let mut transition = Transition::output(self.clipboard_presentation());
+        // Replacement itself is silent, but a Paste still reading or checking
+        // the replaced content was attempted and reports why it stopped.
+        if let Some(pending) = self.pending_paste.take() {
+            transition.outputs.push(Output::ClipboardRejected { browser: Some(pending.browser), request: Some(pending.request), reason: ClipboardRejection::ClipboardReplaced });
+        }
+        transition
     }
     fn paste_clipboard(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
         let destination = match self.paste_destination(browser, tab) {
@@ -573,8 +578,9 @@ impl Workspace {
                 ClipboardSnapshot::PrivateAndExternal { .. } => ClipboardOffer::PrivateAndFiles,
                 ClipboardSnapshot::Unsupported | ClipboardSnapshot::Unavailable => ClipboardOffer::Unsupported,
             };
-            let mut transition = if generation > current { self.clipboard_changed(generation, offer) } else { Transition::default() };
+            // This Paste reports once, below, rather than as a replaced pending Paste.
             self.pending_paste = None;
+            let mut transition = if generation > current { self.clipboard_changed(generation, offer) } else { Transition::default() };
             transition.outputs.push(Output::ClipboardRejected { browser: Some(browser), request: Some(request), reason: ClipboardRejection::ClipboardReplaced });
             return transition;
         }

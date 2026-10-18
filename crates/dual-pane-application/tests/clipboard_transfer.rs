@@ -291,18 +291,40 @@ fn finder_preflight_is_tagged_all_or_nothing_and_supports_mixed_parents() {
 }
 
 #[test]
-fn replacement_cancels_a_pending_read_and_duplicate_external_roots_never_preflight() {
+fn replacement_cancels_a_pending_read_with_its_reason_and_duplicate_external_roots_never_preflight() {
     let mut workspace = Workspace::new();
     let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
     workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
     let stale = request_paste(&mut workspace, BrowserSide::Right, right);
-    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(5), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    let replaced = workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(5), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    let rejections = replaced.outputs.iter().filter(|output| matches!(output, Output::ClipboardRejected { .. })).collect::<Vec<_>>();
+    assert!(matches!(rejections.as_slice(), [Output::ClipboardRejected { browser: Some(BrowserSide::Right), request: Some(request), reason: ClipboardRejection::ClipboardReplaced }] if *request == stale), "the attempted Paste reports once: {rejections:?}");
     assert_eq!(workspace.handle(Event::ClipboardRead { request: stale, generation: ClipboardGeneration::new(4), snapshot: ClipboardSnapshot::Unsupported }.into()), Default::default());
     let duplicate = request_paste(&mut workspace, BrowserSide::Right, right);
     let source = path(&["source", "same"]);
     let transition = workspace.handle(Event::ClipboardRead { request: duplicate, generation: ClipboardGeneration::new(5), snapshot: ClipboardSnapshot::ExternalFiles { sources: vec![source.clone(), source].into() } }.into());
     assert!(transition.work.is_empty());
     assert!(matches!(transition.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::DuplicateSource, .. }]));
+}
+
+#[test]
+fn replacement_during_external_preflight_reports_it_and_starts_nothing() {
+    let mut workspace = Workspace::new();
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(3), offer: dual_pane_application::ClipboardOffer::Files }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let sources: Arc<[Location]> = Arc::from(vec![path(&["finder", "file"])]);
+    let read = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(3), snapshot: ClipboardSnapshot::ExternalFiles { sources: Arc::clone(&sources) } }.into());
+    assert!(matches!(read.work.as_slice(), [WorkRequest::PreflightClipboard { .. }]));
+
+    let replaced = workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(4), offer: dual_pane_application::ClipboardOffer::Files }.into());
+    assert!(replaced.outputs.iter().any(|output| matches!(output, Output::ClipboardRejected { browser: Some(BrowserSide::Right), request: Some(request), reason: ClipboardRejection::ClipboardReplaced } if *request == paste)));
+    let roots: Arc<[OperationRoot]> = Arc::from(vec![OperationRoot { source: path(&["finder", "file"]), kind: EntryKind::File }]);
+    assert_eq!(workspace.handle(Event::ClipboardPreflighted { request: paste, generation: ClipboardGeneration::new(3), result: Ok(roots) }.into()), Default::default(), "the stale preflight starts no operation");
+
+    let quiet = workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(5), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    assert!(!quiet.outputs.iter().any(|output| matches!(output, Output::ClipboardRejected { .. })), "replacement without a pending Paste is silent");
 }
 
 #[test]

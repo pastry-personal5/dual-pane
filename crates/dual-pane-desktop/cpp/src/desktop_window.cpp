@@ -2,6 +2,7 @@
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
 #include "dual-pane-desktop/src/operations_bridge.cxxqt.h"
 #include "dual-pane-desktop/src/workspace_bridge.cxxqt.h"
+#include "dual_pane_desktop/clipboard_adapter.hpp"
 #include "dual_pane_desktop/keyboard_layout.hpp"
 #include "dual_pane_desktop/notices_glyph.hpp"
 #include "dual_pane_desktop/quick_look_preview.hpp"
@@ -97,6 +98,12 @@
 
 // Qt parent ownership and the compact native composition are explicit here.
 // NOLINTBEGIN(cppcoreguidelines-owning-memory,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,readability-braces-around-statements,readability-identifier-length,readability-isolate-declaration,readability-named-parameter,bugprone-easily-swappable-parameters,modernize-use-trailing-return-type,readability-function-cognitive-complexity,readability-convert-member-functions-to-static,cppcoreguidelines-special-member-functions,readability-implicit-bool-conversion)
+// QtGui's exported entry to its shortcut map. QtTest delivers keys through it
+// as the platform layer does; the text editor focus check uses it the same way.
+QT_BEGIN_NAMESPACE
+Q_GUI_EXPORT auto qt_sendShortcutOverrideEvent(QObject *receiver, ulong timestamp, int key, Qt::KeyboardModifiers modifiers, const QString &text, bool auto_repeat, ushort count) -> bool;
+QT_END_NAMESPACE
+
 namespace dual_pane_desktop {
 namespace {
 constexpr int initial_window_width = 1100, initial_window_height = 680;
@@ -143,7 +150,7 @@ constexpr auto operation_panel_mime = "application/x-dual-pane-operation-panel";
 constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_new_folder = 3, command_trash = 4, command_delete = 5;
 constexpr int clipboard_copy = 0, clipboard_cut = 1, clipboard_paste = 2;
 // Shortcut scope codes of the workspace bridge.
-constexpr int scope_folder_items_list = 0, scope_application = 2;
+constexpr int scope_folder_items_list = 0, scope_window = 1, scope_application = 2;
 constexpr int status_reason_milliseconds = 3000;
 constexpr int quick_look_hold_milliseconds = 256;
 constexpr auto window_color = "#1B1D21", surface_color = "#23262B", inactive_surface_color = "#17191D", text_color = "#ECEFF3", inactive_text_color = "#8A9099", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#173A55", hover_color = "#2B3037", favorite_group_color = "#15171A", divider_hover_border_color = "#737A84", error_color = "#E5737A";
@@ -1384,7 +1391,6 @@ class FolderPane final : public QFrame {
         filter_prefix->setObjectName(QStringLiteral("filterPrefix"));
         filter_input_ = new FolderFilterTextEdit(filter_row_);
         filter_input_->setObjectName(QStringLiteral("folderItemsFilterText"));
-        filter_input_->setProperty("filterTextEditor", true);
         filter_input_->setAccessibleName(QStringLiteral("Folder Items Filter Text"));
         filter_input_->setPlaceholderText(QStringLiteral("Type a name prefix"));
         filter_input_->setClearButtonEnabled(false);
@@ -1602,7 +1608,6 @@ class FileNameEditor final : public QLineEdit {
     FileNameEditor(const QString &object_name, const QString &accessible_name, const QString &text, std::function<void()> commit, std::function<void()> cancel, QWidget *parent) : QLineEdit(text, parent), commit_(std::move(commit)), cancel_(std::move(cancel)) {
         setObjectName(object_name);
         setAccessibleName(accessible_name);
-        setProperty("inlineEditor", true);
         selectAll();
     }
     void abandon() { abandoned_ = true; }
@@ -2058,7 +2063,6 @@ class InlineNameEditor final : public QLineEdit {
     InlineNameEditor(const QString &object_name, const QString &accessible_name, const QString &text, std::function<QString(const QString &)> commit, std::function<void()> finish, QLabel *error, QWidget *parent) : QLineEdit(text, parent), commit_(std::move(commit)), finish_(std::move(finish)), error_(error) {
         setObjectName(object_name);
         setAccessibleName(accessible_name);
-        setProperty("inlineEditor", true);
         selectAll();
     }
 
@@ -4127,17 +4131,37 @@ class BrowserHighlightController final : public QObject {
     int active_ = 0;
 };
 
+/// Whether `widget` edits text. Every text field, including a read-only name
+/// editor waiting on its job, keeps Command+C, Command+X, Command+V, and
+/// Command+A as text editing, so the workspace's own shortcuts stand aside.
+auto edits_text(const QWidget *widget) -> bool {
+    return qobject_cast<const QLineEdit *>(widget) != nullptr;
+}
+
 /// Binds every delivered action to its effective shortcut from settings and
 /// rebinds after a load or reset. File commands on Folder Items act only
-/// while a Folder Items List has focus. While an inline editor has focus,
-/// only Quit stays active.
+/// while a Folder Items List has focus. While a text field has focus, only
+/// Quit stays active.
 class ShortcutBinder final {
   public:
     using Handler = std::function<void()>;
     using ListHandler = std::function<void(int)>;
+    struct Binding {
+        QString action;
+        /// Qt portable key-sequence text, empty when unbound.
+        QString sequence;
+        int scope = -1;
+    };
     ShortcutBinder(QWidget *window, WorkspaceBridge *bridge, QHash<QString, Handler> handlers, std::array<QWidget *, 2> lists, QHash<QString, ListHandler> list_handlers) : window_(window), bridge_(bridge), handlers_(std::move(handlers)), lists_(lists), list_handlers_(std::move(list_handlers)) {}
 
     void rebind() {
+        std::vector<Binding> bindings;
+        bindings.reserve(static_cast<std::size_t>(qMax(0, bridge_->bindingCount())));
+        for (int index = 0; index < bridge_->bindingCount(); ++index)
+            bindings.push_back({bridge_->bindingAction(index), bridge_->bindingSequence(index), bridge_->bindingScope(index)});
+        rebind(bindings);
+    }
+    void rebind(const std::vector<Binding> &bindings) {
         for (auto *shortcut : shortcuts_) {
             // deleteLater leaves the old binding alive until the event loop
             // resumes; it must stop matching keys before replacements exist.
@@ -4145,10 +4169,7 @@ class ShortcutBinder final {
             shortcut->deleteLater();
         }
         shortcuts_.clear();
-        for (int index = 0; index < bridge_->bindingCount(); ++index) {
-            const auto action = bridge_->bindingAction(index);
-            const auto sequence = bridge_->bindingSequence(index);
-            const auto scope = bridge_->bindingScope(index);
+        for (const auto &[action, sequence, scope] : bindings) {
             if (sequence.isEmpty())
                 continue;
             // File commands act only on the Folder Items List that has focus.
@@ -4178,8 +4199,9 @@ class ShortcutBinder final {
         }
         apply();
     }
-    void setEditing(bool editing) {
-        editing_ = editing;
+    /// Follows application focus, so a focused text field keeps its keys.
+    void followFocus(const QWidget *now) {
+        editing_ = edits_text(now);
         apply();
     }
     void setCapture(bool active) {
@@ -4202,6 +4224,140 @@ class ShortcutBinder final {
     bool editing_ = false;
     bool capture_ = false;
 };
+
+/// Exercises the keyboard focus rule for clipboard keys with real widgets and
+/// no display. Keys reach Qt's shortcut map the way a platform key press does.
+/// Folder Items commands only count, so nothing is published to the system
+/// clipboard; Qt's offscreen platform keeps text copies in process, and the
+/// check fails if the system clipboard changed anyway.
+auto run_text_editor_focus_checks(QApplication &app) -> int {
+    if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+        std::cerr << "Text editor focus check failed: it runs only on Qt's offscreen platform\n";
+        return 1;
+    }
+    const auto system_generation = clipboard_generation();
+    QWidget window;
+    auto *layout = new QVBoxLayout(&window);
+    FolderItemsListModel left_model, right_model;
+    right_model.setRightBrowser();
+    IconLoader icons;
+    auto *left = new FolderItemsList(&left_model, &icons);
+    auto *right = new FolderItemsList(&right_model, &icons);
+    auto *filter = new FolderFilterTextEdit(&window);
+    auto *rename = new FileNameEditor(QStringLiteral("renameItemEditor"), QStringLiteral("Rename Item Editor"), QString(), [] {}, [] {}, &window);
+    auto *favorite = new InlineNameEditor(QStringLiteral("favoriteItemAliasEditor"), QStringLiteral("Favorite Item Alias Editor"), QString(), [](const QString &) { return QString(); }, [] {}, new QLabel(&window), &window);
+    auto *button = new QToolButton(&window);
+    button->setFocusPolicy(Qt::StrongFocus);
+    for (QWidget *widget : std::initializer_list<QWidget *>{left, right, filter, rename, favorite, button})
+        layout->addWidget(widget);
+
+    // Per Browser: Copy, Cut, and Paste Items.
+    std::array<std::array<int, 3>, 2> list_commands{};
+    int new_tabs = 0, quits = 0;
+    QHash<QString, ShortcutBinder::Handler> handlers;
+    handlers.insert(QStringLiteral("NewTab"), [&new_tabs] { ++new_tabs; });
+    handlers.insert(QStringLiteral("QuitApplication"), [&quits] { ++quits; });
+    QHash<QString, ShortcutBinder::ListHandler> list_handlers;
+    const std::array<std::pair<QString, int>, 3> clipboard_commands = {{{QStringLiteral("CopyItems"), clipboard_copy}, {QStringLiteral("CutItems"), clipboard_cut}, {QStringLiteral("PasteItems"), clipboard_paste}}};
+    for (const auto &[action, command] : clipboard_commands)
+        list_handlers.insert(action, [&list_commands, command = command](int browser) { ++list_commands.at(browser).at(command); });
+    WorkspaceBridge bridge;
+    ShortcutBinder shortcuts(&window, &bridge, handlers, {left, right}, list_handlers);
+    // The delivered defaults; `delivered_shortcuts_map_to_qt_key_sequences` pins them.
+    shortcuts.rebind({{QStringLiteral("CopyItems"), QStringLiteral("Ctrl+C"), scope_folder_items_list}, {QStringLiteral("CutItems"), QStringLiteral("Ctrl+X"), scope_folder_items_list}, {QStringLiteral("PasteItems"), QStringLiteral("Ctrl+V"), scope_folder_items_list}, {QStringLiteral("NewTab"), QStringLiteral("Ctrl+T"), scope_window}, {QStringLiteral("QuitApplication"), QStringLiteral("Ctrl+Q"), scope_application}});
+    QObject::connect(&app, &QApplication::focusChanged, &window, [&shortcuts](QWidget *, QWidget *now) { shortcuts.followFocus(now); });
+    window.show();
+    window.activateWindow();
+
+    QTimer::singleShot(0, &app, [&] {
+        bool failed = false;
+        const auto check = [&failed](bool condition, const std::string &name) {
+            if (!condition) {
+                std::cerr << "Text editor focus check failed: " << name << '\n';
+                failed = true;
+            }
+        };
+        const auto focus = [](QWidget *widget) {
+            widget->setFocus(Qt::OtherFocusReason);
+            QApplication::processEvents();
+            return QApplication::focusWidget() == widget;
+        };
+        // Qt names the Command key Control on macOS. The focused widget may
+        // claim the key as a shortcut override; otherwise the shortcut map
+        // runs, and a key no shortcut takes reaches the focused widget.
+        const auto press = [](int key) {
+            QWidget *target = QApplication::focusWidget();
+            if (target == nullptr || qt_sendShortcutOverrideEvent(target, 0, key, Qt::ControlModifier, QString(), false, 1))
+                return;
+            QKeyEvent key_press(QEvent::KeyPress, key, Qt::ControlModifier);
+            QApplication::sendEvent(target, &key_press);
+            QKeyEvent key_release(QEvent::KeyRelease, key, Qt::ControlModifier);
+            QApplication::sendEvent(target, &key_release);
+        };
+        QApplication::processEvents();
+        auto *clipboard = QGuiApplication::clipboard();
+        check(QApplication::activeWindow() == &window, "the check window is active");
+
+        // Positive control: the same delivery reaches a focused list's commands.
+        const auto clipboard_text = clipboard->text();
+        check(focus(left), "the Left Folder Items List takes focus");
+        press(Qt::Key_C);
+        press(Qt::Key_X);
+        press(Qt::Key_V);
+        press(Qt::Key_T);
+        check(list_commands.at(0) == std::array<int, 3>{1, 1, 1} && list_commands.at(1) == std::array<int, 3>{}, "Command+C, Command+X, and Command+V reach the focused list's Copy, Cut, and Paste Items");
+        check(new_tabs == 1, "workspace shortcuts act from a Folder Items List");
+        check(clipboard->text() == clipboard_text, "Copy Items writes no row text");
+        check(focus(right), "the Right Folder Items List takes focus");
+        press(Qt::Key_C);
+        check(list_commands.at(1) == std::array<int, 3>{1, 0, 0} && list_commands.at(0) == std::array<int, 3>{1, 1, 1}, "only the focused list copies");
+
+        const auto observed = list_commands;
+        check(focus(button), "another control takes focus");
+        press(Qt::Key_C);
+        press(Qt::Key_V);
+        check(list_commands == observed, "Folder Items commands need a focused Folder Items List");
+
+        const std::array<std::pair<QLineEdit *, std::string>, 3> editors = {{{filter, "filter row"}, {rename, "rename editor"}, {favorite, "Favorites name editor"}}};
+        for (const auto &[editor, name] : editors) {
+            check(edits_text(editor), name + " is a text field");
+            editor->setText(QStringLiteral("alpha"));
+            check(focus(editor), name + " takes focus");
+            const int tabs = new_tabs;
+            editor->selectAll();
+            press(Qt::Key_C);
+            check(clipboard->text() == QStringLiteral("alpha") && editor->text() == QStringLiteral("alpha"), name + ": Command+C copies text");
+            press(Qt::Key_X);
+            check(editor->text().isEmpty() && clipboard->text() == QStringLiteral("alpha"), name + ": Command+X cuts text");
+            press(Qt::Key_V);
+            press(Qt::Key_V);
+            check(editor->text() == QStringLiteral("alphaalpha"), name + ": Command+V pastes text");
+            press(Qt::Key_A);
+            check(editor->selectedText() == editor->text(), name + ": Command+A selects text");
+            press(Qt::Key_T);
+            check(list_commands == observed && new_tabs == tabs, name + ": Folder Items and workspace shortcuts stand aside");
+        }
+        check(!edits_text(left) && !edits_text(button), "lists and buttons are not text fields");
+
+        // A rename waiting on its job is read-only; its text still copies,
+        // and nothing else takes its keys.
+        rename->setText(QStringLiteral("waiting"));
+        rename->setReadOnly(true);
+        check(focus(rename), "the waiting rename editor takes focus");
+        rename->selectAll();
+        press(Qt::Key_C);
+        press(Qt::Key_X);
+        press(Qt::Key_V);
+        check(clipboard->text() == QStringLiteral("waiting") && rename->text() == QStringLiteral("waiting") && list_commands == observed, "a read-only rename editor copies and keeps its keys");
+
+        check(focus(filter), "the filter row takes focus again");
+        press(Qt::Key_Q);
+        check(quits == 1, "Quit stays bound while a text field has focus");
+        check(clipboard_generation() == system_generation, "the system clipboard is untouched");
+        QApplication::exit(failed ? 1 : 0);
+    });
+    return QApplication::exec();
+}
 
 /// Refreshes every binder after any call that may have changed the session.
 /// A refresh that triggers another call refreshes again instead of nesting.
@@ -4292,6 +4448,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     QApplication app(argc, argv);
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_SETTINGS_WINDOW_CHECK"))
         return run_settings_window_checks(app);
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_TEXT_EDITOR_FOCUS_CHECK"))
+        return run_text_editor_focus_checks(app);
     WorkspaceWindow window;
     auto *waiting = new WaitingWindow(&window);
     FolderItemsListModel left_model, right_model;
@@ -4571,7 +4729,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
 
     // Focus entering any control inside a Browser activates that Browser.
     QObject::connect(&app, &QApplication::focusChanged, &window, [browsers, models, &shortcuts](QWidget *, QWidget *now) {
-        shortcuts.setEditing(now != nullptr && (now->property("inlineEditor").toBool() || now->property("filterTextEditor").toBool()));
+        shortcuts.followFocus(now);
         for (int browser = 0; browser < 2; ++browser)
             if (inside(now, browsers.at(browser)))
                 models.at(browser)->activateBrowser();

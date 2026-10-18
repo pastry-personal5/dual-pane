@@ -489,6 +489,7 @@ fn a_pending_cut_mutes_only_exact_path_and_kind_matches_in_every_visible_view() 
     assert_eq!([right.row_pending_cut(0), right.row_pending_cut(1), right.row_pending_cut(2)], [false, true, false], "a changed kind or an unrelated name shows no cue");
     assert_eq!(right.status_text(), "2 items ready to move");
     session.show(BrowserSide::Right, path(&["elsewhere"]), vec![file("a", None, None)]);
+    assert!(!session.right.view().row_pending_cut(0), "the same name and kind in another folder shows no cue");
     assert_eq!(session.right.view().status_text(), "/elsewhere", "a view without a match shows no count");
 
     session.submit(Event::ClipboardChanged { generation: ClipboardGeneration::new(6), offer: ClipboardOffer::Unsupported });

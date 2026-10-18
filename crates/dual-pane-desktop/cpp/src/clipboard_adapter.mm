@@ -4,25 +4,31 @@
 
 #include <QtCore/QList>
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <optional>
 
+// The byte codecs below spell out their widths, and the native calls read
+// best without braces around single statements.
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,readability-braces-around-statements)
 namespace dual_pane_desktop {
 namespace {
 NSString *const private_type_name = @"org.dual-pane.private-transfer";
 constexpr std::uint8_t wire_version = 1;
+/// The private payload: the wire version, then the little-endian TransferId.
+constexpr std::size_t token_size = 9;
 /// Read-result flag: the pasteboard changed during every read attempt.
 constexpr std::uint8_t busy_flag = 8;
 constexpr int seam_replace_with_string = 0, seam_replace_with_file_url_lines = 1, seam_replace_with_private_bytes = 2, seam_append_string_item = 3, seam_replace_with_file_reference_url = 4;
 
 void append_u32(QByteArray &bytes, std::uint32_t value) {
-    for (int shift = 0; shift < 32; shift += 8)
+    for (unsigned shift = 0; shift < 32U; shift += 8U)
         bytes.append(static_cast<char>((value >> shift) & 0xffU));
 }
 
 void append_u64(QByteArray &bytes, std::uint64_t value) {
-    for (int shift = 0; shift < 64; shift += 8)
+    for (unsigned shift = 0; shift < 64U; shift += 8U)
         bytes.append(static_cast<char>((value >> shift) & 0xffU));
 }
 
@@ -30,7 +36,7 @@ auto read_u32(const QByteArray &bytes, qsizetype &offset) -> std::optional<std::
     if (offset < 0 || bytes.size() - offset < 4)
         return std::nullopt;
     std::uint32_t value = 0;
-    for (int shift = 0; shift < 32; shift += 8)
+    for (unsigned shift = 0; shift < 32U; shift += 8U)
         value |= static_cast<std::uint32_t>(static_cast<unsigned char>(bytes.at(offset++))) << shift;
     return value;
 }
@@ -39,14 +45,15 @@ auto read_u64(const QByteArray &bytes, qsizetype &offset) -> std::optional<std::
     if (offset < 0 || bytes.size() - offset < 8)
         return std::nullopt;
     std::uint64_t value = 0;
-    for (int shift = 0; shift < 64; shift += 8)
+    for (unsigned shift = 0; shift < 64U; shift += 8U)
         value |= static_cast<std::uint64_t>(static_cast<unsigned char>(bytes.at(offset++))) << shift;
     return value;
 }
 
 /// Tests install a per-thread unique pasteboard so they never touch the
 /// user's clipboard. Production threads always use the general pasteboard.
-thread_local const void *isolated_pasteboard = nullptr;
+/// The seam changes per test thread, so it cannot be const.
+thread_local const void *isolated_pasteboard = nullptr; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 auto active_pasteboard() -> NSPasteboard * {
     return isolated_pasteboard != nullptr ? (__bridge NSPasteboard *)isolated_pasteboard : NSPasteboard.generalPasteboard;
@@ -75,7 +82,7 @@ auto hex_value(unsigned char byte) -> int {
 /// are not valid UTF-8 and re-decompose precomposed names, so neither would
 /// keep an Item's exact name.
 auto encode_file_url(const QByteArray &path, bool directory) -> NSString * {
-    static const char digits[] = "0123456789ABCDEF";
+    static constexpr std::array<char, 16> digits = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
     QByteArray encoded("file://");
     for (const char character : path) {
         const auto byte = static_cast<unsigned char>(character);
@@ -83,8 +90,8 @@ auto encode_file_url(const QByteArray &path, bool directory) -> NSString * {
             encoded.append(character);
         } else {
             encoded.append('%');
-            encoded.append(digits[byte >> 4]);
-            encoded.append(digits[byte & 0x0fU]);
+            encoded.append(digits.at(static_cast<unsigned>(byte) >> 4U));
+            encoded.append(digits.at(static_cast<unsigned>(byte) & 0x0fU));
         }
     }
     if (directory && !path.endsWith('/'))
@@ -127,7 +134,7 @@ auto decode_file_url_text(const QByteArray &text) -> std::optional<QByteArray> {
         const int low = hex_value(static_cast<unsigned char>(text.at(index + 2)));
         if (high < 0 || low < 0 || (high == 0 && low == 0) || (high == 2 && low == 15))
             return std::nullopt;
-        path.append(static_cast<char>((high << 4) | low));
+        path.append(static_cast<char>((static_cast<unsigned>(high) << 4U) | static_cast<unsigned>(low)));
         index += 2;
     }
     return path;
@@ -140,7 +147,7 @@ auto decode_file_url(NSString *value) -> std::optional<QByteArray> {
     const auto text = utf8_bytes(value);
     if (!text)
         return std::nullopt;
-    const auto direct = decode_file_url_text(*text);
+    auto direct = decode_file_url_text(*text);
     if (!direct || !direct->startsWith(QByteArrayLiteral("/.file/id=")))
         return direct;
     NSURL *resolved = [NSURL URLWithString:value].filePathURL;
@@ -151,21 +158,22 @@ auto decode_file_url(NSString *value) -> std::optional<QByteArray> {
 }
 
 auto token_data(std::uint64_t transfer) -> NSData * {
-    std::uint8_t bytes[9] = {wire_version};
-    for (int index = 0; index < 8; ++index)
-        bytes[index + 1] = static_cast<std::uint8_t>((transfer >> (index * 8)) & 0xffU);
-    return [NSData dataWithBytes:bytes length:sizeof(bytes)];
+    std::array<std::uint8_t, token_size> bytes{wire_version};
+    for (std::size_t index = 1; index < token_size; ++index)
+        bytes.at(index) = static_cast<std::uint8_t>((transfer >> ((index - 1) * 8U)) & 0xffU);
+    return [NSData dataWithBytes:bytes.data() length:bytes.size()];
 }
 
 auto decode_token(NSData *data) -> std::optional<std::uint64_t> {
-    if (data == nil || data.length != 9)
+    std::array<std::uint8_t, token_size> bytes{};
+    if (data == nil || data.length != bytes.size())
         return std::nullopt;
-    const auto *bytes = static_cast<const std::uint8_t *>(data.bytes);
-    if (bytes[0] != wire_version)
+    [data getBytes:bytes.data() length:bytes.size()];
+    if (bytes.at(0) != wire_version)
         return std::nullopt;
     std::uint64_t transfer = 0;
-    for (int index = 0; index < 8; ++index)
-        transfer |= static_cast<std::uint64_t>(bytes[index + 1]) << (index * 8);
+    for (std::size_t index = 1; index < token_size; ++index)
+        transfer |= static_cast<std::uint64_t>(bytes.at(index)) << ((index - 1) * 8U);
     return transfer;
 }
 } // namespace
@@ -181,15 +189,15 @@ auto clipboard_offer() -> int {
         NSPasteboard *pasteboard = active_pasteboard();
         const bool private_data = [pasteboard availableTypeFromArray:@[ private_type() ]] != nil;
         const bool files = [pasteboard availableTypeFromArray:@[ NSPasteboardTypeFileURL ]] != nil;
-        return (private_data ? 1 : 0) | (files ? 2 : 0);
+        return (private_data ? 1 : 0) + (files ? 2 : 0);
     }
 }
 
-auto clipboard_publish(const QByteArray &request) -> QByteArray {
+auto clipboard_publish(const QByteArray &request) -> QByteArray { // NOLINT(readability-function-cognitive-complexity)
     @autoreleasepool {
         QByteArray result;
         NSPasteboard *pasteboard = active_pasteboard();
-        const auto finish = [&](bool succeeded) {
+        const auto finish = [&](bool succeeded) -> QByteArray {
             append_u64(result, static_cast<std::uint64_t>(pasteboard.changeCount));
             result.append(succeeded ? '\1' : '\0');
             return result;
@@ -246,7 +254,7 @@ auto clipboard_publish(const QByteArray &request) -> QByteArray {
     }
 }
 
-auto clipboard_read() -> QByteArray {
+auto clipboard_read() -> QByteArray { // NOLINT(readability-function-cognitive-complexity)
     @autoreleasepool {
         NSPasteboard *pasteboard = active_pasteboard();
         // A snapshot belongs to a generation only if no write landed while
@@ -311,7 +319,7 @@ void clipboard_isolation_end() {
     @autoreleasepool {
         if (isolated_pasteboard == nullptr)
             return;
-        NSPasteboard *pasteboard = (__bridge NSPasteboard *)isolated_pasteboard;
+        auto *pasteboard = (__bridge NSPasteboard *)isolated_pasteboard;
         [pasteboard releaseGlobally];
         CFBridgingRelease(isolated_pasteboard);
         isolated_pasteboard = nullptr;
@@ -370,7 +378,12 @@ auto clipboard_seam_describe() -> QByteArray {
                 result.append('\n');
             const bool has_private = [item.types containsObject:private_type()];
             const bool has_file = [item.types containsObject:NSPasteboardTypeFileURL];
-            result.append(has_private && has_file ? "private+file" : has_private ? "private" : has_file ? "file" : "other");
+            if (has_private && has_file)
+                result.append("private+file");
+            else if (has_private)
+                result.append("private");
+            else
+                result.append(has_file ? "file" : "other");
         }
         return result;
     }
@@ -384,10 +397,11 @@ auto clipboard_seam_private_payload() -> QByteArray {
         for (NSPasteboardItem *item in active_pasteboard().pasteboardItems) {
             NSData *data = [item dataForType:private_type()];
             if (data != nil)
-                return QByteArray(static_cast<const char *>(data.bytes), static_cast<qsizetype>(data.length));
+                return {static_cast<const char *>(data.bytes), static_cast<qsizetype>(data.length)};
         }
         return result;
     }
 }
 
 } // namespace dual_pane_desktop
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,readability-braces-around-statements)

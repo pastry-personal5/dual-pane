@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn malformed_non_file_and_mixed_content_is_unsupported_without_a_valid_subset() {
         let _isolated = Isolated::new();
-        let cases: [(&str, i32, &[u8]); 13] = [("plain text", 0, b"plain text"), ("web address", 1, b"https://example.com/a"), ("unparsable address", 1, b"not a url"), ("empty address", 1, b""), ("short private token", 2, b"short"), ("future private token version", 2, &[2, 1, 0, 0, 0, 0, 0, 0, 0]), ("relative address", 1, b"file:relative"), ("remote host", 1, b"file://server/tmp/a"), ("bad percent escape", 1, b"file:///tmp/a%zz"), ("encoded NUL", 1, b"file:///tmp/a%00b"), ("encoded slash", 1, b"file:///tmp/a%2Fb"), ("query", 1, b"file:///tmp/a?x=1"), ("space", 1, b"file:///tmp/a b")];
+        let cases: [(&str, i32, &[u8]); 15] = [("plain text", 0, b"plain text"), ("web address", 1, b"https://example.com/a"), ("unparsable address", 1, b"not a url"), ("empty address", 1, b""), ("short private token", 2, b"short"), ("future private token version", 2, &[2, 1, 0, 0, 0, 0, 0, 0, 0]), ("relative address", 1, b"file:relative"), ("remote host", 1, b"file://server/tmp/a"), ("bad percent escape", 1, b"file:///tmp/a%zz"), ("encoded NUL", 1, b"file:///tmp/a%00b"), ("encoded slash", 1, b"file:///tmp/a%2Fb"), ("dot segment", 1, b"file:///tmp/dp-a/../etc"), ("encoded dot segment", 1, b"file:///tmp/dp-a/%2E%2E/etc"), ("query", 1, b"file:///tmp/a?x=1"), ("space", 1, b"file:///tmp/a b")];
         for (label, kind, payload) in cases {
             assert!(write(kind, payload), "{label} is written");
             assert_eq!(read().1, ClipboardSnapshot::Unsupported, "{label}");

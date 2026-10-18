@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dual_pane_application::{BrowserChrome, ClipboardAction, ClipboardRejection, FilterStatus, MonitoringStatus, Output, PreviewView, RowChange};
-use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
+use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
 use crate::format::{UNAVAILABLE, format_exact, format_relative, format_size, item_count, location_text, relative_age_position, total_size};
@@ -66,8 +66,9 @@ pub struct BrowserViewModel {
     tabs_revision: u64,
     toolbar: Toolbar,
     pending_cut: Arc<[dual_pane_domain::OperationRoot]>,
-    /// The captured Cut roots by byte-exact path, for per-row matching.
-    pending_cut_kinds: HashMap<Location, EntryKind>,
+    /// The captured Cut roots by parent folder, then exact name, so matching
+    /// a row allocates nothing and a folder that holds none is skipped at once.
+    pending_cut_kinds: HashMap<Location, HashMap<EntryName, EntryKind>>,
 }
 
 impl Default for BrowserViewModel {
@@ -377,11 +378,13 @@ impl BrowserViewModel {
     }
 
     pub fn row_pending_cut(&self, row: usize) -> bool {
-        if self.pending_cut_kinds.is_empty() {
-            return false;
-        }
-        let (Some(location), Some(entry)) = (&self.location, self.entry(row)) else { return false };
-        self.pending_cut_kinds.get(&location.join(entry.name())) == Some(&entry.kind())
+        let (Some(names), Some(entry)) = (self.pending_cut_names(), self.entry(row)) else { return false };
+        is_pending_cut(names, entry)
+    }
+
+    /// The captured Cut roots that this folder holds, by exact name.
+    fn pending_cut_names(&self) -> Option<&HashMap<EntryName, EntryKind>> {
+        self.pending_cut_kinds.get(self.location.as_ref()?)
     }
 
     /// A visible row's position on the Relative Date color strip, or `None`
@@ -490,7 +493,8 @@ impl BrowserViewModel {
     /// The number of captured Cut roots, shown only where at least one of
     /// them is a row.
     fn pending_cut_count(&self) -> usize {
-        if (0..self.entries.len()).any(|row| self.row_pending_cut(row)) { self.pending_cut.len() } else { 0 }
+        let Some(names) = self.pending_cut_names() else { return 0 };
+        if self.entries.iter().any(|entry| is_pending_cut(names, entry)) { self.pending_cut.len() } else { 0 }
     }
 
     fn refresh_summary(&mut self) {
@@ -601,7 +605,12 @@ impl BrowserPresenter {
             if *self.view.pending_cut != **pending_cut {
                 let view = &mut self.view;
                 view.pending_cut = Arc::clone(pending_cut);
-                view.pending_cut_kinds = pending_cut.iter().map(|root| (root.source.clone(), root.kind)).collect();
+                view.pending_cut_kinds.clear();
+                for root in pending_cut.iter() {
+                    if let (Some(parent), Some(name)) = (root.source.parent(), root.source.components().last()) {
+                        view.pending_cut_kinds.entry(parent).or_default().insert(name.clone(), root.kind);
+                    }
+                }
                 // Only the cue changes, so every row repaints in place.
                 let rows = view.entries.len();
                 view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
@@ -756,6 +765,11 @@ impl BrowserPresenter {
         view.refresh_base_status();
         view.refresh_status();
     }
+}
+
+/// A row is a pending Cut only when both its exact name and its kind match.
+fn is_pending_cut(names: &HashMap<EntryName, EntryKind>, entry: &Entry) -> bool {
+    names.get(entry.name()) == Some(&entry.kind())
 }
 
 /// A folder that is gone or no longer a folder shows the Missing Folder
