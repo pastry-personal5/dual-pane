@@ -35,12 +35,15 @@ pub enum ActionId {
     ShowPackageContents,
     OpenItem,
     FocusFolderItemsFilter,
+    CopyItems,
+    CutItems,
+    PasteItems,
 }
 
 impl ActionId {
     /// Every catalogued action. Later IDs are appended, so a shortcut held by
     /// an earlier action keeps it when bindings are validated in this order.
-    pub const ALL: [Self; 26] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem, Self::FocusFolderItemsFilter];
+    pub const ALL: [Self; 29] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem, Self::FocusFolderItemsFilter, Self::CopyItems, Self::CutItems, Self::PasteItems];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -70,6 +73,9 @@ impl ActionId {
             Self::ShowPackageContents => "ShowPackageContents",
             Self::OpenItem => "OpenItem",
             Self::FocusFolderItemsFilter => "FocusFolderItemsFilter",
+            Self::CopyItems => "CopyItems",
+            Self::CutItems => "CutItems",
+            Self::PasteItems => "PasteItems",
         }
     }
 
@@ -80,7 +86,7 @@ impl ActionId {
     /// Where this action's shortcut acts.
     pub const fn scope(self) -> ShortcutScope {
         match self {
-            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents | Self::OpenItem => ShortcutScope::FolderItemsList,
+            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents | Self::OpenItem | Self::CopyItems | Self::CutItems | Self::PasteItems => ShortcutScope::FolderItemsList,
             Self::QuitApplication => ShortcutScope::Application,
             Self::FocusOtherBrowser | Self::FocusFolderItemsFilter | Self::NavigateParent | Self::CloseWindow | Self::NewFolder | Self::SortByNameAscending | Self::SortByNameDescending | Self::SortByTypeAscending | Self::SortByTypeDescending | Self::SortByDateAscending | Self::SortByDateDescending | Self::SortBySizeAscending | Self::SortBySizeDescending | Self::NewTab | Self::CloseTab | Self::NavigateBack | Self::NavigateForward | Self::RefreshFolder => ShortcutScope::Window,
         }
@@ -209,6 +215,9 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
         ActionId::MoveToTrash => Some(Shortcut::new(true, false, false, false, Key::Delete)),
         ActionId::DeletePermanently => Some(Shortcut::new(true, false, true, false, Key::Delete)),
         ActionId::OpenItem => Some(Shortcut::new(true, false, false, false, Key::Down)),
+        ActionId::CopyItems => Some(Shortcut::new(true, false, false, false, Key::Character('C'))),
+        ActionId::CutItems => Some(Shortcut::new(true, false, false, false, Key::Character('X'))),
+        ActionId::PasteItems => Some(Shortcut::new(true, false, false, false, Key::Character('V'))),
         // Command+W closes a tab; Close Window keeps its meaning but has no
         // default shortcut. Show Package Contents is a Context Menu command.
         ActionId::CloseWindow | ActionId::ShowPackageContents | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
@@ -709,12 +718,15 @@ mod tests {
         assert_eq!(default_shortcuts(ActionId::MoveToTrash), vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)]);
         assert_eq!(default_shortcut(ActionId::DeletePermanently), shortcut(true, true, Key::Delete));
         assert_eq!(default_shortcut(ActionId::FocusFolderItemsFilter), shortcut(true, false, Key::Character('F')));
+        assert_eq!(default_shortcut(ActionId::CopyItems), shortcut(true, false, Key::Character('C')));
+        assert_eq!(default_shortcut(ActionId::CutItems), shortcut(true, false, Key::Character('X')));
+        assert_eq!(default_shortcut(ActionId::PasteItems), shortcut(true, false, Key::Character('V')));
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
-        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 8..], &[ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::FocusFolderItemsFilter], "new IDs are appended");
+        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 3..], &[ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems], "clipboard IDs are appended");
     }
     #[test]
     fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
-        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem];
+        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems];
         for action in ActionId::ALL {
             let expected = if list.contains(&action) {
                 ShortcutScope::FolderItemsList
@@ -730,13 +742,22 @@ mod tests {
     #[test]
     fn focus_filter_default_is_appended_and_respects_older_bindings() {
         let command_f = default_shortcut(ActionId::FocusFolderItemsFilter).unwrap();
-        assert_eq!(ActionId::ALL.last(), Some(&ActionId::FocusFolderItemsFilter));
+        assert_eq!(ActionId::ALL.get(ActionId::ALL.len() - 4), Some(&ActionId::FocusFolderItemsFilter));
         assert_eq!(ActionId::FocusFolderItemsFilter.scope(), ShortcutScope::Window);
         let mut old = SettingsState::new();
         old.apply(SettingsSnapshot { bindings: vec![ActionBinding { action: ActionId::FocusOtherBrowser, shortcut: Some(command_f) }], ..SettingsSnapshot::default() });
         assert_eq!(old.binding(ActionId::FocusFolderItemsFilter), None, "compatibility must not take a shortcut already accepted from an older profile");
         let mut defaults = SettingsState::new();
         assert_eq!(defaults.set_shortcuts(ActionId::FocusFolderItemsFilter, vec![default_shortcut(ActionId::FocusOtherBrowser).unwrap()]), Err(ShortcutRejection::Conflict(ActionId::FocusOtherBrowser)));
+    }
+    #[test]
+    fn clipboard_defaults_append_without_overwriting_custom_conflicting_or_unbound_profiles() {
+        let custom = Shortcut::new(true, true, false, false, Key::Character('C'));
+        let mut state = SettingsState::new();
+        state.apply(SettingsSnapshot { shortcut_lists: vec![ActionShortcuts { action: ActionId::NewFolder, shortcuts: vec![default_shortcut(ActionId::CopyItems).unwrap()] }, ActionShortcuts { action: ActionId::CutItems, shortcuts: vec![custom] }, ActionShortcuts { action: ActionId::PasteItems, shortcuts: vec![] }], ..SettingsSnapshot::default() });
+        assert!(state.shortcuts(ActionId::CopyItems).is_empty(), "a conflicting older binding keeps Command+C");
+        assert_eq!(state.shortcuts(ActionId::CutItems), &[custom], "a customized clipboard action stays customized");
+        assert!(state.shortcuts(ActionId::PasteItems).is_empty(), "an explicitly unbound action stays unbound");
     }
     #[test]
     fn settings_saved_before_the_file_commands_load_their_defaults() {

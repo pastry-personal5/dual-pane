@@ -7,9 +7,10 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{ClipboardRejection, Event, FavoriteProbeOutcome, FilterFailure, FilterRequest, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes, project_filter};
+use dual_pane_application::{ClipboardAction, ClipboardRejection, ClipboardRequestId, Event, FavoriteProbeOutcome, FilterFailure, FilterRequest, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes, project_filter};
 use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryKind, ListingErrorKind, Location, OperationId, OperationRoot, RequestToken, SortSpec, TabId};
 
+use crate::clipboard_native;
 use crate::location_probe::resolve_item;
 use crate::location_watcher::WatcherHandle;
 use crate::native_location::path_from_location;
@@ -45,6 +46,7 @@ pub struct Runtime {
     right_jobs: JobSender,
     /// One serialized lane for short location probes, separate from reads.
     probes: SyncSender<ProbeJob>,
+    clipboard: SyncSender<ClipboardJob>,
     events: Receiver<Event>,
     next_event: Option<Event>,
     wake_pending: Arc<AtomicBool>,
@@ -265,6 +267,11 @@ enum ProbeJob {
     },
 }
 
+enum ClipboardJob {
+    Publish { request: ClipboardRequestId, transfer: dual_pane_application::TransferId, action: ClipboardAction, roots: Option<Arc<[OperationRoot]>> },
+    Read { request: ClipboardRequestId },
+}
+
 struct JobState {
     cancelled: AtomicBool,
     terminal_claimed: AtomicBool,
@@ -296,6 +303,7 @@ enum WorkerOutcome {
 
 const WORKER_THREAD_NAME: &str = "listing-worker";
 const PROBE_THREAD_NAME: &str = "location-probe";
+const CLIPBOARD_THREAD_NAME: &str = "clipboard-worker";
 const INITIAL_RESTART_DELAY: Duration = Duration::from_millis(100);
 const MAX_RESTART_DELAY: Duration = Duration::from_secs(5);
 static INSTALL_PANIC_HOOK: Once = Once::new();
@@ -327,6 +335,9 @@ impl Runtime {
         let (probes, probe_jobs) = mpsc::sync_channel(PENDING_PROBE_CAPACITY);
         let probe_delivery = delivery.clone();
         thread::Builder::new().name(PROBE_THREAD_NAME.to_owned()).spawn(move || run_probes(probe_jobs, probe, probe_delivery))?;
+        let (clipboard, clipboard_jobs) = mpsc::sync_channel(8);
+        let clipboard_delivery = delivery.clone();
+        thread::Builder::new().name(CLIPBOARD_THREAD_NAME.to_owned()).spawn(move || run_clipboard(clipboard_jobs, clipboard_delivery))?;
         let watcher_delivery = delivery.clone();
         let watcher = WatcherHandle::start(Arc::new(move |event| deliver_event(&watcher_delivery, event))).unwrap_or_else(|_| WatcherHandle::unavailable());
         let mut preview_senders = Vec::with_capacity(2);
@@ -343,7 +354,7 @@ impl Runtime {
         }
         let preview_jobs: [SyncSender<PreviewJob>; 2] = preview_senders.try_into().map_err(|_| io::Error::from(io::ErrorKind::Other))?;
         let filter_lanes = Some([FilterLane::start(BrowserSide::Left, delivery.clone())?, FilterLane::start(BrowserSide::Right, delivery.clone())?]);
-        Ok(Self { left_jobs, right_jobs, probes, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes, read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
+        Ok(Self { left_jobs, right_jobs, probes, clipboard, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes, read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
     }
 
     /// Starts the file-operation lane, which reports through this runtime.
@@ -406,8 +417,16 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
-            WorkRequest::PublishClipboard { request, transfer, .. } => Some(Event::ClipboardPublished { request, transfer, generation: dual_pane_application::ClipboardGeneration::new(0), succeeded: false }),
-            WorkRequest::ReadClipboard { request } => Some(Event::ClipboardRead { request, generation: dual_pane_application::ClipboardGeneration::new(0), snapshot: dual_pane_application::ClipboardSnapshot::Unsupported }),
+            WorkRequest::PublishClipboard { request, transfer, action, finder_roots } => match self.clipboard.try_send(ClipboardJob::Publish { request, transfer, action, roots: finder_roots }) {
+                Ok(()) => None,
+                Err(TrySendError::Full(ClipboardJob::Publish { request, transfer, .. }) | TrySendError::Disconnected(ClipboardJob::Publish { request, transfer, .. })) => Some(Event::ClipboardPublished { request, transfer, generation: clipboard_native::generation_and_offer().0, succeeded: false }),
+                Err(_) => unreachable!("clipboard queue preserves the job variant"),
+            },
+            WorkRequest::ReadClipboard { request } => match self.clipboard.try_send(ClipboardJob::Read { request }) {
+                Ok(()) => None,
+                Err(TrySendError::Full(ClipboardJob::Read { request }) | TrySendError::Disconnected(ClipboardJob::Read { request })) => Some(Event::ClipboardRead { request, generation: clipboard_native::generation_and_offer().0, snapshot: dual_pane_application::ClipboardSnapshot::Unavailable }),
+                Err(_) => unreachable!("clipboard queue preserves the job variant"),
+            },
             WorkRequest::PreflightClipboard { request, generation, sources } => {
                 let job = ProbeJob::ClipboardPreflight { request, generation, sources };
                 self.probes.try_send(job).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| job.fail())
@@ -599,6 +618,23 @@ fn run_probes(jobs: Receiver<ProbeJob>, probe: LocationProbe, delivery: Delivery
             ProbeJob::ClipboardPreflight { request, generation, sources } => {
                 let result = catch_unwind(AssertUnwindSafe(|| preflight_clipboard(&sources))).unwrap_or(Err(ClipboardRejection::SourceUnavailable));
                 Event::ClipboardPreflighted { request, generation, result }
+            }
+        };
+        deliver_event(&delivery, event);
+    }
+}
+
+fn run_clipboard(jobs: Receiver<ClipboardJob>, delivery: Delivery) {
+    for job in jobs {
+        let event = match job {
+            ClipboardJob::Publish { request, transfer, action, roots } => {
+                let outcome = catch_unwind(AssertUnwindSafe(|| clipboard_native::publish(transfer, action, roots.as_deref())));
+                let (generation, succeeded) = outcome.unwrap_or_else(|_| (clipboard_native::generation_and_offer().0, false));
+                Event::ClipboardPublished { request, transfer, generation, succeeded }
+            }
+            ClipboardJob::Read { request } => {
+                let (generation, snapshot) = catch_unwind(AssertUnwindSafe(clipboard_native::read)).unwrap_or_else(|_| (clipboard_native::generation_and_offer().0, dual_pane_application::ClipboardSnapshot::Unsupported));
+                Event::ClipboardRead { request, generation, snapshot }
             }
         };
         deliver_event(&delivery, event);
@@ -1278,7 +1314,7 @@ mod tests {
         let (_event_sender, events) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
         let delivery = Delivery { events: mpsc::channel().0, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
-        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes: None, read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
+        let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, clipboard: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes: None, read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
 
         assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }));
         assert!(runner.outstanding.is_empty());

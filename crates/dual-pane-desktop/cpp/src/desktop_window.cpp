@@ -27,6 +27,7 @@
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractFileIconProvider>
 #include <QtGui/QAccessible>
+#include <QtGui/QClipboard>
 #include <QtGui/QCloseEvent>
 #include <QtGui/QColor>
 #include <QtGui/QCursor>
@@ -131,6 +132,7 @@ constexpr int type_column_width = 44;
 constexpr int path_role = Qt::UserRole;
 constexpr int native_path_role = Qt::UserRole + 2;
 constexpr int native_directory_role = Qt::UserRole + 3;
+constexpr int pending_cut_role = Qt::UserRole + 4;
 constexpr int relative_age_role = Qt::UserRole + 1;
 constexpr int max_pending_icons = 128;
 constexpr int icon_cache_size = 1024;
@@ -139,6 +141,7 @@ constexpr auto favorite_item_mime = "application/x-dual-pane-favorite-item";
 constexpr auto operation_panel_mime = "application/x-dual-pane-operation-panel";
 // File command codes of the Folder Items model.
 constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_new_folder = 3, command_trash = 4, command_delete = 5;
+constexpr int clipboard_copy = 0, clipboard_cut = 1, clipboard_paste = 2;
 // Shortcut scope codes of the workspace bridge.
 constexpr int scope_folder_items_list = 0, scope_application = 2;
 constexpr int status_reason_milliseconds = 3000;
@@ -489,6 +492,15 @@ class ItemIconDelegate final : public QStyledItemDelegate {
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
         auto cell_option = option;
+        const bool pending_cut = index.data(pending_cut_role).toBool();
+        if (pending_cut) {
+            auto text = cell_option.palette.color(QPalette::Text);
+            auto highlighted = cell_option.palette.color(QPalette::HighlightedText);
+            text.setAlphaF(0.45);
+            highlighted.setAlphaF(0.55);
+            cell_option.palette.setColor(QPalette::Text, text);
+            cell_option.palette.setColor(QPalette::HighlightedText, highlighted);
+        }
         if (index.column() == 3 || index.column() == 4) {
             auto date_font = cell_option.font;
             date_font.setPointSizeF(date_font.pointSizeF() - 2.0);
@@ -518,7 +530,10 @@ class ItemIconDelegate final : public QStyledItemDelegate {
             painter->save();
             painter->fillRect(swatch, background);
             painter->setClipRect(swatch);
-            painter->setPen(Qt::black);
+            auto date_color = QColor(Qt::black);
+            if (pending_cut)
+                date_color.setAlphaF(0.45);
+            painter->setPen(date_color);
             painter->setFont(cell_option.font);
             painter->drawText(swatch.adjusted(2, 0, -2, 0), Qt::AlignRight | Qt::AlignVCenter, date_text);
             painter->restore();
@@ -534,7 +549,11 @@ class ItemIconDelegate final : public QStyledItemDelegate {
             if (!pixmap->isNull()) {
                 const auto size = pixmap->deviceIndependentSize().toSize();
                 const QRect target(option.rect.x() + ((option.rect.width() - size.width()) / 2), option.rect.y() + ((option.rect.height() - size.height()) / 2), size.width(), size.height());
+                painter->save();
+                if (pending_cut)
+                    painter->setOpacity(0.45);
                 painter->drawPixmap(target, *pixmap);
+                painter->restore();
             }
             return;
         }
@@ -1975,6 +1994,7 @@ class Browser final : public QWidget {
     /// The Folder Items Context Menu. Items the application refuses now stay
     /// disabled; empty space offers New Folder.
     void show_menu(const QPoint &at, int row) {
+        model_->observeClipboard();
         QMenu menu(this);
         const auto observed_tab = model_->activeTabId();
         const auto observed_revision = model_->visibleRevision();
@@ -1985,7 +2005,16 @@ class Browser final : public QWidget {
             action->setEnabled(model_->fileCommandAvailable(command));
             QObject::connect(action, &QAction::triggered, this, [this, command, observed_tab, observed_revision] { model_->startFileCommandObserved(command, observed_tab, observed_revision); });
         };
+        const auto add_clipboard = [this, &menu, observed_tab, observed_revision](const QString &text, int command) {
+            auto *action = menu.addAction(text);
+            action->setEnabled(model_->clipboardCommandAvailable(command));
+            QObject::connect(action, &QAction::triggered, this, [this, command, observed_tab, observed_revision] { model_->startClipboardCommandObserved(command, observed_tab, observed_revision); });
+        };
         if (row >= 0) {
+            add_clipboard(QStringLiteral("Copy Items"), clipboard_copy);
+            add_clipboard(QStringLiteral("Cut Items"), clipboard_cut);
+            add_clipboard(QStringLiteral("Paste Items"), clipboard_paste);
+            menu.addSeparator();
             add(QStringLiteral("Copy to Other Browser"), command_copy);
             add(QStringLiteral("Move to Other Browser"), command_move);
             add(QStringLiteral("Rename Item"), command_rename);
@@ -1999,6 +2028,8 @@ class Browser final : public QWidget {
                 QObject::connect(menu.addAction(QStringLiteral("Show Package Contents")), &QAction::triggered, this, [this, row, observed_tab, observed_revision] { model_->showPackageContentsObserved(row, observed_tab, observed_revision); });
             }
         } else {
+            add_clipboard(QStringLiteral("Paste Items"), clipboard_paste);
+            menu.addSeparator();
             add(QStringLiteral("New Folder"), command_new_folder);
         }
         menu.exec(at);
@@ -3383,7 +3414,7 @@ class SettingsWindow final : public QDialog {
             return 0;
         if (id == QStringLiteral("NewTab") || id == QStringLiteral("CloseTab") || id == QStringLiteral("CloseWindow") || id == QStringLiteral("QuitApplication"))
             return 1;
-        if (id == QStringLiteral("NewFolder") || id == QStringLiteral("CopyToOtherBrowser") || id == QStringLiteral("MoveToOtherBrowser") || id == QStringLiteral("RenameItem") || id == QStringLiteral("MoveToTrash") || id == QStringLiteral("DeletePermanently") || id == QStringLiteral("ShowPackageContents") || id == QStringLiteral("OpenItem"))
+        if (id == QStringLiteral("NewFolder") || id == QStringLiteral("CopyToOtherBrowser") || id == QStringLiteral("MoveToOtherBrowser") || id == QStringLiteral("RenameItem") || id == QStringLiteral("MoveToTrash") || id == QStringLiteral("DeletePermanently") || id == QStringLiteral("ShowPackageContents") || id == QStringLiteral("OpenItem") || id == QStringLiteral("CopyItems") || id == QStringLiteral("CutItems") || id == QStringLiteral("PasteItems"))
             return 2;
         if (id.startsWith(QStringLiteral("SortBy")))
             return 3;
@@ -4515,6 +4546,12 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     const std::array<std::pair<QString, int>, 5> file_commands = {{{QStringLiteral("CopyToOtherBrowser"), command_copy}, {QStringLiteral("MoveToOtherBrowser"), command_move}, {QStringLiteral("RenameItem"), command_rename}, {QStringLiteral("MoveToTrash"), command_trash}, {QStringLiteral("DeletePermanently"), command_delete}}};
     for (const auto &file_command : file_commands)
         list_handlers.insert(file_command.first, [models, command = file_command.second](int browser) { models.at(browser)->startFileCommand(command); });
+    const std::array<std::pair<QString, int>, 3> clipboard_commands = {{{QStringLiteral("CopyItems"), clipboard_copy}, {QStringLiteral("CutItems"), clipboard_cut}, {QStringLiteral("PasteItems"), clipboard_paste}}};
+    for (const auto &clipboard_command : clipboard_commands)
+        list_handlers.insert(clipboard_command.first, [models, command = clipboard_command.second](int browser) {
+            auto *model = models.at(browser);
+            model->startClipboardCommandObserved(command, model->activeTabId(), model->visibleRevision());
+        });
     list_handlers.insert(QStringLiteral("OpenItem"), [models](int browser) { models.at(browser)->activateSelected(); });
     ShortcutBinder shortcuts(&window, &bridge, handlers, {left_browser->view(), right_browser->view()}, list_handlers);
     settings_controller->set_capture_handler([&shortcuts](bool active) { shortcuts.setCapture(active); });
@@ -4536,7 +4573,15 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
             if (inside(now, browsers.at(browser)))
                 models.at(browser)->activateBrowser();
     });
-    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &window, [&bridge](Qt::ApplicationState state) { bridge.setApplicationActive(state == Qt::ApplicationActive); });
+    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &window, [&bridge](Qt::ApplicationState state) {
+        bridge.setApplicationActive(state == Qt::ApplicationActive);
+        if (state == Qt::ApplicationActive)
+            bridge.observeClipboard();
+    });
+    QObject::connect(QGuiApplication::clipboard(), &QClipboard::changed, &window, [&bridge](QClipboard::Mode mode) {
+        if (mode == QClipboard::Clipboard)
+            bridge.observeClipboard();
+    });
 
     {
         auto &state = scheduler_state();
@@ -4544,6 +4589,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         state.scheduler = &scheduler;
     }
     bridge.start(std::move(startup));
+    bridge.observeClipboard();
     bridge.setApplicationActive(QApplication::applicationState() == Qt::ApplicationActive);
     waiting_delay.start(150);
     settings_load_timeout.start(10000);

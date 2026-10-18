@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use dual_pane_domain::{Location, OperationRoot};
+use dual_pane_domain::{BrowserSide, Location, OperationRoot, TabId};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClipboardGeneration(u64);
 impl ClipboardGeneration {
     pub const fn new(value: u64) -> Self {
@@ -41,11 +41,38 @@ pub enum ClipboardAction {
     Cut,
 }
 
+/// Cheap native type information used only to enable Paste. Invocation still
+/// performs a generation-tagged read and validates the complete snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClipboardOffer {
+    Private,
+    Files,
+    PrivateAndFiles,
+    #[default]
+    Unsupported,
+}
+
+impl ClipboardOffer {
+    pub const fn supports_paste(self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardSnapshot {
-    Private { transfer: TransferId },
-    ExternalFiles { sources: Arc<[Location]> },
+    Private {
+        transfer: TransferId,
+    },
+    ExternalFiles {
+        sources: Arc<[Location]>,
+    },
+    PrivateAndExternal {
+        transfer: TransferId,
+        sources: Arc<[Location]>,
+    },
     Unsupported,
+    /// The clipboard worker could not take the read, so the content is unknown.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +83,7 @@ pub enum ClipboardRejection {
     SourceUnavailable,
     DestinationUnavailable,
     PublicationFailed,
+    ClipboardBusy,
     ClipboardReplaced,
     UnknownPrivateTransfer,
     TransferReserved,
@@ -70,6 +98,8 @@ pub enum ClipboardRejection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CapturedTransfer {
+    pub browser: BrowserSide,
+    pub tab: TabId,
     pub action: ClipboardAction,
     pub roots: Arc<[OperationRoot]>,
     pub reserved: bool,

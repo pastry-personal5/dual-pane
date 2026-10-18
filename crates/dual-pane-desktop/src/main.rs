@@ -1,4 +1,5 @@
 mod browser_session;
+mod clipboard_native;
 mod folder_items;
 mod folder_items_list_model;
 mod location_probe;

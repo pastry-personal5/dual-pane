@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, EditorOutcome, FavoritesEvent, InputController, OperationsPresenter, OperationsViewModel, UNREPRESENTABLE_NAME_TEXT, UiEvent, WorkspacePresenter, WorkspaceViewModel, name_rejection_text};
-use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteRejection, Input, Output, SettingsFailure, WindowLayout, WorkRequest, Workspace};
-use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection};
+use dual_pane_application::{ClipboardAction, Command, Event, FavoriteEdit, FavoriteRejection, Input, Output, SettingsFailure, WindowLayout, WorkRequest, Workspace};
+use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection, TabId};
 
 use crate::native_location::{location_from_path, path_from_location};
 use crate::native_shell::open_with_default_application;
@@ -207,6 +207,27 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     /// enabling a menu item when the menu opens.
     pub fn file_command_available(&self, browser: BrowserSide, command: OperationCommand) -> bool {
         self.workspace.command_availability(browser, self.workspace.active_tab(browser), command).is_ok()
+    }
+
+    pub fn clipboard_command_available(&self, browser: BrowserSide, action: Option<ClipboardAction>) -> bool {
+        let tab = self.workspace.active_tab(browser);
+        match action {
+            Some(_) => self.workspace.clipboard_capture_availability(browser, tab).is_ok(),
+            None => self.workspace.paste_availability(browser, tab).is_ok(),
+        }
+    }
+
+    pub fn submit_clipboard_observed(&mut self, browser: BrowserSide, action: Option<ClipboardAction>, tab: TabId, visible_revision: u64) {
+        self.submit(Command::ActivateBrowser { browser });
+        let command = match action {
+            Some(action) => Command::CaptureClipboard { browser, tab, action },
+            None => Command::PasteClipboard { browser, tab },
+        };
+        self.submit(Input::ObservedCommand { command, browser, tab, visible_revision });
+    }
+
+    pub fn observe_clipboard(&mut self, generation: dual_pane_application::ClipboardGeneration, offer: dual_pane_application::ClipboardOffer) {
+        self.submit(Event::ClipboardChanged { generation, offer });
     }
 
     /// Clears `browser`'s Status Bar reason when its display time ends.
@@ -598,6 +619,29 @@ mod tests {
         session.start(Location::root());
         let reads = session.runner.dispatched.iter().filter(|work| matches!(work, WorkRequest::ReadDirectory { .. })).cloned().collect::<Vec<_>>();
         assert_eq!(reads, vec![WorkRequest::ReadDirectory { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), location: Location::root(), sort: SortSpec::default(), visibility: Default::default(), previous: None }, WorkRequest::ReadDirectory { browser: BrowserSide::Right, tab: TabId::new(1), token: RequestToken::first().next(), location: Location::root(), sort: SortSpec::default(), visibility: Default::default(), previous: None }]);
+    }
+
+    #[test]
+    fn clipboard_menu_availability_tracks_selection_destination_and_the_observed_offer() {
+        use dual_pane_application::{ClipboardAction, ClipboardGeneration, ClipboardOffer};
+
+        let mut session = WorkspaceSession::new(FakeRunner::default(), Location::root(), DRAIN_SLICE, DRAIN_TIME_BUDGET);
+        session.start(path("base"));
+        session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("alpha"), entry("beta")]), changes: None });
+        let copy = Some(ClipboardAction::Copy);
+        let cut = Some(ClipboardAction::Cut);
+        assert!(!session.clipboard_command_available(BrowserSide::Left, copy) && !session.clipboard_command_available(BrowserSide::Left, cut), "Copy and Cut need a selection");
+        assert!(!session.clipboard_command_available(BrowserSide::Left, None), "Paste needs a supported clipboard offer");
+
+        session.submit_ui(BrowserSide::Left, UiEvent::SelectRow { row: 0 });
+        assert!(session.clipboard_command_available(BrowserSide::Left, copy) && session.clipboard_command_available(BrowserSide::Left, cut));
+
+        session.observe_clipboard(ClipboardGeneration::new(1), ClipboardOffer::Files);
+        assert!(session.clipboard_command_available(BrowserSide::Left, None), "a ready destination and a file offer enable Paste");
+        assert!(!session.clipboard_command_available(BrowserSide::Right, None), "a loading destination disables Paste");
+
+        session.observe_clipboard(ClipboardGeneration::new(2), ClipboardOffer::Unsupported);
+        assert!(!session.clipboard_command_available(BrowserSide::Left, None), "replacement by unsupported content disables Paste");
     }
 
     #[test]

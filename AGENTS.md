@@ -57,9 +57,10 @@ make lint-rust                               # Clippy with warnings denied
 make lint-cpp                                # builds the desktop crate, then configured clang-tidy
 make check                                   # full formatter, linter, and test gate
 scripts/check-settings-window.sh            # offscreen Qt Settings Window lifecycle check
+scripts/clipboard-acceptance.sh              # opt-in guided Finder clipboard check; replaces the global clipboard, not in make check
 ```
 
-Debug builds accept `DUAL_PANE_TEST_PROFILE` as an existing absolute disposable directory for isolated native verification; the Settings Window script uses it. Release builds use the normal home directory.
+Debug builds accept `DUAL_PANE_TEST_PROFILE` as an existing absolute disposable directory for isolated native verification; the Settings Window and clipboard acceptance scripts use it. Release builds use the normal home directory.
 
 Before you consider a change done, run `make check` and the equivalent direct commands. Rustfmt uses `max_width = 1000000` and `use_small_heuristics = "Max"`; `.clang-format` uses `ColumnLimit: 0`. Clippy and clang-tidy deliberately have no line-length diagnostic.
 

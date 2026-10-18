@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, FavoritesEvent, FolderItemsColumn, GroupMotion, InputController, SelectionMovement, UiEvent, WorkspacePresenter, favorite_rejection_text};
-use dual_pane_application::{Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, SettingsFailure, SettingsSnapshot, WorkRequest, Workspace};
+use dual_pane_application::{ClipboardAction, ClipboardGeneration, ClipboardOffer, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteRejection, FavoritesRecords, Input, MonitoringStatus, SettingsFailure, SettingsSnapshot, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryMetadata, EntryName, ListingErrorKind, Location, ScrollAnchor, SortDirection, SortField, SortSpec};
 use jiff::tz::TimeZone;
 
@@ -453,4 +453,82 @@ fn a_package_row_can_show_its_contents() {
     assert!(session.left.view().is_package(0) && !session.left.view().is_package(1));
     session.ui(BrowserSide::Left, UiEvent::ShowPackageContents { row: 0 });
     assert!(session.work.iter().rev().any(|work| matches!(work, WorkRequest::ReadDirectory { location, .. } if *location == path(&["apps", "Tool.app"]))));
+}
+
+/// Selects every row of `browser`'s active tab and publishes `action` at
+/// `generation`, the way the clipboard lane reports a successful write.
+fn publish_selection(session: &mut Session, browser: BrowserSide, action: ClipboardAction, generation: u64) {
+    let (tab, revision) = (session.presenter(browser).view().active_tab().unwrap(), session.presenter(browser).view().visible_revision());
+    session.submit(Command::SelectAll { browser, tab });
+    session.submit(Input::ObservedCommand { command: Command::CaptureClipboard { browser, tab, action }, browser, tab, visible_revision: revision });
+    let (request, transfer) = session
+        .work
+        .iter()
+        .rev()
+        .find_map(|work| match work {
+            WorkRequest::PublishClipboard { request, transfer, .. } => Some((*request, *transfer)),
+            _ => None,
+        })
+        .expect("a publication");
+    session.submit(Event::ClipboardPublished { request, transfer, generation: ClipboardGeneration::new(generation), succeeded: true });
+}
+
+#[test]
+fn a_pending_cut_mutes_only_exact_path_and_kind_matches_in_every_visible_view() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Left, path(&["work"]), vec![file("a", None, None), file("b", None, None)]);
+    publish_selection(&mut session, BrowserSide::Left, ClipboardAction::Cut, 5);
+    let left = session.left.view();
+    assert!(left.row_pending_cut(0) && left.row_pending_cut(1));
+    assert_eq!(left.cell_text(0, FolderItemsColumn::Name).as_deref(), Some("a"), "visible text is unchanged");
+    assert_eq!(left.accessible_cell_text(0, FolderItemsColumn::Name).as_deref(), Some("a, pending cut"));
+    assert_eq!(left.accessible_cell_text(0, FolderItemsColumn::Type).as_deref(), left.cell_text(0, FolderItemsColumn::Type).as_deref(), "only the name carries the cue");
+
+    session.show(BrowserSide::Right, path(&["work"]), vec![Entry::new(name("a"), EntryKind::Directory), file("b", None, None), file("c", None, None)]);
+    let right = session.right.view();
+    assert_eq!([right.row_pending_cut(0), right.row_pending_cut(1), right.row_pending_cut(2)], [false, true, false], "a changed kind or an unrelated name shows no cue");
+    assert_eq!(right.status_text(), "2 items ready to move");
+    session.show(BrowserSide::Right, path(&["elsewhere"]), vec![file("a", None, None)]);
+    assert_eq!(session.right.view().status_text(), "/elsewhere", "a view without a match shows no count");
+
+    session.submit(Event::ClipboardChanged { generation: ClipboardGeneration::new(6), offer: ClipboardOffer::Unsupported });
+    assert!(!session.left.view().row_pending_cut(0));
+    assert_eq!(session.left.view().accessible_cell_text(0, FolderItemsColumn::Name).as_deref(), Some("a"));
+}
+
+#[test]
+fn the_pending_cut_count_yields_to_transient_feedback_loading_and_errors() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Left, path(&["work"]), vec![file("a", None, None), file("b", None, None)]);
+    publish_selection(&mut session, BrowserSide::Left, ClipboardAction::Cut, 5);
+    assert_eq!(session.left.view().status_text(), "2 items cut.", "preparation is acknowledged briefly");
+    let token = session.left.view().status_token();
+    session.left.expire_status(token);
+    assert_eq!(session.left.view().status_text(), "2 items ready to move");
+
+    session.ui(BrowserSide::Left, UiEvent::Refresh);
+    assert_eq!(session.left.view().status_text(), "Loading…");
+    session.deliver(BrowserSide::Left, vec![file("a", None, None), file("b", None, None)]);
+    assert_eq!(session.left.view().status_text(), "2 items ready to move", "the cue survives a same-folder reload");
+
+    session.ui(BrowserSide::Left, UiEvent::Refresh);
+    let (tab, token) = match session.work.iter().rev().find(|work| matches!(work, WorkRequest::ReadDirectory { .. })) {
+        Some(WorkRequest::ReadDirectory { tab, token, .. }) => (*tab, *token),
+        _ => panic!("a read"),
+    };
+    session.submit(Event::FolderItemsFailed { browser: BrowserSide::Left, tab, token, kind: ListingErrorKind::PermissionDenied });
+    assert!(!session.left.view().status_text().contains("ready to move"));
+}
+
+#[test]
+fn a_clipboard_presentation_repaints_rows_without_resetting_the_list_and_only_when_it_changed() {
+    let mut session = Session::new();
+    session.show(BrowserSide::Left, path(&["work"]), vec![file("a", None, None), file("b", None, None)]);
+    let before_copy = session.left.view().clone();
+    publish_selection(&mut session, BrowserSide::Left, ClipboardAction::Copy, 4);
+    assert_eq!(session.left.view().update_from(&before_copy), dual_pane_adapters::FolderItemsUpdate::Unchanged, "a Copy leaves the rows alone");
+
+    let before_cut = session.left.view().clone();
+    publish_selection(&mut session, BrowserSide::Left, ClipboardAction::Cut, 5);
+    assert_eq!(session.left.view().update_from(&before_cut), dual_pane_adapters::FolderItemsUpdate::Rows { changed: Some((0, 1)), inserted: None, removed: None });
 }

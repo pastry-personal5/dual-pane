@@ -15,6 +15,7 @@ fn main() {
             .cpp_file("cpp/src/native_shell.cpp")
             .cpp_file("cpp/src/quick_look_preview.mm")
             .cpp_file("cpp/src/keyboard_layout.mm")
+            .cpp_file("cpp/src/clipboard_adapter.mm")
             .cpp_file("cpp/src/location_watcher.cpp")
             .qt_module("Widgets")
             .cc_builder(|builder| {
@@ -25,4 +26,5 @@ fn main() {
     }
     println!("cargo:rustc-link-lib=framework=QuickLookUI");
     println!("cargo:rustc-link-lib=framework=CoreServices");
+    println!("cargo:rustc-link-lib=framework=AppKit");
 }

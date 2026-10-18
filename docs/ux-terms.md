@@ -126,9 +126,9 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
 | Open Item | `OpenItem` | Catalogued; current command; `Command+Down` default |
 | Focus Folder Items Filter | `FocusFolderItemsFilter` | Planned ID; `Command+F` default |
-| Copy Items | `CopyItems` | Planned ID; `Command+C` default with Folder Items List focus |
-| Cut Items | `CutItems` | Planned ID; `Command+X` default with Folder Items List focus |
-| Paste Items | `PasteItems` | Planned ID; `Command+V` default with Folder Items List focus |
+| Copy Items | `CopyItems` | P4-M5 ID; `Command+C` default with Folder Items List focus |
+| Cut Items | `CutItems` | P4-M5 ID; `Command+X` default with Folder Items List focus |
+| Paste Items | `PasteItems` | P4-M5 ID; `Command+V` default with Folder Items List focus |
 | Edit Path | `EditPath` | Planned ID; `Command+L` default |
 
 ## Phase 3 rendered components

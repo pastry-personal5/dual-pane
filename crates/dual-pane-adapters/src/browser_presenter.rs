@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{BrowserChrome, FilterStatus, MonitoringStatus, Output, PreviewView, RowChange};
+use dual_pane_application::{BrowserChrome, ClipboardAction, ClipboardRejection, FilterStatus, MonitoringStatus, Output, PreviewView, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
@@ -65,11 +65,14 @@ pub struct BrowserViewModel {
     tabs: Vec<TabViewModel>,
     tabs_revision: u64,
     toolbar: Toolbar,
+    pending_cut: Arc<[dual_pane_domain::OperationRoot]>,
+    /// The captured Cut roots by byte-exact path, for per-row matching.
+    pending_cut_kinds: HashMap<Location, EntryKind>,
 }
 
 impl Default for BrowserViewModel {
     fn default() -> Self {
-        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), filter_text: String::new(), filter_status: FilterStatus::Ready, total_count: 0, visible_revision: 0, selection: Selection::default(), cursor_row: None, selection_revision: 0, preview: PreviewView::Collapsed, preview_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default() }
+        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), filter_text: String::new(), filter_status: FilterStatus::Ready, total_count: 0, visible_revision: 0, selection: Selection::default(), cursor_row: None, selection_revision: 0, preview: PreviewView::Collapsed, preview_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default(), pending_cut: Arc::from([]), pending_cut_kinds: HashMap::new() }
     }
 }
 
@@ -365,6 +368,22 @@ impl BrowserViewModel {
         })
     }
 
+    pub fn accessible_cell_text(&self, row: usize, column: FolderItemsColumn) -> Option<String> {
+        let mut text = self.cell_text(row, column)?;
+        if column == FolderItemsColumn::Name && self.row_pending_cut(row) {
+            text.push_str(", pending cut");
+        }
+        Some(text)
+    }
+
+    pub fn row_pending_cut(&self, row: usize) -> bool {
+        if self.pending_cut_kinds.is_empty() {
+            return false;
+        }
+        let (Some(location), Some(entry)) = (&self.location, self.entry(row)) else { return false };
+        self.pending_cut_kinds.get(&location.join(entry.name())) == Some(&entry.kind())
+    }
+
     /// A visible row's position on the Relative Date color strip, or `None`
     /// when its modification time is unavailable.
     pub fn relative_age_position(&self, row: usize) -> Option<f64> {
@@ -459,9 +478,19 @@ impl BrowserViewModel {
             match self.monitoring {
                 Some(MonitoringStatus::Periodic) => "Checking for changes periodically".to_owned(),
                 Some(MonitoringStatus::Unavailable) => "Automatic refresh unavailable — Command+R to Refresh".to_owned(),
-                Some(MonitoringStatus::Native) | None => self.location_text.clone(),
+                Some(MonitoringStatus::Native) | None => match self.pending_cut_count() {
+                    0 => self.location_text.clone(),
+                    1 => "1 item ready to move".to_owned(),
+                    count => format!("{count} items ready to move"),
+                },
             }
         };
+    }
+
+    /// The number of captured Cut roots, shown only where at least one of
+    /// them is a row.
+    fn pending_cut_count(&self) -> usize {
+        if (0..self.entries.len()).any(|row| self.row_pending_cut(row)) { self.pending_cut.len() } else { 0 }
     }
 
     fn refresh_summary(&mut self) {
@@ -568,9 +597,23 @@ impl BrowserPresenter {
     }
 
     pub fn apply(&mut self, output: &Output) {
+        if let Output::ClipboardPresentationChanged { pending_cut, .. } = output {
+            if *self.view.pending_cut != **pending_cut {
+                let view = &mut self.view;
+                view.pending_cut = Arc::clone(pending_cut);
+                view.pending_cut_kinds = pending_cut.iter().map(|root| (root.source.clone(), root.kind)).collect();
+                // Only the cue changes, so every row repaints in place.
+                let rows = view.entries.len();
+                view.folder_items_revision = view.folder_items_revision.wrapping_add(1);
+                view.folder_items_delta = Some(if rows == 0 { Vec::new() } else { vec![RowChange { row: 0, removed: rows, inserted: rows }] });
+                view.refresh_base_status();
+                view.refresh_status();
+            }
+            return;
+        }
         let output_browser = match output {
-            Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
-            Output::ClipboardRejected { .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
+            Output::ClipboardRejected { browser: Some(browser), .. } | Output::ClipboardPrepared { browser, .. } | Output::ClipboardPasteStarted { browser, .. } | Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
+            Output::ClipboardPresentationChanged { .. } | Output::ClipboardRejected { browser: None, .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
             return;
@@ -596,6 +639,19 @@ impl BrowserPresenter {
         }
         let view = &mut self.view;
         match output {
+            Output::ClipboardRejected { reason, .. } => {
+                view.status_message = Some(clipboard_rejection_text(*reason).to_owned());
+                view.status_token = view.status_token.wrapping_add(1);
+            }
+            Output::ClipboardPrepared { action, count, .. } => {
+                let verb = if *action == ClipboardAction::Copy { "copied" } else { "cut" };
+                view.status_message = Some(format!("{count} {} {verb}.", if *count == 1 { "item" } else { "items" }));
+                view.status_token = view.status_token.wrapping_add(1);
+            }
+            Output::ClipboardPasteStarted { .. } => {
+                view.status_message = Some("Paste prepared.".to_owned());
+                view.status_token = view.status_token.wrapping_add(1);
+            }
             Output::PreviewChanged { view: preview, .. } => {
                 view.preview = preview.clone();
                 view.preview_revision = view.preview_revision.wrapping_add(1);
@@ -706,6 +762,27 @@ impl BrowserPresenter {
 /// Overlay over its last rows.
 fn is_missing(kind: ListingErrorKind) -> bool {
     matches!(kind, ListingErrorKind::ItemMissing | ListingErrorKind::NotADirectory)
+}
+
+fn clipboard_rejection_text(reason: ClipboardRejection) -> &'static str {
+    match reason {
+        ClipboardRejection::StaleTab | ClipboardRejection::StaleObservation => "The folder view changed. Try again.",
+        ClipboardRejection::NoSelection => "Select one or more items first.",
+        ClipboardRejection::SourceUnavailable => "The selected items are not available.",
+        ClipboardRejection::DestinationUnavailable => "Paste needs a ready destination folder.",
+        ClipboardRejection::PublicationFailed => "The clipboard could not be updated.",
+        ClipboardRejection::ClipboardBusy => "The clipboard is busy. Try again.",
+        ClipboardRejection::ClipboardReplaced => "The clipboard changed before Paste was ready.",
+        ClipboardRejection::UnknownPrivateTransfer => "That Dual Pane transfer is no longer available.",
+        ClipboardRejection::TransferReserved => "That Cut is already being pasted.",
+        ClipboardRejection::UnsupportedContent => "The clipboard does not contain files that can be pasted.",
+        ClipboardRejection::MalformedExternalContent => "The clipboard contains malformed file references.",
+        ClipboardRejection::DuplicateSource => "The clipboard contains the same item more than once.",
+        ClipboardRejection::SourceChanged => "A clipboard source changed before Paste could start.",
+        ClipboardRejection::SameSourceAndDestination => "Items cannot be pasted into their current folder.",
+        ClipboardRejection::DestinationWithinSource => "A folder cannot be pasted inside itself.",
+        ClipboardRejection::JournalUnavailable => "Copy is unavailable until the safety journal is ready.",
+    }
 }
 
 /// Safe wording for failures before a browser session can be created.

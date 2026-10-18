@@ -6,7 +6,7 @@ use std::pin::Pin;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QList, QModelIndex, QString, QVariant};
 use dual_pane_adapters::{BrowserViewModel, EditorOutcome, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent};
-use dual_pane_application::PreviewView;
+use dual_pane_application::{ClipboardAction, PreviewView};
 use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection, SortField, SortSpec, TabId};
 
 use crate::workspace_bridge::{revision, with_session};
@@ -132,6 +132,13 @@ pub mod ffi {
         fn edit_filter_text(self: Pin<&mut FolderItemsListModel>, observed_tab: u64, text: &QString);
         #[cxx_name = "startFileCommandObserved"]
         fn start_file_command_observed(self: Pin<&mut FolderItemsListModel>, command: i32, tab: u64, visible_revision: u64);
+        /// Clipboard command: 0 Copy, 1 Cut, 2 Paste.
+        #[cxx_name = "clipboardCommandAvailable"]
+        fn clipboard_command_available(self: &FolderItemsListModel, command: i32) -> bool;
+        #[cxx_name = "startClipboardCommandObserved"]
+        fn start_clipboard_command_observed(self: Pin<&mut FolderItemsListModel>, command: i32, tab: u64, visible_revision: u64);
+        #[cxx_name = "observeClipboard"]
+        fn observe_clipboard(self: Pin<&mut FolderItemsListModel>);
         #[cxx_name = "showPackageContentsObserved"]
         fn show_package_contents_observed(self: Pin<&mut FolderItemsListModel>, row: i32, tab: u64, visible_revision: u64);
 
@@ -273,6 +280,8 @@ const RELATIVE_AGE_ROLE: i32 = 0x0101;
 const NATIVE_PATH_ROLE: i32 = 0x0102;
 /// `Qt::UserRole + 3`: whether that native path names a directory.
 const NATIVE_DIRECTORY_ROLE: i32 = 0x0103;
+/// `Qt::UserRole + 4`: whether the row is a captured pending Cut root.
+const PENDING_CUT_ROLE: i32 = 0x0104;
 /// `Qt::AlignRight | Qt::AlignVCenter`.
 const ALIGN_RIGHT: i32 = 0x0002 | 0x0080;
 
@@ -349,12 +358,14 @@ impl ffi::FolderItemsListModel {
         let (Ok(row), Some(column)) = (usize::try_from(index.row()), usize::try_from(index.column()).ok().and_then(FolderItemsColumn::from_index)) else { return QVariant::default() };
         let shown = &self.rust().shown;
         match role {
-            DISPLAY_ROLE | ACCESSIBLE_TEXT_ROLE if column != FolderItemsColumn::Icon => shown.cell_text(row, column).map_or_else(QVariant::default, |text| QVariant::from(&QString::from(text.as_str()))),
+            DISPLAY_ROLE if column != FolderItemsColumn::Icon => shown.cell_text(row, column).map_or_else(QVariant::default, |text| QVariant::from(&QString::from(text.as_str()))),
+            ACCESSIBLE_TEXT_ROLE if column != FolderItemsColumn::Icon => shown.accessible_cell_text(row, column).map_or_else(QVariant::default, |text| QVariant::from(&QString::from(text.as_str()))),
             TOOL_TIP_ROLE if column == FolderItemsColumn::Name => shown.cell_text(row, column).map_or_else(QVariant::default, |text| QVariant::from(&QString::from(text.as_str()))),
             PATH_ROLE => shown.row_path(row).map_or_else(QVariant::default, |path| QVariant::from(&QString::from(path.as_str()))),
             RELATIVE_AGE_ROLE if column == FolderItemsColumn::RelativeDate => shown.relative_age_position(row).map_or_else(QVariant::default, |position| QVariant::from(&((position * 1_000_000.0).round() as i32))),
             NATIVE_PATH_ROLE => shown.row_native_path(row).map_or_else(QVariant::default, |(path, _)| QVariant::from(&QByteArray::from(path.as_slice()))),
             NATIVE_DIRECTORY_ROLE => shown.row_native_path(row).map_or_else(QVariant::default, |(_, directory)| QVariant::from(&directory)),
+            PENDING_CUT_ROLE => QVariant::from(&shown.row_pending_cut(row)),
             TEXT_ALIGNMENT_ROLE if column == FolderItemsColumn::Size => QVariant::from(&ALIGN_RIGHT),
             _ => QVariant::default(),
         }
@@ -642,6 +653,34 @@ impl ffi::FolderItemsListModel {
         if let Some(command) = operation_command(command) {
             self.submit_ui(UiEvent::FileCommand(command));
         }
+    }
+    fn clipboard_command_available(&self, command: i32) -> bool {
+        let browser = self.rust().browser;
+        let action = match command {
+            0 => Some(ClipboardAction::Copy),
+            1 => Some(ClipboardAction::Cut),
+            2 => None,
+            _ => return false,
+        };
+        with_session(|session| session.clipboard_command_available(browser, action)).unwrap_or(false)
+    }
+    fn start_clipboard_command_observed(mut self: Pin<&mut Self>, command: i32, tab: u64, visible_revision: u64) {
+        let action = match command {
+            0 => Some(ClipboardAction::Copy),
+            1 => Some(ClipboardAction::Cut),
+            2 => None,
+            _ => return,
+        };
+        let browser = self.rust().browser;
+        let (generation, offer) = crate::clipboard_native::generation_and_offer();
+        with_session(|session| session.observe_clipboard(generation, offer));
+        with_session(|session| session.submit_clipboard_observed(browser, action, TabId::new(tab), visible_revision));
+        self.as_mut().session_changed();
+    }
+    fn observe_clipboard(mut self: Pin<&mut Self>) {
+        let (generation, offer) = crate::clipboard_native::generation_and_offer();
+        with_session(|session| session.observe_clipboard(generation, offer));
+        self.as_mut().session_changed();
     }
     fn expire_status(mut self: Pin<&mut Self>, token: i32) {
         let browser = self.rust().browser;

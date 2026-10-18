@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
+use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, OperationRoot, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,6 +287,7 @@ pub enum Event {
     },
     ClipboardChanged {
         generation: ClipboardGeneration,
+        offer: ClipboardOffer,
     },
     ClipboardRead {
         request: ClipboardRequestId,

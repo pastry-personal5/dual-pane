@@ -36,6 +36,21 @@ pub mod ffi {
         include!("dual_pane_desktop/desktop_window.hpp");
         fn run_desktop(startup: Box<BrowserStartup>) -> i32;
         fn schedule_gui_drain();
+        include!("dual_pane_desktop/clipboard_adapter.hpp");
+        fn clipboard_generation() -> i64;
+        fn clipboard_offer() -> i32;
+        fn clipboard_publish(request: &QByteArray) -> QByteArray;
+        fn clipboard_read() -> QByteArray;
+        #[allow(dead_code)] // Called by the pasteboard adapter tests in `clipboard_native`.
+        fn clipboard_isolation_begin();
+        #[allow(dead_code)] // Called by the pasteboard adapter tests in `clipboard_native`.
+        fn clipboard_isolation_end();
+        #[allow(dead_code)] // Called by the pasteboard adapter tests in `clipboard_native`.
+        fn clipboard_seam_write(kind: i32, payload: &QByteArray) -> bool;
+        #[allow(dead_code)] // Called by the pasteboard adapter tests in `clipboard_native`.
+        fn clipboard_seam_describe() -> QByteArray;
+        #[allow(dead_code)] // Called by the pasteboard adapter tests in `clipboard_native`.
+        fn clipboard_seam_private_payload() -> QByteArray;
         include!("dual_pane_desktop/preview_reader.hpp");
         fn decode_preview(fd: i32, target_width: i32, target_height: i32) -> QByteArray;
         include!("dual_pane_desktop/quick_look_preview.hpp");
@@ -142,6 +157,8 @@ pub mod ffi {
         /// foreground-active; native subscriptions remain registered.
         #[cxx_name = "setApplicationActive"]
         fn set_application_active(self: Pin<&mut WorkspaceBridge>, active: bool);
+        #[cxx_name = "observeClipboard"]
+        fn observe_clipboard(self: Pin<&mut WorkspaceBridge>);
         /// Reports the workspace's current logical-point layout after a
         /// settled native layout change.
         #[cxx_name = "updateWindowLayout"]
@@ -314,6 +331,11 @@ impl ffi::WorkspaceBridge {
     fn set_root_volume_name(mut self: Pin<&mut Self>, name: &QString) {
         let name = name.to_string();
         with_session(|session| session.set_root_label(&name));
+        self.as_mut().session_changed();
+    }
+    fn observe_clipboard(mut self: Pin<&mut Self>) {
+        let (generation, offer) = crate::clipboard_native::generation_and_offer();
+        with_session(|session| session.observe_clipboard(generation, offer));
         self.as_mut().session_changed();
     }
 

@@ -107,7 +107,7 @@ fn failed_publication_preserves_the_previous_clipboard_and_replacement_invalidat
 
     workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 1, name: name("second") }.into());
     let (failed_request, failed_transfer, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Copy);
-    let failed = workspace.handle(Event::ClipboardPublished { request: failed_request, transfer: failed_transfer, generation: ClipboardGeneration::new(21), succeeded: false }.into());
+    let failed = workspace.handle(Event::ClipboardPublished { request: failed_request, transfer: failed_transfer, generation: ClipboardGeneration::new(20), succeeded: false }.into());
     assert!(matches!(failed.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::PublicationFailed, .. }]));
 
     let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
@@ -116,10 +116,141 @@ fn failed_publication_preserves_the_previous_clipboard_and_replacement_invalidat
     let previous = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(20), snapshot: ClipboardSnapshot::Private { transfer: first_transfer } }.into());
     assert!(matches!(previous.work.as_slice(), [WorkRequest::Operation(OperationEffect::Scan { .. })]));
 
-    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(22) }.into());
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(22), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
     let replaced = request_paste(&mut workspace, BrowserSide::Right, right);
     let rejected = workspace.handle(Event::ClipboardRead { request: replaced, generation: ClipboardGeneration::new(22), snapshot: ClipboardSnapshot::Private { transfer: first_transfer } }.into());
     assert!(matches!(rejected.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::UnknownPrivateTransfer, .. }]));
+}
+
+#[test]
+fn unknown_private_token_falls_back_to_colocated_file_urls_but_private_only_rejects() {
+    let mut workspace = Workspace::new();
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let source = path(&["finder", "item"]);
+    let request = request_paste(&mut workspace, BrowserSide::Right, right);
+    let fallback = workspace.handle(Event::ClipboardRead { request, generation: ClipboardGeneration::new(31), snapshot: ClipboardSnapshot::PrivateAndExternal { transfer: dual_pane_application::TransferId::new(999), sources: vec![source.clone()].into() } }.into());
+    assert!(matches!(fallback.work.as_slice(), [WorkRequest::PreflightClipboard { sources, .. }] if sources.as_ref() == [source]));
+
+    let request = request_paste(&mut workspace, BrowserSide::Right, right);
+    let rejected = workspace.handle(Event::ClipboardRead { request, generation: ClipboardGeneration::new(31), snapshot: ClipboardSnapshot::Private { transfer: dual_pane_application::TransferId::new(999) } }.into());
+    assert!(matches!(rejected.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::UnknownPrivateTransfer, .. }]));
+}
+
+#[test]
+fn pending_cut_projection_is_published_and_cleared_by_replacement() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, transfer, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    let published = workspace.handle(Event::ClipboardPublished { request, transfer, generation: ClipboardGeneration::new(40), succeeded: true }.into());
+    assert!(published.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.len() == 1 && pending_cut[0].source == path(&["source", "item"]))));
+    let replaced = workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(41), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    assert!(matches!(replaced.outputs.as_slice(), [Output::ClipboardPresentationChanged { pending_cut, .. }] if pending_cut.is_empty()));
+}
+
+#[test]
+fn observing_our_own_write_before_the_lane_reports_it_keeps_the_publication() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(40), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, cut, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    // The GUI thread can see the lane's write before the lane reports it.
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(41), offer: dual_pane_application::ClipboardOffer::Private }.into());
+    publish(&mut workspace, request, cut, 41);
+
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let started = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(41), snapshot: ClipboardSnapshot::Private { transfer: cut } }.into());
+    assert!(matches!(started.work.as_slice(), [WorkRequest::Operation(OperationEffect::Scan { .. })]));
+}
+
+#[test]
+fn a_publication_older_than_an_observed_replacement_never_becomes_current() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(40), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, cut, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(42), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    let late = workspace.handle(Event::ClipboardPublished { request, transfer: cut, generation: ClipboardGeneration::new(41), succeeded: true }.into());
+    assert!(!late.outputs.iter().any(|output| matches!(output, Output::ClipboardPrepared { .. })));
+
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let rejected = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(42), snapshot: ClipboardSnapshot::Private { transfer: cut } }.into());
+    assert!(matches!(rejected.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::UnknownPrivateTransfer, .. }]));
+}
+
+#[test]
+fn a_late_failure_older_than_the_observed_generation_changes_nothing() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(40), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, copy, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Copy);
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(42), offer: dual_pane_application::ClipboardOffer::Files }.into());
+    let late = workspace.handle(Event::ClipboardPublished { request, transfer: copy, generation: ClipboardGeneration::new(41), succeeded: false }.into());
+    assert!(late.outputs.iter().any(|output| matches!(output, Output::ClipboardRejected { reason: ClipboardRejection::PublicationFailed, .. })), "the failure is still reported");
+
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let finder_source = path(&["finder", "item"]);
+    let started = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(42), snapshot: ClipboardSnapshot::ExternalFiles { sources: vec![finder_source].into() } }.into());
+    assert!(matches!(started.work.as_slice(), [WorkRequest::PreflightClipboard { .. }]), "the observed generation did not move backwards");
+}
+
+#[test]
+fn a_started_cut_keeps_its_cue_until_the_operation_reaches_a_terminal_result() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, cut, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    publish(&mut workspace, request, cut, 8);
+
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let started = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(8), snapshot: ClipboardSnapshot::Private { transfer: cut } }.into());
+    assert!(!started.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "starting the Paste does not clear the cue");
+    let WorkRequest::Operation(OperationEffect::Scan { id, generation, .. }) = started.work.into_iter().next().unwrap() else { panic!("move scan") };
+
+    let finished = workspace.handle(Event::OperationExecutorUnavailable { id, generation }.into());
+    assert!(finished.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "terminal consumption clears the cue");
+}
+
+#[test]
+fn a_running_cut_keeps_its_cue_when_the_clipboard_is_replaced() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), &[("item", EntryKind::File)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("item") }.into());
+    let (request, cut, _) = capture(&mut workspace, BrowserSide::Left, left, revision, ClipboardAction::Cut);
+    publish(&mut workspace, request, cut, 8);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let started = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(8), snapshot: ClipboardSnapshot::Private { transfer: cut } }.into());
+    let WorkRequest::Operation(OperationEffect::Scan { id, generation, .. }) = started.work.into_iter().next().unwrap() else { panic!("move scan") };
+
+    let replaced = workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(9), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
+    assert!(!replaced.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "replacement does not clear a running Cut's cue");
+
+    let finished = workspace.handle(Event::OperationExecutorUnavailable { id, generation }.into());
+    assert!(finished.outputs.iter().any(|output| matches!(output, Output::ClipboardPresentationChanged { pending_cut, .. } if pending_cut.is_empty())), "terminal consumption still clears the cue");
+}
+
+#[test]
+fn an_unavailable_clipboard_worker_reports_busy_not_unsupported() {
+    let mut workspace = Workspace::new();
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
+    workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
+    let paste = request_paste(&mut workspace, BrowserSide::Right, right);
+    let rejected = workspace.handle(Event::ClipboardRead { request: paste, generation: ClipboardGeneration::new(1), snapshot: ClipboardSnapshot::Unavailable }.into());
+    assert!(matches!(rejected.outputs.as_slice(), [Output::ClipboardRejected { reason: ClipboardRejection::ClipboardBusy, .. }]));
 }
 
 #[test]
@@ -147,7 +278,7 @@ fn replacement_cancels_a_pending_read_and_duplicate_external_roots_never_preflig
     let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), &[]);
     workspace.handle(Command::ActivateBrowser { browser: BrowserSide::Right }.into());
     let stale = request_paste(&mut workspace, BrowserSide::Right, right);
-    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(5) }.into());
+    workspace.handle(Event::ClipboardChanged { generation: ClipboardGeneration::new(5), offer: dual_pane_application::ClipboardOffer::Unsupported }.into());
     assert_eq!(workspace.handle(Event::ClipboardRead { request: stale, generation: ClipboardGeneration::new(4), snapshot: ClipboardSnapshot::Unsupported }.into()), Default::default());
     let duplicate = request_paste(&mut workspace, BrowserSide::Right, right);
     let source = path(&["source", "same"]);
