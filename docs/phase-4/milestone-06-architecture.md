@@ -2,7 +2,7 @@
 
 Status: Planned
 
-Path entry becomes a submission addressed to one tab: the application parses it without I/O, a per-Browser read lane resolves it to the folder's stored spelling, and the ordinary navigation workflow commits it. The [overview checklist](milestone-06-overview.md#completion-checklist) defines acceptance. This plan follows the recommendations in the [proposed owner decisions](milestone-06-overview.md#proposed-owner-decisions) and remains a proposal until the owner answers them.
+Path entry becomes a submission addressed to one tab: the application parses it without I/O, a per-Browser read lane resolves it to the folder's stored spelling, and the ordinary navigation workflow commits it. The [overview checklist](milestone-06-overview.md#completion-checklist) defines acceptance. This plan implements the [owner decisions](milestone-06-overview.md#owner-decisions), cited below as decisions 1 to 14.
 
 ## Current state
 
@@ -40,11 +40,11 @@ M6 adds no dependency or build tool.
 - `~` alone, or text that starts with `~/`, is home-relative.
 - Any other text, including `~name`, is relative to the captured folder.
 - A relative path with no confirmed folder is refused.
-- Empty components from repeated or trailing slashes are dropped, `.` is removed, and `..` removes the previous component under proposal 7. `..` at root stays at root.
+- Empty components from repeated or trailing slashes are dropped, `.` is removed, and `..` removes the previous component (decision 7). The removal is lexical and never checks that the component exists, so `/a/missing/..` is `/a`. `..` at root stays at root.
 - Every remaining component must form a valid `EntryName`.
 - Line breaks and other control characters are refused as malformed.
 - Text containing U+FFFD is refused, because it shows undecodable bytes and does not name them.
-- Spaces are literal and are never trimmed.
+- Spaces are literal and are never trimmed, so whitespace-only text is a relative name. Only zero-length text acts as Escape, and the desktop handles that before calling the parser (decision 9).
 
 Parsing joins components onto the captured base by their exact bytes, so a relative path typed in a non-UTF-8 folder keeps that folder's bytes.
 
@@ -66,7 +66,10 @@ The resolver therefore rebuilds the `Location` from stored names. Starting at ro
 
 1. Look the component up relative to the already-resolved parent without following a final link.
 2. Read the component's stored name, for example with `getattrlist` and `ATTR_CMN_NAME` using `FSOPT_NOFOLLOW`, and substitute those bytes.
-3. If the component is a link, keep the link's own name in the `Location` and follow the link only to continue the walk.
+3. If the component is a link, keep the link's own name in the `Location` and follow the link only to continue the walk. The walk follows at most the kernel's link limit. A link loop (`ELOOP`) reports the same reason as a dangling link, missing.
+4. Check the job's cancellation token between components, so a walk that stalls on a slow volume stops promptly.
+
+The `getattrlist` name call is an assumption until step 3 of the sequencing proves it on the temporary volume: it must return the stored spelling for a case variant and for a decomposed or precomposed variant. If it does not, the resolver reads the parent's entries instead, and this section changes before the resolver is built.
 
 The resolver then classifies the target as folder, package, regular file, or a link to one of these, or as missing, not a folder, permission denied, or privacy restricted. It reuses the listing reader's error mapping. Libc calls stay in `native_calls.rs`. The resolver never uses `fs::canonicalize`, because that would replace link names with physical targets and break the logical model behind Up and Back.
 
@@ -80,8 +83,6 @@ Making the navigation read itself the check was also rejected. The stored-spelli
 
 The two-step design costs one metadata walk before the read. If the folder disappears between resolution and the read, the read fails as an ordinary failed navigation.
 
-If the owner chooses ordinary failed navigation under proposal 1, the same resolver runs first. Its failures then become tab listing errors through the existing `FolderItemsFailed` presentation instead of editor-local rejections.
-
 ## Application state and handoff
 
 Exact names may change during implementation, but these contracts hold:
@@ -93,23 +94,23 @@ Exact names may change during implementation, but these contracts hold:
    - Closing the tab.
    - `Command::CancelPathEntry` (Escape).
 
-   Watcher, operation, and visibility rereads of the current folder also call `start_read`, but they do not cancel the check. Otherwise a busy folder could keep rejecting submissions. A tab switch leaves the check running under proposal 6. Its eventual failure is dropped because the draft was discarded.
+   Watcher, operation, and visibility rereads of the current folder also call `start_read`, but they do not cancel the check. Otherwise a busy folder could keep rejecting submissions. A tab or Browser switch leaves the check running (decision 6). Its eventual failure is dropped because the draft was discarded.
 3. **Result.** `Event::PathResolved { browser, tab, token, result }` is accepted only while its token is still the tab's pending check.
-   - A folder, a link to a folder, or a package under proposal 8 calls `start_read` with the resolved `Location`. History, filter clearing, sort memory, watching, and session saving then follow the ordinary path.
-   - A file selected under proposal 8 reads the file's folder and reuses the launch target's pending-selection mechanism.
+   - A folder, a link to a folder, or a package (decision 8) calls `start_read` with the resolved `Location`. History, filter clearing, sort memory, watching, and session saving then follow the ordinary path.
+   - A file, or a link to one (decision 8), reads the file's folder. The workspace sets `pending_selection` for the submitting tab before it calls `start_read`, as the launch target does. `start_read` already clears a pending selection whose folder differs, and the selection applies only if the read succeeds. If the file is gone by then, or Item Visibility hides it, the folder opens with nothing selected (decision 14). When the target is in the tab's current folder and the Folder Items Filter hides it, the workspace clears that tab's filter first (decision 13), because a same-folder reread would otherwise keep it.
    - A rejection emits `Output::PathEntryRejected { browser, tab, reason }`. The tab's `folder_items`, `error`, `requested`, history, and selection are left untouched, so command availability does not change.
-4. **Acceptance.** `Output::PathEntryAccepted` ends editing. From then on the ordinary loading, success, and failure outputs apply.
+4. **Acceptance.** `Output::PathEntryAccepted { browser, tab }` ends editing. The desktop ignores `PathEntryAccepted` and `PathEntryRejected` unless that tab's editor is the one showing, so a background result never ends or marks another tab's editor. From then on the ordinary loading, success, and failure outputs apply.
 
 `PathEntryPending` and the reason enum reuse `ListingErrorKind` categories where they match, and add `Malformed`, `NoConfirmedFolder`, and `UndecodableText` as needed. The presenter keeps a per-Browser `PathEditorView` with the pending flag, reason text, and a revision for the shown tab. Reasons reuse the wording of the existing listing-error messages, with the entered path as the subject.
 
 ## Desktop composition
 
 - **Modes.** The Path Edit Control has a display mode and an edit mode. Focus always enters edit mode, so a control that is not editing never holds focus. That way the text-field shortcut rule never suppresses workspace shortcuts for a control in display mode.
-- **Entering edit mode.** `Command+L` through the `EditPath` handler, an approved click, or Full Keyboard Access traversal enters edit mode for the active Browser and selects all text. The existing focus-enter rule activates an inactive Browser first.
-- **Keys.** Return submits `Typed` or `Unchanged`, captured with the observed tab. While editing, the rename shortcut is not active because Folder Items List shortcuts are widget-scoped. Escape cancels a pending check or discards the draft or failed text, then focuses the Folder Items List. Focus loss and tab switches discard as approved.
+- **Entering edit mode.** `Command+L` through the `EditPath` handler, a click, or Full Keyboard Access traversal enters edit mode for the active Browser and selects all text. The existing focus-enter rule activates an inactive Browser first.
+- **Keys.** Return submits `Typed` or `Unchanged`, captured with the observed tab. While editing, the rename shortcut is not active because Folder Items List shortcuts are widget-scoped. Escape cancels a pending check or discards the draft or failed text, then focuses the Folder Items List. Focus loss and tab switches discard failed text (decisions 5 and 6). After a successful submission, focus moves to the Folder Items List (decision 4).
 - **Text sync guard.** Only display mode applies `pathText`, with signals blocked. Edit mode, pending checks, and failed text keep their own text until they end, so Back, a watcher refresh, a launch target, or Reset Settings cannot overwrite them.
-- **Pending and error states.** While pending, the control is read-only with a busy cue. A failed submission keeps its text and sets a `pathError` dynamic property for the stylesheet. The reason is exposed through the accessible description, the Browser Status Bar, and an accessibility announcement. The accessible name stays “Path Edit Control”.
-- **Shortcut gating.** No new `ShortcutBinder` rule is needed. The P4-M5 text-field rule covers edit mode, and `scripts/check-text-editor-focus.sh` gains the control as evidence. `Command+L` does nothing while any text field has focus, which matches the existing rule.
+- **Pending and error states.** While pending, the control is read-only with a busy cue. A failed submission keeps its text, which stays until it is edited, Escape is pressed, or focus leaves (decision 5), and sets a `pathError` dynamic property for the stylesheet. The reason is exposed through the accessible description, the Browser Status Bar, and an accessibility announcement. The accessible name stays “Path Edit Control”.
+- **Shortcut gating.** No new `ShortcutBinder` rule is needed (decision 12). The P4-M5 text-field rule covers edit mode, and `scripts/check-text-editor-focus.sh` gains the control as evidence. `Command+L` does nothing while any text field has focus, including the control itself.
 
 ## Compatibility with P4-M8
 
@@ -121,7 +122,7 @@ Implement the milestone in this order:
 
 1. Parser and its Qt-free tests.
 2. Submission state machine and stale, cancel, and tab-switch tests.
-3. Native resolver and its temporary-directory tests.
+3. Native resolver and its temporary-directory tests. The first test proves the stored-name call described in "Path identity".
 4. Runtime lane wiring and `Busy` and cancel tests.
 5. Presenter and model state.
 6. Desktop modes and guards.
@@ -134,7 +135,7 @@ Required scenarios:
 
 - A delayed resolve result after a newer Back, Favorite, or submission changes nothing.
 - A result after its tab closed is ignored.
-- A result for an inactive tab follows proposal 6.
+- A result for an inactive tab navigates that tab in the background, and a failure is dropped. Neither touches the shown tab's editor (decision 6).
 - A relative path submitted while another read loads resolves against the confirmed folder, and the later submission wins.
 - A watcher refresh during a check does not cancel it.
 - Typed normalization variants produce the row-reached `Location`, the same sort memory and history entry, and operation refresh. Case variants do too, where the temporary volume ignores case. On a case-sensitive volume, the test checks that a case variant reports missing.
@@ -144,3 +145,10 @@ Required scenarios:
 - A folder with permissions `000` reports permission denied without changing the tab.
 - An unedited submission in a synthetic non-UTF-8 folder rereads the exact bytes, and edited U+FFFD text is refused.
 - A `Busy` admission leaves the tab unchanged.
+- A tab in an error state or showing the Missing Folder Overlay accepts an absolute path, and a relative path is refused with `NoConfirmedFolder`.
+- A link loop reports missing, and a cancelled walk stops between components.
+- Escape during a pending check restores the confirmed path and cancels the job.
+- `/a/missing/..` parses to `/a`.
+- Whitespace-only text is parsed as a relative name, and empty text never reaches the parser.
+- A file path opens its folder with the file selected, and a package path opens its contents.
+- A file hidden by the filter clears the filter and is selected. A file hidden by Item Visibility opens its folder with nothing selected, and a hidden folder opens.
