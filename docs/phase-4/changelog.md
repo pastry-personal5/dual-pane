@@ -6,6 +6,9 @@ Chronological record of planning, owner decisions, and design changes for Phase 
 
 ## Entries
 
+- 2026-10-18 — Owner direction — General Settings adds a Quitting card with “Ask before quitting from the close button”, selected by default and stored as the inverse of `skip_quit_confirmation`. Choosing “Don’t ask again” in the close button's confirmation clears the switch; selecting it brings the confirmation back without Reset Settings. `scripts/check-settings-window.sh` covers the control.
+- 2026-10-18 — Owner direction — The Sidebar's Application Title Row gains an Application Close Button. It is invisible until hovered, then shows a 1x/2x/3x bitmap X, white on red (`#C9434A`, `#A8363D` pressed), right-aligned with the Add Favorite Item Buttons and vertically centered with the heading. A click shows a quit confirmation with a “Don’t ask again” checkbox. The choice persists as the `skip_quit_confirmation` settings marker, which needs no schema change and defaults to asking. While an operation is unfinished, the running-operations quit prompt asks instead, so nobody is asked twice. `Command+Q` and the button share one quit action, and dragging the row outside the button still moves the window. `scripts/check-application-title-row.sh` covers alignment, the hidden and hover states, click routing, the drag routing, and the dialog's controls.
+- 2026-10-18 — Owner-requested Sidebar fix — The **Dual Pane** title text now starts at the same left edge as Favorite Group names and centers vertically between the Sidebar top and the first Favorite Group box. The title row had carried QLabel's automatic half-character indent and an offset above the first group's top margin.
 - 2026-10-18 — P4-M6 plan review — Expanded the P4-M6 plans and decided no owner-visible behavior. The overview now lists twelve proposed owner decisions for interview, each with a recommendation:
   - failed-submission ownership
   - feedback placement

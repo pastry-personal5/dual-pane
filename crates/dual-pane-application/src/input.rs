@@ -235,6 +235,10 @@ pub enum Command {
     SetHideNoticesAtStartup {
         hide: bool,
     },
+    /// Records whether the Application Close Button asks before quitting.
+    SetSkipQuitConfirmation {
+        skip: bool,
+    },
     SetVisibilityPolicy {
         visibility: VisibilityPolicy,
     },

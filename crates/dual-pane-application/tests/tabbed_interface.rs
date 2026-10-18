@@ -332,6 +332,18 @@ fn notices_startup_preference_waits_for_the_first_settings_answer_and_saves_prom
 }
 
 #[test]
+fn quit_confirmation_choice_waits_for_loaded_settings_and_saves_promptly() {
+    let mut workspace = Workspace::new();
+    assert_eq!(workspace.handle(Command::SetSkipQuitConfirmation { skip: true }.into()), Transition::default());
+    assert!(!workspace.workspace_chrome().skip_quit_confirmation);
+
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    let changed = workspace.handle(Command::SetSkipQuitConfirmation { skip: true }.into());
+    assert!(matches!(changed.work.as_slice(), [WorkRequest::SaveSettings { snapshot, .. }] if snapshot.skip_quit_confirmation));
+    assert!(workspace.workspace_chrome().skip_quit_confirmation);
+}
+
+#[test]
 fn a_startup_notice_waits_for_the_preference_before_opening_notices() {
     let mut workspace = Workspace::new();
     let notice = workspace.handle(Event::JournalStatus { available: false }.into());

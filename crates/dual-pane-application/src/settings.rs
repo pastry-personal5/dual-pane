@@ -424,6 +424,8 @@ pub struct SettingsSnapshot {
     pub folder_sorts: Vec<(Location, SortSpec)>,
     pub favorites: FavoritesRecords,
     pub hide_notices_at_startup: bool,
+    /// The Application Close Button quits without asking first.
+    pub skip_quit_confirmation: bool,
     pub visibility: VisibilityPolicy,
 }
 
@@ -457,6 +459,7 @@ pub struct SettingsState {
     lru: VecDeque<Location>,
     favorites: FavoritesRecords,
     hide_notices_at_startup: bool,
+    skip_quit_confirmation: bool,
     visibility: VisibilityPolicy,
     revision: u64,
     saved_revision: u64,
@@ -555,7 +558,7 @@ impl SettingsState {
         let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect::<Vec<_>>();
         bindings.sort_by_key(|binding| binding.action.as_str());
         let folder_sorts = self.lru.iter().filter_map(|location| self.folder_sorts.get(location).copied().map(|sort| (location.clone(), sort))).collect();
-        SettingsSnapshot { bindings, shortcut_lists: self.shortcut_lists(), folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup, visibility: self.visibility }
+        SettingsSnapshot { bindings, shortcut_lists: self.shortcut_lists(), folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup, skip_quit_confirmation: self.skip_quit_confirmation, visibility: self.visibility }
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -600,6 +603,7 @@ impl SettingsState {
         }
         self.favorites = snapshot.favorites;
         self.hide_notices_at_startup = snapshot.hide_notices_at_startup;
+        self.skip_quit_confirmation = snapshot.skip_quit_confirmation;
         self.visibility = snapshot.visibility;
         self.revision += 1;
     }
@@ -609,6 +613,15 @@ impl SettingsState {
     pub fn set_hide_notices_at_startup(&mut self, hide: bool) {
         if self.hide_notices_at_startup != hide {
             self.hide_notices_at_startup = hide;
+            self.revision += 1;
+        }
+    }
+    pub const fn skip_quit_confirmation(&self) -> bool {
+        self.skip_quit_confirmation
+    }
+    pub fn set_skip_quit_confirmation(&mut self, skip: bool) {
+        if self.skip_quit_confirmation != skip {
+            self.skip_quit_confirmation = skip;
             self.revision += 1;
         }
     }

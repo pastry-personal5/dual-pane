@@ -67,6 +67,7 @@ pub mod ffi {
         #[qproperty(i32, notices_revision, cxx_name = "noticesRevision", READ, NOTIFY)]
         #[qproperty(i32, notices_open_requests, cxx_name = "noticesOpenRequests", READ, NOTIFY)]
         #[qproperty(bool, hide_notices_at_startup, cxx_name = "hideNoticesAtStartup", READ, NOTIFY)]
+        #[qproperty(bool, skip_quit_confirmation, cxx_name = "skipQuitConfirmation", READ, NOTIFY)]
         #[qproperty(bool, show_macos_items, cxx_name = "showMacosItems", READ, NOTIFY)]
         #[qproperty(bool, show_dotfiles, cxx_name = "showDotfiles", READ, NOTIFY)]
         #[qproperty(bool, show_macos_invisible, cxx_name = "showMacosInvisible", READ, NOTIFY)]
@@ -148,6 +149,8 @@ pub mod ffi {
         fn retry_journal(self: Pin<&mut WorkspaceBridge>);
         #[cxx_name = "changeHideNoticesAtStartup"]
         fn change_hide_notices_at_startup(self: Pin<&mut WorkspaceBridge>, hide: bool);
+        #[cxx_name = "changeSkipQuitConfirmation"]
+        fn change_skip_quit_confirmation(self: Pin<&mut WorkspaceBridge>, skip: bool);
         #[cxx_name = "changeVisibility"]
         fn change_visibility(self: Pin<&mut WorkspaceBridge>, show_macos_items: bool, show_dotfiles: bool, show_macos_invisible: bool);
         #[cxx_name = "startupPeriodElapsed"]
@@ -233,6 +236,7 @@ pub struct WorkspaceBridgeRust {
     notices_revision: i32,
     notices_open_requests: i32,
     hide_notices_at_startup: bool,
+    skip_quit_confirmation: bool,
     show_macos_items: bool,
     show_dotfiles: bool,
     show_macos_invisible: bool,
@@ -292,6 +296,7 @@ impl ffi::WorkspaceBridge {
         let active = i32::from(view.active_browser() == BrowserSide::Right);
         let ready = view.favorites_ready();
         let hide_notices = view.hide_notices_at_startup();
+        let skip_quit_confirmation = view.skip_quit_confirmation();
         let visibility = view.visibility();
         let notices_ready = view.notices_startup_ready();
         let settings_available = view.settings_interaction_available();
@@ -303,6 +308,7 @@ impl ffi::WorkspaceBridge {
         self.as_mut().set_notices_revision(notices);
         self.as_mut().set_notices_open_requests(opened);
         self.as_mut().set_hide_notices_at_startup(hide_notices);
+        self.as_mut().set_skip_quit_confirmation(skip_quit_confirmation);
         self.as_mut().set_show_macos_items(visibility.show_macos_items);
         self.as_mut().set_show_dotfiles(visibility.show_dotfiles);
         self.as_mut().set_show_macos_invisible(visibility.show_macos_invisible);
@@ -438,6 +444,10 @@ impl ffi::WorkspaceBridge {
     }
     fn change_hide_notices_at_startup(mut self: Pin<&mut Self>, hide: bool) {
         with_session(|session| session.submit(dual_pane_application::Command::SetHideNoticesAtStartup { hide }));
+        self.as_mut().session_changed();
+    }
+    fn change_skip_quit_confirmation(mut self: Pin<&mut Self>, skip: bool) {
+        with_session(|session| session.submit(dual_pane_application::Command::SetSkipQuitConfirmation { skip }));
         self.as_mut().session_changed();
     }
     fn change_visibility(mut self: Pin<&mut Self>, show_macos_items: bool, show_dotfiles: bool, show_macos_invisible: bool) {
@@ -577,6 +587,12 @@ impl ffi::WorkspaceBridge {
         if self.rust().hide_notices_at_startup != value {
             self.as_mut().rust_mut().get_mut().hide_notices_at_startup = value;
             self.hide_notices_at_startup_changed();
+        }
+    }
+    fn set_skip_quit_confirmation(mut self: Pin<&mut Self>, value: bool) {
+        if self.rust().skip_quit_confirmation != value {
+            self.as_mut().rust_mut().get_mut().skip_quit_confirmation = value;
+            self.skip_quit_confirmation_changed();
         }
     }
     fn set_show_macos_items(mut self: Pin<&mut Self>, value: bool) {

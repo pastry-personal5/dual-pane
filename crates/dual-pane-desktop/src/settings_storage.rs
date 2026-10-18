@@ -118,6 +118,7 @@ impl SettingsDatabase {
         let folder_sorts = statement.query_map([], |row| Ok((decode_location(&row.get::<_, Vec<u8>>(0)?).map_err(to_sql_error)?, decode_sort(row.get(1)?, row.get(2)?).map_err(to_sql_error)?)))?.collect::<Result<Vec<_>, _>>()?;
         let initialized = marker_bool(connection, "favorites_initialized", false)?;
         let hide_notices_at_startup = marker_bool(connection, "hide_notices_at_startup", false)?;
+        let skip_quit_confirmation = marker_bool(connection, "skip_quit_confirmation", false)?;
         let visibility = VisibilityPolicy { show_macos_items: marker_bool(connection, "show_macos_items", false)?, show_dotfiles: marker_bool(connection, "show_dotfiles", true)?, show_macos_invisible: marker_bool(connection, "show_macos_invisible", false)? };
         let groups = connection.prepare("SELECT id, name, position FROM favorite_group ORDER BY position, id")?.query_map([], |row| Ok(FavoriteGroupRecord { id: row.get(0)?, name: row.get(1)?, position: row.get(2)? }))?.collect::<Result<Vec<_>, _>>()?;
         let items = connection.prepare("SELECT id, group_id, name, target, position FROM favorite_item ORDER BY group_id, position, id")?.query_map([], |row| Ok(FavoriteItemRecord { id: row.get(0)?, group_id: row.get(1)?, name: row.get(2)?, target: decode_location(&row.get::<_, Vec<u8>>(3)?).map_err(to_sql_error)?, position: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
@@ -140,7 +141,7 @@ impl SettingsDatabase {
                 shortcut_lists.push(ActionShortcuts { action: binding.action, shortcuts: entries.into_iter().flatten().collect() });
             }
         }
-        let snapshot = SettingsSnapshot { bindings, shortcut_lists, folder_sorts, favorites, hide_notices_at_startup, visibility };
+        let snapshot = SettingsSnapshot { bindings, shortcut_lists, folder_sorts, favorites, hide_notices_at_startup, skip_quit_confirmation, visibility };
         let session = read_session(connection)?;
         Ok(LoadedSettings { snapshot, session })
     }
@@ -166,6 +167,7 @@ impl SettingsDatabase {
         tx.execute("DELETE FROM favorite_group", [])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('favorites_initialized', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.favorites.initialized)])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('hide_notices_at_startup', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.hide_notices_at_startup)])?;
+        tx.execute("INSERT INTO setting_marker(key, value) VALUES ('skip_quit_confirmation', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.skip_quit_confirmation)])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('show_macos_items', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.visibility.show_macos_items)])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('show_dotfiles', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.visibility.show_dotfiles)])?;
         tx.execute("INSERT INTO setting_marker(key, value) VALUES ('show_macos_invisible', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [i64::from(snapshot.visibility.show_macos_invisible)])?;
@@ -830,6 +832,18 @@ mod tests {
         assert!(!loaded.snapshot.hide_notices_at_startup);
         let version: i64 = database.connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+    #[test]
+    fn quit_confirmation_choice_defaults_to_asking_and_round_trips() {
+        let (_directory, path) = temp_database();
+        let mut database = SettingsDatabase::open(&path).unwrap();
+        assert!(!database.load().unwrap().skip_quit_confirmation);
+        for skip in [true, false] {
+            database.save(&SettingsSnapshot { skip_quit_confirmation: skip, ..database.load().unwrap() }).unwrap();
+            drop(database);
+            database = SettingsDatabase::open(&path).unwrap();
+            assert_eq!(database.load().unwrap().skip_quit_confirmation, skip);
+        }
     }
     #[test]
     fn visibility_defaults_migrate_and_all_values_round_trip() {

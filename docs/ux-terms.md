@@ -11,6 +11,9 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Standard Layout | `standard_layout` |
 | Sidebar | `sidebar` |
 | Main Toolbar | `main_toolbar` |
+| Application Title Row | `application_title_row` |
+| Application Close Button | `application_close_button` |
+| Application Quit Confirmation Window | `application_quit_confirmation_window` |
 | Settings | `settings` |
 | Settings Window | `settings_window` |
 | Settings Title Row | `settings_title_row` |

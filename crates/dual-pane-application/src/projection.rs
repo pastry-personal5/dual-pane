@@ -56,6 +56,9 @@ pub struct WorkspaceChrome {
     pub bindings: Vec<ActionBinding>,
     /// The persisted choice that suppresses routine launch Notices.
     pub hide_notices_at_startup: bool,
+    /// The persisted choice that lets the Application Close Button quit
+    /// without asking.
+    pub skip_quit_confirmation: bool,
     pub visibility: VisibilityPolicy,
     /// False while the initial settings read could still replace the choice.
     pub notices_startup_ready: bool,

@@ -10,7 +10,7 @@ Two Browsers sit side by side. Each Browser browses its own directory, and futur
 
 The [product behavior](docs/product-behavior.md) defines included features, file-operation safeguards, session recovery, and exclusions. The [UX documents](docs/ux-terms.md) define the current interface.
 
-Dual Pane shows two independently browsable Browsers with compact, edge-to-edge layouts. `Command+Up` opens the parent folder; `Command+Down` enters the single selected folder or opens the single selected file with its default app. Return renames the selected Item, `Shift+Command+N` creates a folder, `Command+Delete` or `Command+Forward Delete` moves selected Items to Trash, and `Option+Command+Delete` deletes them permanently. `Command+W` closes the active tab; `Command+Q` quits the app; `Control+Command+F` toggles full screen.
+Dual Pane shows two independently browsable Browsers with compact, edge-to-edge layouts. `Command+Up` opens the parent folder; `Command+Down` enters the single selected folder or opens the single selected file with its default app. Return renames the selected Item, `Shift+Command+N` creates a folder, `Command+Delete` or `Command+Forward Delete` moves selected Items to Trash, and `Option+Command+Delete` deletes them permanently. `Command+W` closes the active tab; `Command+Q`, or the close button that appears when you point at the right end of the Sidebar's **Dual Pane** title row, quits the app; `Control+Command+F` toggles full screen.
 
 Version v3.0.0 adds:
 
@@ -20,7 +20,7 @@ Version v3.0.0 adds:
 - Folder Items show six columns, including native icons and age-colored Relative Dates that dim with their Browser, with direct sort buttons and a summary row.
 - Multiple Items can be selected with Command-click, Shift-click, Shift-arrow, and `Command+A`.
 - A Notices window reports settings and Favorites problems and offers a confirmed Reset Settings.
-- The Settings gear and `Command+,` open Settings while settings storage is healthy. Its title row can be dragged to move the window. General controls startup Notices, Reset Settings, and three independent visibility switches for macOS metadata and service items, dotfiles, and items marked invisible by macOS. Keyboard Shortcuts groups actions by purpose and uses icon controls to add, remove, and restore multiple bindings per action.
+- The Settings gear and `Command+,` open Settings while settings storage is healthy. Its title row can be dragged to move the window. General controls startup Notices, whether the Sidebar close button asks before quitting, Reset Settings, and three independent visibility switches for macOS metadata and service items, dotfiles, and items marked invisible by macOS. Keyboard Shortcuts groups actions by purpose and uses icon controls to add, remove, and restore multiple bindings per action.
 - Workspace sessions restore tabs, active Browsers, and window layout; a delayed settings load shows an accessible Waiting Window and protects the prior session after its timeout.
 - Space previews the Folder Items cursor with macOS Quick Look; a tap opens its normal panel, while a 256 ms hold opens a panel at the largest usable screen frame with a short, motion-aware native transition.
 - Each Browser has a collapsible Preview Pane above its always-visible one-line Status Bar. Expanding the pane shows a selected image supported by the installed Qt reader and item details; the chosen pane height is restored with the workspace.

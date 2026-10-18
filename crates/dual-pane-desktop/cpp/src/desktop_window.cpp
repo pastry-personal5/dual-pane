@@ -154,6 +154,11 @@ constexpr int scope_folder_items_list = 0, scope_window = 1, scope_application =
 constexpr int status_reason_milliseconds = 3000;
 constexpr int quick_look_hold_milliseconds = 256;
 constexpr auto window_color = "#1B1D21", surface_color = "#23262B", inactive_surface_color = "#17191D", text_color = "#ECEFF3", inactive_text_color = "#8A9099", border_color = "#3A4048", active_color = "#2F6D9A", inactive_browser_color = "#173A55", hover_color = "#2B3037", favorite_group_color = "#15171A", divider_hover_border_color = "#737A84", error_color = "#E5737A";
+// The Application Close Button quits, so its revealed state is a destructive
+// red: the white glyph keeps 4.8:1 contrast, and the red keeps 3.5:1 against
+// the Sidebar.
+constexpr auto application_close_hover_color = "#C9434A", application_close_pressed_color = "#A8363D", application_close_glyph_color = "#FFFFFF";
+constexpr int application_close_button_size = 30;
 constexpr int favorite_group_margin = 8;
 constexpr int favorite_row_horizontal_padding = 8;
 constexpr int favorite_row_vertical_padding = 4;
@@ -226,7 +231,7 @@ auto style_sheet() -> QString {
       QToolButton#favoriteGroupMenuButton:pressed:enabled, QToolButton#addFavoriteItemButton:pressed:enabled { color:#FFFFFF; background:#245878; }
       QToolButton#favoriteGroupMenuButton:disabled, QToolButton#addFavoriteItemButton:disabled { color:#6F757D; background:transparent; }
       QWidget#sidebar[windowActive="false"] QToolButton#favoriteGroupMenuButton, QWidget#sidebar[windowActive="false"] QToolButton#addFavoriteItemButton { color:#8A9099; background:#1B1D21; }
-      QLabel#applicationTitle { background:transparent; color:%3; font-size:24px; font-weight:600; padding:10px 16px; }
+      QLabel#applicationTitle { background:transparent; color:%3; font-size:24px; font-weight:600; }
       QToolButton#sortControl:hover:enabled:!checked, QToolButton#newTabButton:hover:enabled, QToolButton#closeTabButton:hover:enabled, QToolButton#newGroupButton:hover:enabled, QFrame#operationPanel QToolButton:hover:enabled { background:%11; }
       QLabel#folderPaneToolbarRow1, QWidget#folderPaneToolbarRow2, QWidget#folderPaneToolbarRow3, QWidget#folderPaneToolbarRow2 QLabel, QWidget#folderPaneToolbarRow2 QLineEdit, QWidget#folderPaneToolbarRow2 QToolButton, QWidget#folderPaneToolbarRow3 QLabel, QWidget#folderPaneToolbarRow3 QLineEdit, QWidget#folderPaneToolbarRow3 QToolButton { background:%1; }
       QLabel#folderPaneToolbarRow1[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QToolButton { background:%2; }
@@ -309,9 +314,10 @@ auto style_sheet() -> QString {
       QDialog#settingsWindow QPushButton:focus { border-color:%5; }
       QMenu#settingsInfoMenu { background:%1; color:%3; border:1px solid %4; }
       QMenu#settingsInfoMenu QLabel { background:transparent; color:%3; font-size:12px; }
-      QMessageBox#settingsResetConfirmation { background:%1; color:%3; }
-      QMessageBox#settingsResetConfirmation QLabel { background:transparent; color:%3; }
-      QMessageBox#settingsResetConfirmation QPushButton { background:%2; color:%3; border:1px solid %4; border-radius:4px; padding:6px 12px; }
+      QMessageBox#settingsResetConfirmation, QMessageBox#applicationQuitConfirmationWindow { background:%1; color:%3; }
+      QMessageBox#settingsResetConfirmation QLabel, QMessageBox#applicationQuitConfirmationWindow QLabel, QMessageBox#applicationQuitConfirmationWindow QCheckBox { background:transparent; color:%3; }
+      QMessageBox#settingsResetConfirmation QPushButton, QMessageBox#applicationQuitConfirmationWindow QPushButton { background:%2; color:%3; border:1px solid %4; border-radius:4px; padding:6px 12px; }
+      QMessageBox#applicationQuitConfirmationWindow QPushButton:default { border-color:%5; }
       QToolButton#settingsCloseButton { background:%2; border:1px solid %4; border-radius:4px; padding:0; }
       QToolButton#settingsCloseButton:hover:enabled { background:%5; }
       QToolButton#settingsCloseButton:focus { border-color:%5; }
@@ -3510,6 +3516,21 @@ class SettingsWindow final : public QDialog {
         notices->addWidget(info_button(page, QStringLiteral("Startup notices"), QStringLiteral("When selected, routine notices stay in Notices at startup. Important errors still open Notices so you can act on them.")));
         notices->addStretch();
         startup_card->addLayout(notices);
+        auto *quit_card = make_card(QStringLiteral("Quitting"), QStringLiteral("Quitting"), QStringLiteral("Choose whether the Sidebar close button asks before it quits."));
+        auto *quit_row = new QHBoxLayout();
+        auto *ask_quit = new QCheckBox(QStringLiteral("Ask before quitting from the close button"), page);
+        ask_quit->setObjectName(QStringLiteral("settingsAskBeforeQuit"));
+        ask_quit->setAccessibleName(QStringLiteral("Ask before quitting from the close button"));
+        ask_quit->setChecked(!bridge_ || !bridge_->getSkipQuitConfirmation());
+        ask_quit->setEnabled(bridge_ != nullptr);
+        if (bridge_) {
+            QObject::connect(ask_quit, &QCheckBox::toggled, page, [this](bool ask) { bridge_->changeSkipQuitConfirmation(!ask); });
+            QObject::connect(bridge_, &WorkspaceBridge::skipQuitConfirmationChanged, page, [this, ask_quit] { QSignalBlocker block(ask_quit); ask_quit->setChecked(!bridge_->getSkipQuitConfirmation()); });
+        }
+        quit_row->addWidget(ask_quit);
+        quit_row->addWidget(info_button(page, QStringLiteral("Quit confirmation"), QStringLiteral("When selected, the close button at the right end of the Dual Pane title row asks before quitting. Choosing Don’t ask again in that confirmation clears this setting. Command+Q never asks, and running file operations always ask.")));
+        quit_row->addStretch();
+        quit_card->addLayout(quit_row);
         auto *visibility_card = make_card(QStringLiteral("Item Visibility"), QStringLiteral("Item Visibility"), QStringLiteral("Choose which hidden item classes appear in both Browsers."));
         auto *visibility_help = new QLabel(QStringLiteral("An item matching more than one rule appears only when every matching Show control is selected."), page);
         visibility_help->setObjectName(QStringLiteral("settingsVisibilityHelp"));
@@ -3895,6 +3916,8 @@ auto run_settings_window_checks(QApplication &app) -> int {
         check(title_row && heading && heading->text() == QStringLiteral("Settings") && heading->parentWidget() == title_row && notices && reset, "General controls and title row");
         check(macos_items && macos_items->accessibleName() == QStringLiteral("Show macOS metadata and service items") && macos_items->focusPolicy() != Qt::NoFocus, "accessible macOS items control");
         check(dotfiles && dotfiles->accessibleName() == QStringLiteral("Show dotfiles") && dotfiles->focusPolicy() != Qt::NoFocus, "accessible dotfiles control");
+        auto *ask_quit = dialog->findChild<QCheckBox *>(QStringLiteral("settingsAskBeforeQuit"));
+        check(ask_quit && ask_quit->accessibleName() == QStringLiteral("Ask before quitting from the close button") && ask_quit->isChecked() && ask_quit->focusPolicy() != Qt::NoFocus, "accessible quit confirmation control asks by default");
         check(macos_invisible && macos_invisible->accessibleName() == QStringLiteral("Show items marked invisible by macOS") && macos_invisible->focusPolicy() != Qt::NoFocus, "accessible macOS invisible control");
         check(visibility_help && visibility_help->text().contains(QStringLiteral("every matching Show control")), "visibility overlap help");
         check(close && close->parentWidget() == title_row && close->text().isEmpty() && !close->icon().isNull(), "bitmap Close button in title row");
@@ -4017,15 +4040,95 @@ class MainToolbar final : public QWidget {
     QToolButton *settings_;
 };
 
+auto application_close_icon() -> const QIcon & {
+    static const QIcon icon = [] {
+        QIcon result;
+        for (const qreal scale : {1.0, 2.0, 3.0}) {
+            QPixmap pixmap(QSize(static_cast<int>(16 * scale), static_cast<int>(16 * scale)));
+            pixmap.setDevicePixelRatio(scale);
+            pixmap.fill(Qt::transparent);
+            QPainter painter(&pixmap);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(QPen(QColor(QString::fromLatin1(application_close_glyph_color)), 1.7, Qt::SolidLine, Qt::RoundCap));
+            painter.drawLine(QPointF(3.5, 3.5), QPointF(12.5, 12.5));
+            painter.drawLine(QPointF(12.5, 3.5), QPointF(3.5, 12.5));
+            painter.end();
+            result.addPixmap(pixmap);
+        }
+        return result;
+    }();
+    return icon;
+}
+
+/// Quits from the Application Title Row. It paints nothing until the pointer
+/// is over it, but it still takes the pointer, so the row never drags there.
+class ApplicationCloseButton final : public QAbstractButton {
+  public:
+    explicit ApplicationCloseButton(QWidget *parent) : QAbstractButton(parent) {
+        setObjectName(QStringLiteral("applicationCloseButton"));
+        setAccessibleName(QStringLiteral("Application Close Button"));
+        setToolTip(QStringLiteral("Quit Dual Pane"));
+        // Command+Q is the keyboard path; an invisible control stays out of the Tab chain.
+        setFocusPolicy(Qt::NoFocus);
+        setIcon(application_close_icon());
+        setIconSize(QSize(16, 16));
+        setFixedSize(application_close_button_size, application_close_button_size);
+    }
+
+  protected:
+    void enterEvent(QEnterEvent *event) override {
+        hovered_ = true;
+        update();
+        QAbstractButton::enterEvent(event);
+    }
+    void leaveEvent(QEvent *event) override {
+        hovered_ = false;
+        update();
+        QAbstractButton::leaveEvent(event);
+    }
+    void paintEvent(QPaintEvent *) override {
+        if (!hovered_ && !isDown())
+            return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QString::fromLatin1(isDown() ? application_close_pressed_color : application_close_hover_color)));
+        painter.drawRoundedRect(QRectF(rect()), 4, 4);
+        QRect glyph(QPoint(), iconSize());
+        glyph.moveCenter(rect().center());
+        icon().paint(&painter, glyph);
+    }
+
+  private:
+    bool hovered_ = false;
+};
+
+/// The confirmation the Application Close Button shows before quitting.
+auto make_application_quit_confirmation(QWidget *owner, bool offer_dont_ask) -> QMessageBox * {
+    auto *box = new QMessageBox(QMessageBox::Question, QStringLiteral("Quit Dual Pane"), QStringLiteral("Are you sure you want to quit Dual Pane?"), QMessageBox::NoButton, owner);
+    box->setObjectName(QStringLiteral("applicationQuitConfirmationWindow"));
+    box->setAccessibleName(QStringLiteral("Application Quit Confirmation Window"));
+    auto *quit = box->addButton(QStringLiteral("Quit"), QMessageBox::AcceptRole);
+    auto *cancel = box->addButton(QMessageBox::Cancel);
+    box->setDefaultButton(quit);
+    box->setEscapeButton(cancel);
+    if (offer_dont_ask) {
+        auto *dont_ask = new QCheckBox(QStringLiteral("Don’t ask again"), box);
+        dont_ask->setObjectName(QStringLiteral("applicationQuitDontAsk"));
+        box->setCheckBox(dont_ask);
+    }
+    return box;
+}
+
 class Sidebar final : public QWidget {
   public:
-    Sidebar(WorkspaceBridge *bridge, const std::function<void()> &focus_active_list, const std::function<void()> &show_notices, const std::function<void()> &show_settings, QWidget *parent) : QWidget(parent), toolbar_(new MainToolbar(this, show_notices, show_settings)) {
+    Sidebar(WorkspaceBridge *bridge, const std::function<void()> &focus_active_list, const std::function<void()> &show_notices, const std::function<void()> &show_settings, const std::function<void()> &close_application, QWidget *parent) : QWidget(parent), toolbar_(new MainToolbar(this, show_notices, show_settings)) {
         setObjectName(QStringLiteral("sidebar"));
         setAccessibleName(QStringLiteral("Sidebar"));
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
-        auto *title = new SidebarTitleRow(this);
+        auto *title = new SidebarTitleRow(close_application, this);
         layout->addWidget(title);
         auto *scroll = new QScrollArea(this);
         scroll->setWidgetResizable(true);
@@ -4044,13 +4147,28 @@ class Sidebar final : public QWidget {
     void set_settings_available(bool available) { toolbar_->set_settings_available(available); }
 
   private:
-    class SidebarTitleRow final : public QLabel {
+    class SidebarTitleRow final : public QWidget {
       public:
-        explicit SidebarTitleRow(QWidget *parent) : QLabel(QStringLiteral("Dual Pane"), parent) {
-            setObjectName(QStringLiteral("applicationTitle"));
-            setAccessibleName(QStringLiteral("Dual Pane"));
+        SidebarTitleRow(const std::function<void()> &close_application, QWidget *parent) : QWidget(parent) {
+            setObjectName(QStringLiteral("applicationTitleRow"));
+            setAccessibleName(QStringLiteral("Application Title Row"));
             setMinimumHeight(54);
-            setAttribute(Qt::WA_StyledBackground);
+            // The heading starts where Favorite Group names start and the close
+            // button ends where Add Favorite Item Buttons end. The top inset
+            // matches the first group's top margin, so both center between the
+            // Sidebar top and the first Favorite Group box.
+            constexpr int inset = favorite_group_margin + favorite_row_horizontal_padding;
+            auto *row = new QHBoxLayout(this);
+            row->setContentsMargins(inset, favorite_group_margin, inset, 0);
+            row->setSpacing(0);
+            auto *heading = new QLabel(QStringLiteral("Dual Pane"), this);
+            heading->setObjectName(QStringLiteral("applicationTitle"));
+            heading->setAccessibleName(QStringLiteral("Dual Pane"));
+            heading->setAttribute(Qt::WA_TransparentForMouseEvents);
+            row->addWidget(heading, 1);
+            auto *close = new ApplicationCloseButton(this);
+            QObject::connect(close, &QAbstractButton::clicked, this, close_application);
+            row->addWidget(close, 0, Qt::AlignVCenter);
         }
 
       protected:
@@ -4060,7 +4178,7 @@ class Sidebar final : public QWidget {
                 event->accept();
                 return;
             }
-            QLabel::mousePressEvent(event);
+            QWidget::mousePressEvent(event);
         }
         void mouseReleaseEvent(QMouseEvent *event) override {
             if (moving_window_) {
@@ -4068,7 +4186,7 @@ class Sidebar final : public QWidget {
                 event->accept();
                 return;
             }
-            QLabel::mouseReleaseEvent(event);
+            QWidget::mouseReleaseEvent(event);
         }
 
       private:
@@ -4359,6 +4477,85 @@ auto run_text_editor_focus_checks(QApplication &app) -> int {
     return QApplication::exec();
 }
 
+/// Exercises the Application Title Row and its close button with real widgets
+/// and no display.
+auto run_application_title_row_checks(QApplication &app) -> int {
+    QWidget window;
+    window.setStyleSheet(style_sheet());
+    auto *layout = new QVBoxLayout(&window);
+    layout->setContentsMargins(0, 0, 0, 0);
+    WorkspaceBridge bridge;
+    int closes = 0;
+    auto *sidebar = new Sidebar(&bridge, [] {}, [] {}, [] {}, [&closes] { ++closes; }, &window);
+    layout->addWidget(sidebar);
+    window.resize(280, 600);
+    window.show();
+    QTimer::singleShot(0, &app, [&] {
+        bool failed = false;
+        const auto check = [&failed](bool condition, const char *name) {
+            if (!condition) {
+                std::cerr << "Application title row check failed: " << name << '\n';
+                failed = true;
+            }
+        };
+        auto *row = sidebar->findChild<QWidget *>(QStringLiteral("applicationTitleRow"));
+        auto *heading = sidebar->findChild<QLabel *>(QStringLiteral("applicationTitle"));
+        auto *close = sidebar->findChild<QAbstractButton *>(QStringLiteral("applicationCloseButton"));
+        if (row == nullptr || heading == nullptr || close == nullptr || heading->parentWidget() != row || close->parentWidget() != row) {
+            check(false, "heading and close button in the title row");
+            QApplication::exit(1);
+            return;
+        }
+        constexpr int inset = favorite_group_margin + favorite_row_horizontal_padding;
+        const QRectF heading_box(heading->geometry());
+        const QRectF close_box(close->geometry());
+        check(heading->text() == QStringLiteral("Dual Pane") && heading->geometry().left() == inset && heading->frameWidth() == 0, "heading starts where Favorite Group names start");
+        check(close->mapTo(sidebar, QPoint(close->width(), 0)).x() == sidebar->width() - inset, "close button ends where Add Favorite Item Buttons end");
+        check(close_box.center().y() == heading_box.center().y() && heading_box.center().y() == (row->height() + favorite_group_margin) / 2.0, "heading and close button center above the first Favorite Group");
+        check(close->accessibleName() == QStringLiteral("Application Close Button") && close->toolTip() == QStringLiteral("Quit Dual Pane") && close->focusPolicy() == Qt::NoFocus, "accessible, pointer-only close button");
+        const QPixmap glyph = close->icon().pixmap(close->iconSize(), 3.0);
+        check(glyph.devicePixelRatio() == 3.0 && glyph.width() == close->iconSize().width() * 3, "close glyph has a 3x bitmap");
+        check(row->childAt(heading->geometry().center()) == nullptr && row->childAt(close->geometry().center()) == close, "presses on the heading reach the row's window drag");
+
+        const QRect area(close->mapTo(&window, QPoint()), close->size());
+        const auto uniform = [](const QImage &image) {
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if (image.pixel(x, y) != image.pixel(0, 0))
+                        return false;
+            return true;
+        };
+        const QImage hidden = window.grab(area).toImage();
+        check(uniform(hidden), "close button hidden until hovered");
+        const QPoint center = close->rect().center();
+        QEnterEvent enter(QPointF(center), QPointF(close->mapTo(&window, center)), QPointF(close->mapToGlobal(center)));
+        QApplication::sendEvent(close, &enter);
+        const QImage hovered = window.grab(area).toImage();
+        const auto scale = hovered.devicePixelRatio();
+        const QPoint glyph_center = QPointF(QPointF(center) * scale).toPoint();
+        check(hovered.pixelColor(QPointF(QPointF(2, center.y()) * scale).toPoint()) == QColor(QString::fromLatin1(application_close_hover_color)), "hover shows the red background");
+        check(hovered.pixelColor(glyph_center).lightness() > 200, "hover shows the white glyph");
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(center), QPointF(close->mapToGlobal(center)), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(close, &press);
+        check(window.grab(area).toImage().pixelColor(QPointF(QPointF(2, center.y()) * scale).toPoint()) == QColor(QString::fromLatin1(application_close_pressed_color)), "press darkens the background");
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(center), QPointF(close->mapToGlobal(center)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(close, &release);
+        check(closes == 1, "a click asks to close the application once");
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(close, &leave);
+        check(window.grab(area).toImage() == hidden, "close button hides again when the pointer leaves");
+
+        std::unique_ptr<QMessageBox> offered(make_application_quit_confirmation(&window, true));
+        auto *dont_ask = offered->checkBox();
+        check(offered->text() == QStringLiteral("Are you sure you want to quit Dual Pane?") && offered->defaultButton() != nullptr && offered->buttonRole(offered->defaultButton()) == QMessageBox::AcceptRole && offered->escapeButton() != nullptr, "quit confirmation defaults to Quit and Escape cancels");
+        check(dont_ask != nullptr && dont_ask->text() == QStringLiteral("Don’t ask again") && !dont_ask->isChecked(), "quit confirmation offers an unchecked Don't ask again");
+        std::unique_ptr<QMessageBox> unavailable(make_application_quit_confirmation(&window, false));
+        check(unavailable->checkBox() == nullptr, "no Don't ask again while settings cannot be saved");
+        QApplication::exit(failed ? 1 : 0);
+    });
+    return QApplication::exec();
+}
+
 /// Refreshes every binder after any call that may have changed the session.
 /// A refresh that triggers another call refreshes again instead of nesting.
 class RefreshCoordinator final {
@@ -4450,6 +4647,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         return run_settings_window_checks(app);
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_TEXT_EDITOR_FOCUS_CHECK"))
         return run_text_editor_focus_checks(app);
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_APPLICATION_TITLE_ROW_CHECK"))
+        return run_application_title_row_checks(app);
     WorkspaceWindow window;
     auto *waiting = new WaitingWindow(&window);
     FolderItemsListModel left_model, right_model;
@@ -4479,7 +4678,38 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     };
     auto *settings_controller = new SettingsWindowController(&window, &bridge);
     const auto show_settings = [settings_controller] { settings_controller->present(); };
-    auto *sidebar = new Sidebar(&bridge, focus_active_list, show_notices, show_settings, &standard_layout);
+    // The same quit as Command+Q.
+    const auto quit_application = [&window] { window.close(); };
+    // The Application Close Button asks first unless the person chose not to
+    // be asked. While an operation is unfinished, the close handler's own
+    // quit confirmation asks instead, so nobody is asked twice.
+    QPointer<QMessageBox> application_quit_prompt;
+    const auto close_application = [&window, &bridge, &operations, &application_quit_prompt, quit_application] {
+        bool unfinished = false;
+        for (int panel = 0; panel < operations.panelCount(); ++panel)
+            unfinished |= !operations.panelFinished(panel);
+        if (unfinished || bridge.getSkipQuitConfirmation()) {
+            quit_application();
+            return;
+        }
+        if (application_quit_prompt) {
+            application_quit_prompt->raise();
+            return;
+        }
+        auto *box = make_application_quit_confirmation(&window, bridge.getSettingsInteractionAvailable());
+        box->setWindowModality(Qt::WindowModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QObject::connect(box, &QMessageBox::finished, &window, [&bridge, box, quit_application] {
+            if (box->buttonRole(box->clickedButton()) != QMessageBox::AcceptRole)
+                return;
+            if (box->checkBox() != nullptr && box->checkBox()->isChecked())
+                bridge.changeSkipQuitConfirmation(true);
+            quit_application();
+        });
+        application_quit_prompt = box;
+        box->open();
+    };
+    auto *sidebar = new Sidebar(&bridge, focus_active_list, show_notices, show_settings, close_application, &standard_layout);
     split->addWidget(left_browser);
     split->addWidget(right_browser);
     // The Operation Panel Strip runs below both Browsers.
@@ -4683,7 +4913,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
             window.showFullScreen();
     });
     // The workspace window decides first, before any other window is asked.
-    handlers.insert(QStringLiteral("QuitApplication"), [&window] { window.close(); });
+    handlers.insert(QStringLiteral("QuitApplication"), quit_application);
     handlers.insert(QStringLiteral("NewTab"), [active_model] { active_model()->newTab(); });
     // Command+W reaches a docked panel that has focus: it closes a finished
     // panel and does nothing on a running or waiting one.

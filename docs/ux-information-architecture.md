@@ -10,7 +10,7 @@ This document describes the current component hierarchy of Dual Pane. It records
 - Fixed `Control+Command+F` workspace shortcut toggles full screen
 - Workspace Window
   - Sidebar
-    - Draggable Application Title Row with **Dual Pane** heading
+    - Draggable Application Title Row with **Dual Pane** heading and hover-revealed Application Close Button
     - Drives Group with Drive Items
     - Favorites Groups
       - Favorite Group rows with Favorite Group Name, Favorite Group Menu Button, Add Favorite Item Button, and Favorite Items

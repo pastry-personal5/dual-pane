@@ -282,6 +282,7 @@ impl Workspace {
             Command::DeleteFavoriteItem { id } => self.favorites_edit(FavoriteEdit::Item(id), |workspace| workspace.delete_favorite_item(id)),
             Command::ResetSettings => self.reset_settings(),
             Command::SetHideNoticesAtStartup { hide } => self.set_hide_notices_at_startup(hide),
+            Command::SetSkipQuitConfirmation { skip } => self.set_skip_quit_confirmation(skip),
             Command::SetVisibilityPolicy { visibility } => self.set_visibility_policy(visibility),
             Command::SetActionShortcuts { action, shortcuts } => self.set_action_shortcuts(action, shortcuts),
             Command::RestoreActionShortcuts { action } => self.restore_action_shortcuts(action),
@@ -910,7 +911,7 @@ impl Workspace {
     }
     /// Workspace-wide presentation state.
     pub fn workspace_chrome(&self) -> WorkspaceChrome {
-        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), visibility: self.settings.visibility(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, settings_interaction_available: self.settings_interaction_available, notices: Arc::clone(&self.notices) }
+        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), skip_quit_confirmation: self.settings.skip_quit_confirmation(), visibility: self.settings.visibility(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, settings_interaction_available: self.settings_interaction_available, notices: Arc::clone(&self.notices) }
     }
     /// The save to flush before the application exits, if loaded settings
     /// have changed since the last confirmed save.
@@ -1559,6 +1560,13 @@ impl Workspace {
             return Transition::default();
         }
         self.settings.set_hide_notices_at_startup(hide);
+        Transition { outputs: vec![], work: self.save_settings().into_iter().collect() }
+    }
+    fn set_skip_quit_confirmation(&mut self, skip: bool) -> Transition {
+        if self.settings_status != SettingsStatus::Loaded {
+            return Transition::default();
+        }
+        self.settings.set_skip_quit_confirmation(skip);
         Transition { outputs: vec![], work: self.save_settings().into_iter().collect() }
     }
     fn set_visibility_policy(&mut self, visibility: VisibilityPolicy) -> Transition {
