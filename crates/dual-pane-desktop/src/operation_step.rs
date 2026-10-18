@@ -528,7 +528,7 @@ impl OperationState {
     /// Rejects a folder root whose destination folder lies inside it through
     /// a link or another spelling of its path, by device and inode.
     fn outside_source(&self, entry: &PlannedItem, identity: Identity) -> Result<(), Stop> {
-        if entry.source.parent().as_ref() != Some(self.intent.source()) {
+        if !self.intent.roots().iter().any(|root| root.source == entry.source) {
             return Ok(());
         }
         let Some(destination) = self.intent.destination() else { return Ok(()) };

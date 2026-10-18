@@ -31,13 +31,13 @@ These are explicit handoffs, not permission to invent behavior during implementa
 |---|---|
 | P4-M2 | Unicode and non-UTF-8 name matching; range anchor, scroll, counts, refresh, and same-folder history behavior. |
 | P4-M3 | Placement, append behavior, Close Filter Button behavior, prefix matching, the visually empty no-match result, IME commit behavior, Escape focus return, and empty-row dismissal are decided in the [M3 owner-decision record](milestone-03-overview.md#owner-decisions). |
-| P4-M4 | Copy repeat behavior, Cut rejection before a job starts, destination-unavailable policy, and preflight for Finder-sourced files; the active tab's confirmed folder is the Paste target and worker checks still handle races. |
+| P4-M4 | Copy repeat behavior, Cut rejection before a job starts, destination-unavailable policy, and preflight for Finder-sourced files are decided in the [M4 owner-decision record](milestone-04-overview.md#owner-decisions). |
 | P4-M5 | Menus, pending-Cut cue, feedback for replaced or unsupported clipboard content, and behavior if a copied Finder or Dual Pane source changes. Finder-compatible representation, Finder-source reading, and native verification in both directions are M5 design obligations, not separate owner decisions. |
 | P4-M6 | Path editor focus and validation feedback, symlinks, packages, and non-UTF-8 paths; failed draft behavior after a tab switch. |
 | P4-M7 | Source selection, same-folder and descendant drops, symlink/package targets, post-drop tab activation, stale payloads, and hover/rejection feedback. |
 | P4-M8 | [Column sketch](milestone-08-overview.md#interaction-sketch-for-p4-m8-planning), expansion ownership and height, collapse timing on selection, Edit transition, folder choices, keyboard and accessibility behavior, and asynchronous feedback. |
 
-The P4-M2 choices have since been answered in its [owner-decision record](milestone-02-overview.md#owner-decisions), and P4-M3 has a partial [owner-decision record](milestone-03-overview.md#owner-decisions). The later rows still await their feature-milestone interviews.
+The P4-M2, P4-M3, and P4-M4 choices have since been answered in their linked owner-decision records. The later rows still await their feature-milestone interviews.
 
 ## Completion checklist
 

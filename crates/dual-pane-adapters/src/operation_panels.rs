@@ -290,10 +290,10 @@ fn needs_review(outcome: OperationOutcome) -> bool {
 
 fn panel(job: &OperationJob) -> OperationPanelViewModel {
     let intent = job.intent();
-    let subject = match (intent.kind(), intent.targets()) {
+    let subject = match (intent.kind(), intent.roots()) {
         (OperationKind::NewFolder { name }, _) => format!("“{}”", name.to_text_lossy()),
-        (_, [only]) => format!("“{}”", only.name.to_text_lossy()),
-        (_, targets) => format!("{} items", targets.len()),
+        (_, [only]) => format!("“{}”", only.source.components().last().expect("operation roots have names").to_text_lossy()),
+        (_, roots) => format!("{} items", roots.len()),
     };
     let detail = match (intent.kind(), intent.destination()) {
         (OperationKind::Rename { to }, _) => format!("{subject} to “{}”", to.to_text_lossy()),
@@ -331,7 +331,7 @@ fn decision_card(job: &OperationJob) -> Option<DecisionCardViewModel> {
     let intent = job.intent();
     let name = decision.item.components().last().map(|name| name.to_text_lossy().into_owned()).unwrap_or_default();
     // Where the item would go, for a conflict in Copy or Move.
-    let destination = intent.destination().map(|destination| Location::from_components(destination.components().iter().cloned().chain(decision.item.components().iter().skip(intent.source().components().len()).cloned())));
+    let destination = intent.destination_for(decision.item);
     let folder = destination.as_ref().and_then(Location::parent).map(|folder| location_text(&folder)).unwrap_or_default();
     let message = match decision.issue {
         OperationIssue::FileConflict => format!("An item named “{name}” already exists in “{folder}”."),
@@ -339,7 +339,7 @@ fn decision_card(job: &OperationJob) -> Option<DecisionCardViewModel> {
         OperationIssue::KindMismatch => format!("“{name}” and the item with its name in “{folder}” are a file and a folder, so neither replaces the other."),
         OperationIssue::RecoverableError => {
             let reason = decision.failure.map_or("an unexpected error occurred", |failure| operation_error_text(failure.kind));
-            let removing = starts_with(decision.item, intent.source()) && matches!(job.status(), OperationStatus::WaitingFinalize { .. });
+            let removing = intent.roots().iter().any(|root| starts_with(decision.item, &root.source)) && matches!(job.status(), OperationStatus::WaitingFinalize { .. });
             let scanning = matches!(job.status(), OperationStatus::WaitingScan { .. });
             let verb = if removing {
                 "remove the folder"

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::{ActionId, ByteProgress, CleanupResult, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, VisibilityPolicy, WindowLayout};
-use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, RequestToken, ScrollAnchor, SortSpec, TabId};
+use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
+use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, OperationRoot, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
@@ -22,6 +22,15 @@ pub enum Input {
 /// Browser's active tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    CaptureClipboard {
+        browser: BrowserSide,
+        tab: TabId,
+        action: ClipboardAction,
+    },
+    PasteClipboard {
+        browser: BrowserSide,
+        tab: TabId,
+    },
     SetFilterText {
         browser: BrowserSide,
         tab: TabId,
@@ -246,7 +255,7 @@ impl Command {
     /// shown by a Browser must carry an observed visible revision.
     pub fn visible_target(&self) -> Option<(BrowserSide, TabId)> {
         match self {
-            Self::StartOperation { browser, tab, .. } | Self::RequestNameEditor { browser, tab, .. } | Self::SelectEntry { browser, tab, .. } | Self::ToggleEntry { browser, tab, .. } | Self::SelectRange { browser, tab, .. } | Self::MoveSelection { browser, tab, .. } | Self::SecondarySelect { browser, tab, .. } | Self::SelectAll { browser, tab } | Self::ClearSelection { browser, tab } | Self::OpenEntry { browser, tab, .. } | Self::ShowPackageContents { browser, tab, .. } | Self::UpdateScrollHint { browser, tab, .. } => Some((*browser, *tab)),
+            Self::CaptureClipboard { browser, tab, .. } | Self::StartOperation { browser, tab, .. } | Self::RequestNameEditor { browser, tab, .. } | Self::SelectEntry { browser, tab, .. } | Self::ToggleEntry { browser, tab, .. } | Self::SelectRange { browser, tab, .. } | Self::MoveSelection { browser, tab, .. } | Self::SecondarySelect { browser, tab, .. } | Self::SelectAll { browser, tab } | Self::ClearSelection { browser, tab } | Self::OpenEntry { browser, tab, .. } | Self::ShowPackageContents { browser, tab, .. } | Self::UpdateScrollHint { browser, tab, .. } => Some((*browser, *tab)),
             _ => None,
         }
     }
@@ -270,6 +279,25 @@ impl Command {
 /// sweep of temporaries left by earlier launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    ClipboardPublished {
+        request: ClipboardRequestId,
+        transfer: TransferId,
+        generation: ClipboardGeneration,
+        succeeded: bool,
+    },
+    ClipboardChanged {
+        generation: ClipboardGeneration,
+    },
+    ClipboardRead {
+        request: ClipboardRequestId,
+        generation: ClipboardGeneration,
+        snapshot: ClipboardSnapshot,
+    },
+    ClipboardPreflighted {
+        request: ClipboardRequestId,
+        generation: ClipboardGeneration,
+        result: Result<Arc<[OperationRoot]>, ClipboardRejection>,
+    },
     FilterProjected {
         request: FilterRequest,
         result: Result<FilterResult, FilterFailure>,

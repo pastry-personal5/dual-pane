@@ -66,7 +66,7 @@ impl Reads {
                         self.live.remove(&(*browser, *tab));
                     }
                 }
-                WorkRequest::ProjectFilter { .. } | WorkRequest::CancelFilter { .. } | WorkRequest::ReadPreview { .. } | WorkRequest::CancelPreview { .. } | WorkRequest::Operation(_) | WorkRequest::WatchLocation { .. } | WorkRequest::UnwatchLocation { .. } | WorkRequest::SetWatchActivity { .. } | WorkRequest::UpdateWatchVisibility { .. } | WorkRequest::WatchReadCompleted { .. } | WorkRequest::SaveSettings { .. } | WorkRequest::SaveSession { .. } | WorkRequest::ProbeScreenshotsFolder { .. } | WorkRequest::ProbeFavoriteTarget { .. } | WorkRequest::LoadSettings | WorkRequest::ResetSettings | WorkRequest::ResolveItem { .. } | WorkRequest::ReopenJournal => {}
+                WorkRequest::PublishClipboard { .. } | WorkRequest::ReadClipboard { .. } | WorkRequest::PreflightClipboard { .. } | WorkRequest::ProjectFilter { .. } | WorkRequest::CancelFilter { .. } | WorkRequest::ReadPreview { .. } | WorkRequest::CancelPreview { .. } | WorkRequest::Operation(_) | WorkRequest::WatchLocation { .. } | WorkRequest::UnwatchLocation { .. } | WorkRequest::SetWatchActivity { .. } | WorkRequest::UpdateWatchVisibility { .. } | WorkRequest::WatchReadCompleted { .. } | WorkRequest::SaveSettings { .. } | WorkRequest::SaveSession { .. } | WorkRequest::ProbeScreenshotsFolder { .. } | WorkRequest::ProbeFavoriteTarget { .. } | WorkRequest::LoadSettings | WorkRequest::ResetSettings | WorkRequest::ResolveItem { .. } | WorkRequest::ReopenJournal => {}
             }
         }
     }

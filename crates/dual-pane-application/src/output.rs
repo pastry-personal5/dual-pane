@@ -1,4 +1,4 @@
-use crate::{ActionId, FavoriteEdit, FavoriteRejection, FavoritesRecords, FilterStatus, Notice, OperationJob, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
+use crate::{ActionId, ClipboardRejection, ClipboardRequestId, FavoriteEdit, FavoriteRejection, FavoritesRecords, FilterStatus, Notice, OperationJob, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, OperationCommand, OperationId, OperationRejection, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
@@ -18,6 +18,10 @@ pub struct RowChange {
 /// folder, a first listing, or a gateway change that does not fit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
+    ClipboardRejected {
+        request: Option<ClipboardRequestId>,
+        reason: ClipboardRejection,
+    },
     PreviewChanged {
         browser: BrowserSide,
         view: PreviewView,

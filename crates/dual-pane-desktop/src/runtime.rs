@@ -7,12 +7,14 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{Event, FavoriteProbeOutcome, FilterFailure, FilterRequest, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes, project_filter};
-use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, ListingErrorKind, Location, OperationId, RequestToken, SortSpec, TabId};
+use dual_pane_application::{ClipboardRejection, Event, FavoriteProbeOutcome, FilterFailure, FilterRequest, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes, project_filter};
+use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryKind, ListingErrorKind, Location, OperationId, OperationRoot, RequestToken, SortSpec, TabId};
 
 use crate::location_probe::resolve_item;
 use crate::location_watcher::WatcherHandle;
+use crate::native_location::path_from_location;
 use crate::operation_lane::{OperationLane, Publisher, Services};
+use crate::operation_scan::{NativeKind, native_kind};
 use crate::preview_reader::read_preview;
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
@@ -256,6 +258,11 @@ enum ProbeJob {
         location: Location,
         event: Box<dyn FnOnce(ResolvedTarget) -> Event + Send>,
     },
+    ClipboardPreflight {
+        request: dual_pane_application::ClipboardRequestId,
+        generation: dual_pane_application::ClipboardGeneration,
+        sources: Arc<[Location]>,
+    },
 }
 
 struct JobState {
@@ -399,6 +406,12 @@ fn install_panic_hook() {
 impl WorkRunner for Runtime {
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
+            WorkRequest::PublishClipboard { request, transfer, .. } => Some(Event::ClipboardPublished { request, transfer, generation: dual_pane_application::ClipboardGeneration::new(0), succeeded: false }),
+            WorkRequest::ReadClipboard { request } => Some(Event::ClipboardRead { request, generation: dual_pane_application::ClipboardGeneration::new(0), snapshot: dual_pane_application::ClipboardSnapshot::Unsupported }),
+            WorkRequest::PreflightClipboard { request, generation, sources } => {
+                let job = ProbeJob::ClipboardPreflight { request, generation, sources };
+                self.probes.try_send(job).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| job.fail())
+            }
             WorkRequest::ProjectFilter { request } => {
                 let index = preview_index(request.browser);
                 if self.filter_lanes.as_ref().is_some_and(|lanes| lanes[index].enqueue(request.clone())) { None } else { Some(Event::FilterProjected { request, result: Err(FilterFailure::WorkerUnavailable) }) }
@@ -571,6 +584,7 @@ impl ProbeJob {
         match self {
             Self::Probe { event, .. } => event(FavoriteProbeOutcome::Failed),
             Self::Resolve { event, .. } => event(ResolvedTarget::Unavailable),
+            Self::ClipboardPreflight { request, generation, .. } => Event::ClipboardPreflighted { request, generation, result: Err(ClipboardRejection::SourceUnavailable) },
         }
     }
 }
@@ -582,9 +596,34 @@ fn run_probes(jobs: Receiver<ProbeJob>, probe: LocationProbe, delivery: Delivery
         let event = match job {
             ProbeJob::Probe { location, event } => event(catch_unwind(AssertUnwindSafe(|| probe(&location))).unwrap_or(FavoriteProbeOutcome::Failed)),
             ProbeJob::Resolve { location, event } => event(catch_unwind(AssertUnwindSafe(|| resolve_item(&location))).unwrap_or(ResolvedTarget::Unavailable)),
+            ProbeJob::ClipboardPreflight { request, generation, sources } => {
+                let result = catch_unwind(AssertUnwindSafe(|| preflight_clipboard(&sources))).unwrap_or(Err(ClipboardRejection::SourceUnavailable));
+                Event::ClipboardPreflighted { request, generation, result }
+            }
         };
         deliver_event(&delivery, event);
     }
+}
+
+fn preflight_clipboard(sources: &[Location]) -> Result<Arc<[OperationRoot]>, ClipboardRejection> {
+    let mut seen = std::collections::HashSet::new();
+    if sources.is_empty() || sources.iter().any(|source| source.is_root() || !seen.insert(source)) {
+        return Err(ClipboardRejection::MalformedExternalContent);
+    }
+    sources
+        .iter()
+        .map(|source| {
+            let metadata = std::fs::symlink_metadata(path_from_location(source)).map_err(|_| ClipboardRejection::SourceUnavailable)?;
+            let kind = match native_kind(metadata.file_type()) {
+                NativeKind::Directory => EntryKind::Directory,
+                NativeKind::File => EntryKind::File,
+                NativeKind::Symlink => EntryKind::Symlink { points_to_directory: false },
+                NativeKind::Other => return Err(ClipboardRejection::UnsupportedContent),
+            };
+            Ok(OperationRoot { source: source.clone(), kind })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Arc::from)
 }
 
 impl Drop for Runtime {
@@ -685,7 +724,7 @@ fn wake(delivery: &Delivery) {
 fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
         Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
-        Event::FilterProjected { .. } | Event::PreviewFinished { .. } | Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
+        Event::ClipboardPublished { .. } | Event::ClipboardChanged { .. } | Event::ClipboardRead { .. } | Event::ClipboardPreflighted { .. } | Event::FilterProjected { .. } | Event::PreviewFinished { .. } | Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }
 
@@ -888,6 +927,27 @@ mod tests {
         assert_eq!(probe.next_call(), (location("alpha"), Some("listing-worker".to_owned())));
         probe.wait_for_wake();
         assert_eq!(runner.take_events(8), (vec![Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), entries: Arc::from([]), changes: None }], false));
+    }
+
+    #[test]
+    fn clipboard_preflight_runs_off_thread_and_does_not_follow_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("file");
+        let link = directory.path().join("link");
+        std::fs::write(&file, b"data").unwrap();
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        let sources: Arc<[Location]> = vec![crate::native_location::location_from_path(&file).unwrap(), crate::native_location::location_from_path(&link).unwrap()].into();
+        let request = dual_pane_application::ClipboardRequestId::new(4);
+        let generation = dual_pane_application::ClipboardGeneration::new(8);
+        let (mut runner, probe) = start_probe("blocked");
+        assert_eq!(runner.dispatch(WorkRequest::PreflightClipboard { request, generation, sources: Arc::clone(&sources) }), None);
+        probe.wait_for_wake();
+        let (events, _) = runner.take_events(8);
+        let [Event::ClipboardPreflighted { request: found, generation: found_generation, result: Ok(roots) }] = events.as_slice() else { panic!("{events:?}") };
+        assert_eq!((*found, *found_generation), (request, generation));
+        assert_eq!(roots[0].kind, EntryKind::File);
+        assert_eq!(roots[1].kind, EntryKind::Symlink { points_to_directory: false });
+        assert_eq!(roots.iter().map(|root| &root.source).collect::<Vec<_>>(), sources.iter().collect::<Vec<_>>());
     }
 
     #[test]

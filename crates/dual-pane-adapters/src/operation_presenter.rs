@@ -85,10 +85,10 @@ fn quoted(name: &EntryName) -> String {
 
 /// The targets as a phrase: one quoted name, or a count.
 fn subject(intent: &OperationIntent) -> String {
-    match (intent.kind(), intent.targets()) {
+    match (intent.kind(), intent.roots()) {
         (OperationKind::NewFolder { name }, _) => quoted(name),
-        (_, [only]) => quoted(&only.name),
-        (_, targets) => format!("{} items", targets.len()),
+        (_, [only]) => quoted(only.source.components().last().expect("operation roots have names")),
+        (_, roots) => format!("{} items", roots.len()),
     }
 }
 

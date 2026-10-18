@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::{FilterRequest, OperationEffect, PreviewRequest, SettingsSnapshot, VisibilityPolicy, WorkspaceSnapshot};
-use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, TabId};
+use crate::{ClipboardAction, ClipboardGeneration, ClipboardRequestId, FilterRequest, OperationEffect, PreviewRequest, SettingsSnapshot, TransferId, VisibilityPolicy, WorkspaceSnapshot};
+use dual_pane_domain::{BrowserSide, Entry, Location, OperationRoot, RequestToken, SortSpec, TabId};
 
 /// Outside work the reducer needs, carried out by a runtime off the GUI thread.
 ///
@@ -16,6 +16,22 @@ use dual_pane_domain::{BrowserSide, Entry, Location, RequestToken, SortSpec, Tab
 /// `ReopenJournal` retries opening the operation safety journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRequest {
+    PublishClipboard {
+        request: ClipboardRequestId,
+        transfer: TransferId,
+        action: ClipboardAction,
+        /// Finder-compatible source identities for Copy. Cut publishes only
+        /// the private transfer reference.
+        finder_roots: Option<Arc<[OperationRoot]>>,
+    },
+    ReadClipboard {
+        request: ClipboardRequestId,
+    },
+    PreflightClipboard {
+        request: ClipboardRequestId,
+        generation: ClipboardGeneration,
+        sources: Arc<[Location]>,
+    },
     ProjectFilter {
         request: FilterRequest,
     },

@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::clipboard::CapturedTransfer;
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
-use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
+use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, ClipboardAction, ClipboardGeneration, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
+use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationRoot, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
 pub const NOTICE_LIMIT: usize = 200;
@@ -62,6 +63,15 @@ pub struct Workspace {
     operations: OperationCoordinator,
     /// The Browser and tab each running job started from.
     operation_origins: HashMap<OperationId, (BrowserSide, TabId)>,
+    transfers: HashMap<TransferId, CapturedTransfer>,
+    current_transfer: Option<(TransferId, ClipboardGeneration)>,
+    pending_publications: HashMap<ClipboardRequestId, TransferId>,
+    latest_publication: Option<ClipboardRequestId>,
+    pending_paste: Option<PendingPaste>,
+    cut_operations: HashMap<OperationId, TransferId>,
+    clipboard_generation: Option<ClipboardGeneration>,
+    next_clipboard_request: u64,
+    next_transfer: u64,
     /// Whether the runtime can record temporaries, which Copy needs. It
     /// counts as available until the runtime reports otherwise.
     journal_available: bool,
@@ -115,6 +125,15 @@ struct PendingSelection {
     tab: TabId,
     folder: Location,
     name: EntryName,
+}
+#[derive(Debug)]
+struct PendingPaste {
+    request: ClipboardRequestId,
+    browser: BrowserSide,
+    tab: TabId,
+    destination: Location,
+    generation: Option<ClipboardGeneration>,
+    external_sources: Option<Arc<[Location]>>,
 }
 /// One Browser: the domain's ordered tab identities and active tab, plus the
 /// application's per-tab state, which is stored in no particular order.
@@ -183,13 +202,15 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, next_clipboard_request: 0, next_transfer: 0, journal_available: true, pending_selection: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
         let mut transition = match input {
             Input::Command(command) => {
-                if command.visible_target().is_some_and(|(browser, tab)| self.tab(browser, tab).is_some_and(|state| !state.filter_text.is_empty())) {
+                if matches!(command, Command::CaptureClipboard { .. }) {
+                    Transition::output(Output::ClipboardRejected { request: None, reason: ClipboardRejection::StaleObservation })
+                } else if command.visible_target().is_some_and(|(browser, tab)| self.tab(browser, tab).is_some_and(|state| !state.filter_text.is_empty())) {
                     Transition::default()
                 } else {
                     self.command(command)
@@ -198,6 +219,8 @@ impl Workspace {
             Input::ObservedCommand { command, browser, tab, visible_revision } => {
                 if command.visible_target() == Some((browser, tab)) && self.valid_observation(browser, tab, visible_revision) {
                     self.command(command)
+                } else if matches!(command, Command::CaptureClipboard { .. }) {
+                    Transition::output(Output::ClipboardRejected { request: None, reason: ClipboardRejection::StaleObservation })
                 } else {
                     Transition::default()
                 }
@@ -217,6 +240,8 @@ impl Workspace {
     }
     fn command(&mut self, command: Command) -> Transition {
         match command {
+            Command::CaptureClipboard { browser, tab, action } => self.capture_clipboard(browser, tab, action),
+            Command::PasteClipboard { browser, tab } => self.paste_clipboard(browser, tab),
             Command::SetFilterText { browser, tab, text } => self.set_filter_text(browser, tab, text),
             Command::StartOperation { browser, tab, kind } => self.start_operation(browser, tab, kind),
             Command::RequestNameEditor { browser, tab, command } => self.request_name_editor(browser, tab, command),
@@ -267,6 +292,10 @@ impl Workspace {
     }
     fn event(&mut self, event: Event) -> Transition {
         match event {
+            Event::ClipboardPublished { request, transfer, generation, succeeded } => self.clipboard_published(request, transfer, generation, succeeded),
+            Event::ClipboardChanged { generation } => self.clipboard_changed(generation),
+            Event::ClipboardRead { request, generation, snapshot } => self.clipboard_read(request, generation, snapshot),
+            Event::ClipboardPreflighted { request, generation, result } => self.clipboard_preflighted(request, generation, result),
             Event::FilterProjected { request, result } => self.filter_projected(request, result),
             Event::PreviewFinished { request, result } => self.preview_finished(request, result),
             Event::OperationScanned { id, generation, plan } => self.operation_transition(id, |operations| operations.scanned(id, generation, plan)),
@@ -359,6 +388,202 @@ impl Workspace {
     }
     pub fn operation_jobs(&self) -> &[OperationJob] {
         self.operations.jobs()
+    }
+    pub fn clipboard_capture_availability(&self, browser: BrowserSide, tab: TabId) -> Result<(), ClipboardRejection> {
+        self.clipboard_roots(browser, tab).map(|_| ())
+    }
+    pub fn paste_availability(&self, browser: BrowserSide, tab: TabId) -> Result<(), ClipboardRejection> {
+        self.paste_destination(browser, tab).map(|_| ())
+    }
+    fn clipboard_roots(&self, browser: BrowserSide, tab: TabId) -> Result<Arc<[OperationRoot]>, ClipboardRejection> {
+        if self.active_tab(browser) != tab {
+            return Err(ClipboardRejection::StaleTab);
+        }
+        let state = self.tab(browser, tab).ok_or(ClipboardRejection::StaleTab)?;
+        if state.pending.is_some() || state.error.is_some() || state.filter_status != FilterStatus::Ready {
+            return Err(ClipboardRejection::SourceUnavailable);
+        }
+        let items = state.folder_items.as_ref().ok_or(ClipboardRejection::SourceUnavailable)?;
+        let selected = state.history.current().map(|visit| visit.state().selection().entries()).unwrap_or(&[]);
+        if selected.is_empty() {
+            return Err(ClipboardRejection::NoSelection);
+        }
+        let selected_names = selected.iter().collect::<HashSet<_>>();
+        if selected_names.len() != selected.len() {
+            return Err(ClipboardRejection::StaleObservation);
+        }
+        let roots = state.visible_entries().iter().filter(|entry| selected_names.contains(entry.name())).map(|entry| OperationRoot { source: items.location.join(entry.name()), kind: entry.kind() }).collect::<Vec<_>>();
+        if roots.len() != selected.len() {
+            return Err(ClipboardRejection::StaleObservation);
+        }
+        Ok(roots.into())
+    }
+    fn paste_destination(&self, browser: BrowserSide, tab: TabId) -> Result<Location, ClipboardRejection> {
+        if self.active_browser != browser || self.active_tab(browser) != tab {
+            return Err(ClipboardRejection::StaleTab);
+        }
+        let state = self.tab(browser, tab).ok_or(ClipboardRejection::StaleTab)?;
+        if state.pending.is_some() || state.error.is_some() || state.filter_status != FilterStatus::Ready {
+            return Err(ClipboardRejection::DestinationUnavailable);
+        }
+        state.folder_items.as_ref().map(|items| items.location.clone()).ok_or(ClipboardRejection::DestinationUnavailable)
+    }
+    fn next_clipboard_request(&mut self) -> ClipboardRequestId {
+        self.next_clipboard_request = self.next_clipboard_request.wrapping_add(1);
+        ClipboardRequestId::new(self.next_clipboard_request)
+    }
+    fn discard_transfer_if_unused(&mut self, transfer: TransferId) {
+        let current = self.current_transfer.is_some_and(|current| current.0 == transfer);
+        let publishing = self.pending_publications.values().any(|pending| *pending == transfer);
+        let running_cut = self.cut_operations.values().any(|running| *running == transfer);
+        if !current && !publishing && !running_cut {
+            self.transfers.remove(&transfer);
+        }
+    }
+    fn discard_pending_publications(&mut self) {
+        let transfers = self.pending_publications.drain().map(|(_, transfer)| transfer).collect::<Vec<_>>();
+        self.latest_publication = None;
+        for transfer in transfers {
+            self.discard_transfer_if_unused(transfer);
+        }
+    }
+    fn capture_clipboard(&mut self, browser: BrowserSide, tab: TabId, action: ClipboardAction) -> Transition {
+        let roots = match self.clipboard_roots(browser, tab) {
+            Ok(roots) => roots,
+            Err(reason) => return Transition::output(Output::ClipboardRejected { request: None, reason }),
+        };
+        // Only the newest publication may become current. Its work request
+        // owns the payload it needs, so superseded captured state can go now.
+        self.discard_pending_publications();
+        self.next_transfer = self.next_transfer.wrapping_add(1);
+        let transfer = TransferId::new(self.next_transfer);
+        let request = self.next_clipboard_request();
+        self.transfers.insert(transfer, CapturedTransfer { action, roots: Arc::clone(&roots), reserved: false });
+        self.pending_publications.insert(request, transfer);
+        self.latest_publication = Some(request);
+        let finder_roots = (action == ClipboardAction::Copy).then_some(roots);
+        Transition { outputs: vec![], work: vec![WorkRequest::PublishClipboard { request, transfer, action, finder_roots }] }
+    }
+    fn clipboard_published(&mut self, request: ClipboardRequestId, transfer: TransferId, generation: ClipboardGeneration, succeeded: bool) -> Transition {
+        let Some(expected) = self.pending_publications.remove(&request) else { return Transition::default() };
+        let is_latest = self.latest_publication == Some(request);
+        if is_latest {
+            self.latest_publication = None;
+        }
+        if expected != transfer || !is_latest {
+            self.discard_transfer_if_unused(expected);
+            return Transition::default();
+        }
+        if !succeeded {
+            self.discard_transfer_if_unused(transfer);
+            return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::PublicationFailed });
+        }
+        let previous = self.current_transfer.replace((transfer, generation));
+        self.clipboard_generation = Some(generation);
+        if let Some((previous, _)) = previous {
+            self.discard_transfer_if_unused(previous);
+        }
+        Transition::default()
+    }
+    fn clipboard_changed(&mut self, generation: ClipboardGeneration) -> Transition {
+        if self.clipboard_generation == Some(generation) {
+            return Transition::default();
+        }
+        self.clipboard_generation = Some(generation);
+        let previous = self.current_transfer.take();
+        self.pending_paste = None;
+        self.discard_pending_publications();
+        if let Some((previous, _)) = previous {
+            self.discard_transfer_if_unused(previous);
+        }
+        Transition::default()
+    }
+    fn paste_clipboard(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
+        let destination = match self.paste_destination(browser, tab) {
+            Ok(destination) => destination,
+            Err(reason) => return Transition::output(Output::ClipboardRejected { request: None, reason }),
+        };
+        let request = self.next_clipboard_request();
+        self.pending_paste = Some(PendingPaste { request, browser, tab, destination, generation: None, external_sources: None });
+        Transition { outputs: vec![], work: vec![WorkRequest::ReadClipboard { request }] }
+    }
+    fn clipboard_read(&mut self, request: ClipboardRequestId, generation: ClipboardGeneration, snapshot: ClipboardSnapshot) -> Transition {
+        let Some(pending) = self.pending_paste.as_mut().filter(|pending| pending.request == request) else { return Transition::default() };
+        if self.clipboard_generation.is_some_and(|current| current != generation) {
+            self.pending_paste = None;
+            return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::ClipboardReplaced });
+        }
+        self.clipboard_generation = Some(generation);
+        pending.generation = Some(generation);
+        match snapshot {
+            ClipboardSnapshot::Private { transfer } => self.start_private_paste(request, transfer, generation),
+            ClipboardSnapshot::ExternalFiles { sources } => {
+                let mut seen = HashSet::new();
+                if sources.is_empty() || sources.iter().any(|source| source.is_root()) {
+                    self.pending_paste = None;
+                    return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::MalformedExternalContent });
+                }
+                if sources.iter().any(|source| !seen.insert(source)) {
+                    self.pending_paste = None;
+                    return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::DuplicateSource });
+                }
+                pending.external_sources = Some(Arc::clone(&sources));
+                Transition { outputs: vec![], work: vec![WorkRequest::PreflightClipboard { request, generation, sources }] }
+            }
+            ClipboardSnapshot::Unsupported => {
+                self.pending_paste = None;
+                Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::UnsupportedContent })
+            }
+        }
+    }
+    fn start_private_paste(&mut self, request: ClipboardRequestId, transfer: TransferId, generation: ClipboardGeneration) -> Transition {
+        let Some(pending) = self.pending_paste.take().filter(|pending| pending.request == request && pending.generation == Some(generation)) else { return Transition::default() };
+        if self.current_transfer != Some((transfer, generation)) {
+            return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::UnknownPrivateTransfer });
+        }
+        let Some(captured) = self.transfers.get(&transfer) else {
+            return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::UnknownPrivateTransfer });
+        };
+        if captured.reserved {
+            return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::TransferReserved });
+        }
+        let kind = match captured.action {
+            ClipboardAction::Copy => OperationKind::Copy,
+            ClipboardAction::Cut => OperationKind::Move,
+        };
+        self.start_clipboard_operation(pending, Some(transfer), kind, captured.roots.to_vec())
+    }
+    fn clipboard_preflighted(&mut self, request: ClipboardRequestId, generation: ClipboardGeneration, result: Result<Arc<[OperationRoot]>, ClipboardRejection>) -> Transition {
+        let Some(pending) = self.pending_paste.take().filter(|pending| pending.request == request && pending.generation == Some(generation)) else { return Transition::default() };
+        if self.clipboard_generation != Some(generation) {
+            return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::ClipboardReplaced });
+        }
+        let roots = match result {
+            Ok(roots) if pending.external_sources.as_deref().is_some_and(|sources| sources.len() == roots.len() && sources.iter().zip(roots.iter()).all(|(source, root)| source == &root.source) && roots.iter().all(|root| root.kind != EntryKind::Other)) => roots,
+            Ok(_) => return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::SourceChanged }),
+            Err(reason) => return Transition::output(Output::ClipboardRejected { request: Some(request), reason }),
+        };
+        self.start_clipboard_operation(pending, None, OperationKind::Copy, roots.to_vec())
+    }
+    fn start_clipboard_operation(&mut self, pending: PendingPaste, transfer: Option<TransferId>, kind: OperationKind, roots: Vec<OperationRoot>) -> Transition {
+        let request = pending.request;
+        let intent = match OperationIntent::transfer(kind, roots, pending.destination) {
+            Ok(intent) => intent,
+            Err(reason) => return Transition::output(Output::ClipboardRejected { request: Some(request), reason: clipboard_operation_rejection(reason) }),
+        };
+        if matches!(intent.kind(), OperationKind::Copy) && !self.journal_available {
+            return Transition::output(Output::ClipboardRejected { request: Some(request), reason: ClipboardRejection::JournalUnavailable });
+        }
+        let (id, effects) = self.operations.start(intent);
+        self.operation_origins.insert(id, (pending.browser, pending.tab));
+        if let Some(transfer) = transfer
+            && let Some(captured) = self.transfers.get_mut(&transfer)
+            && captured.action == ClipboardAction::Cut
+        {
+            captured.reserved = true;
+            self.cut_operations.insert(id, transfer);
+        }
+        self.operation_output(id, effects)
     }
     /// The same validation drives command enablement and command acceptance.
     pub fn operation_availability(&self, browser: BrowserSide, tab: TabId, kind: OperationKind) -> Result<OperationIntent, OperationRejection> {
@@ -485,6 +710,12 @@ impl Workspace {
     }
     fn operation_finished(&mut self, id: OperationId, before: &OperationStatus, outcome: OperationOutcome) -> Transition {
         let origin = self.operation_origins.remove(&id);
+        if let Some(transfer) = self.cut_operations.remove(&id) {
+            self.transfers.remove(&transfer);
+            if self.current_transfer.is_some_and(|current| current.0 == transfer) {
+                self.current_transfer = None;
+            }
+        }
         // A pending confirmation or a refused name closes without having
         // changed anything, so it leaves no summary.
         if matches!(before, OperationStatus::AwaitingConfirmation { .. } | OperationStatus::NameCollision { .. } | OperationStatus::NameRejected { .. }) {
@@ -512,16 +743,16 @@ impl Workspace {
     /// its source or destination roots.
     fn refresh_affected(&mut self, intent: &OperationIntent) -> Transition {
         let source = intent.source();
-        let mut folders = vec![source.clone()];
+        let mut folders = intent.roots().iter().filter_map(|root| root.source.parent()).collect::<Vec<_>>();
         folders.extend(intent.destination().cloned());
         let mut roots = match intent.kind() {
             OperationKind::NewFolder { name } => vec![source.join(name)],
             OperationKind::Rename { to } => vec![source.join(to)],
             _ => vec![],
         };
-        for target in intent.targets() {
-            roots.push(source.join(&target.name));
-            roots.extend(intent.destination().map(|destination| destination.join(&target.name)));
+        for root in intent.roots() {
+            roots.push(root.source.clone());
+            roots.extend(intent.destination_for(&root.source));
         }
         let affected = |location: &Location| folders.contains(location) || roots.iter().any(|root| starts_with(location, root));
         let targets = [BrowserSide::Left, BrowserSide::Right].into_iter().flat_map(|side| self.browser(side).tabs.iter().filter(|tab| tab.pending.as_ref().map(|pending| &pending.location).or(tab.folder_items.as_ref().map(|items| &items.location)).is_some_and(affected)).map(move |tab| (side, tab.id))).collect::<Vec<_>>();
@@ -1829,6 +2060,21 @@ impl Workspace {
         let selection = if tab.folder_items.is_some() { visit.map_or_else(Selection::default, |visit| visit.selection().clone()) } else { Selection::default() };
         let row = if tab.folder_items.is_some() { visit.and_then(|visit| visit.cursor_row(&entries)) } else { None };
         Output::TabViewChanged { browser, tab: id, location, selection, row, scroll_hint: if tab.folder_items.is_some() { visit.and_then(|visit| visit.scroll().cloned()) } else { None }, entries, loading: tab.pending.is_some(), error: tab.error.clone(), filter_text: tab.filter_text.clone(), filter_status: tab.filter_status, total_count: tab.folder_items.as_ref().map_or(0, |items| items.entries.len()), visible_revision: tab.visible_revision }
+    }
+}
+
+fn clipboard_operation_rejection(reason: OperationRejection) -> ClipboardRejection {
+    match reason {
+        OperationRejection::SameSourceAndDestination => ClipboardRejection::SameSourceAndDestination,
+        OperationRejection::DestinationWithinSource => ClipboardRejection::DestinationWithinSource,
+        OperationRejection::DestinationUnavailable | OperationRejection::DestinationRequired => ClipboardRejection::DestinationUnavailable,
+        OperationRejection::SourceUnavailable => ClipboardRejection::SourceUnavailable,
+        OperationRejection::DuplicateTarget => ClipboardRejection::DuplicateSource,
+        OperationRejection::JournalUnavailable => ClipboardRejection::JournalUnavailable,
+        OperationRejection::StaleTab => ClipboardRejection::StaleTab,
+        OperationRejection::NoTargets => ClipboardRejection::NoSelection,
+        OperationRejection::StaleSelection => ClipboardRejection::StaleObservation,
+        OperationRejection::InvalidTargetCount | OperationRejection::InvalidName | OperationRejection::UnchangedName | OperationRejection::DestinationNotAllowed => ClipboardRejection::MalformedExternalContent,
     }
 }
 impl BrowserState {

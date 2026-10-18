@@ -112,11 +112,11 @@ pub struct OperationLane {
 /// roots of a move, Trash, or deletion.
 fn write_scopes(intent: &OperationIntent) -> Arc<[Location]> {
     let source = intent.source();
-    let roots = intent.targets().iter().map(|target| source.join(&target.name));
-    let destination = |name| intent.destination().map(|destination: &Location| destination.join(name));
+    let roots = intent.roots().iter().map(|root| root.source.clone());
+    let destinations = || intent.roots().iter().filter_map(|root| intent.destination_for(&root.source));
     match intent.kind() {
-        OperationKind::Copy => intent.targets().iter().filter_map(|target| destination(&target.name)).collect(),
-        OperationKind::Move => roots.chain(intent.targets().iter().filter_map(|target| destination(&target.name))).collect(),
+        OperationKind::Copy => destinations().collect(),
+        OperationKind::Move => roots.chain(destinations()).collect(),
         OperationKind::Rename { to } => roots.chain([source.join(to)]).collect(),
         OperationKind::NewFolder { name } => [source.join(name)].into(),
         OperationKind::MoveToTrash | OperationKind::DeletePermanently => roots.collect(),

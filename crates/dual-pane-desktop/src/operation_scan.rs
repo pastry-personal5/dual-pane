@@ -106,20 +106,17 @@ struct Scanner<'a> {
 /// Returns `None` once cancelled.
 pub fn scan(intent: &OperationIntent, skipped: &[ScanSkip], launch: LaunchId, cancelled: &AtomicBool) -> Option<Result<ScannedPlan, ScanFailure>> {
     let mut scanner = Scanner { intent, skipped, launch, cancelled, plan: Vec::new(), identities: Vec::new() };
-    let roots: Vec<(Location, EntryKind)> = match intent.kind() {
-        OperationKind::NewFolder { name } => vec![(intent.source().join(name), EntryKind::Directory)],
-        _ => intent.targets().iter().map(|target| (intent.source().join(&target.name), target.kind)).collect(),
-    };
+    let roots = intent.roots().iter().map(|root| (root.source.clone(), root.kind)).collect::<Vec<_>>();
     let recursive = matches!(intent.kind(), OperationKind::Copy | OperationKind::Move | OperationKind::DeletePermanently);
     for (root, kind) in roots {
         if cancelled.load(Ordering::Relaxed) {
             return None;
         }
-        if scanner.placeholder(&root) {
+        if scanner.placeholder(&root, &root) {
             continue;
         }
         if matches!(intent.kind(), OperationKind::NewFolder { .. }) {
-            scanner.push(root, kind, None);
+            scanner.push(root.clone(), &root, kind, None);
             continue;
         }
         let metadata = match fs::symlink_metadata(path_from_location(&root)) {
@@ -130,9 +127,9 @@ pub fn scan(intent: &OperationIntent, skipped: &[ScanSkip], launch: LaunchId, ca
         if identity.kind != kind_class(kind) {
             return Some(Err(ScanFailure { failure: OperationFailure { item: root, kind: OperationErrorKind::ChangedSinceScan }, entry_kind: kind }));
         }
-        scanner.push(root.clone(), kind, Some(identity));
+        scanner.push(root.clone(), &root, kind, Some(identity));
         if recursive && kind == EntryKind::Directory {
-            match scanner.walk(&root)? {
+            match scanner.walk(&root, &root)? {
                 Ok(()) => {}
                 Err(failure) => return Some(Err(failure)),
             }
@@ -142,27 +139,30 @@ pub fn scan(intent: &OperationIntent, skipped: &[ScanSkip], launch: LaunchId, ca
 }
 
 impl Scanner<'_> {
-    fn destination(&self, source: &Location) -> Option<Location> {
+    fn destination(&self, source: &Location, root: &Location) -> Option<Location> {
         match self.intent.kind() {
-            OperationKind::Copy | OperationKind::Move => self.intent.destination().map(|destination| Location::from_components(destination.components().iter().cloned().chain(source.components()[self.intent.source().components().len()..].iter().cloned()))),
+            OperationKind::Copy | OperationKind::Move => self.intent.destination().and_then(|destination| {
+                let leaf = root.components().last()?;
+                Some(Location::from_components(destination.components().iter().cloned().chain(std::iter::once(leaf.clone())).chain(source.components()[root.components().len()..].iter().cloned())))
+            }),
             OperationKind::Rename { to } => Some(self.intent.source().join(to)),
             _ => None,
         }
     }
-    fn push(&mut self, source: Location, kind: EntryKind, identity: Option<Identity>) {
-        let destination = self.destination(&source);
+    fn push(&mut self, source: Location, root: &Location, kind: EntryKind, identity: Option<Identity>) {
+        let destination = self.destination(&source, root);
         self.plan.push(PlannedItem { source, destination, kind });
         self.identities.push(identity);
     }
     /// Adds the placeholder for a skipped `location`, if it is one.
-    fn placeholder(&mut self, location: &Location) -> bool {
+    fn placeholder(&mut self, location: &Location, root: &Location) -> bool {
         let Some(skip) = self.skipped.iter().find(|skip| skip.item == *location) else { return false };
-        self.push(location.clone(), skip.kind, None);
+        self.push(location.clone(), root, skip.kind, None);
         true
     }
     /// Adds every entry below `folder` in sorted byte order. A skipped item
     /// keeps its place even if it has disappeared, so the plan stays valid.
-    fn walk(&mut self, folder: &Location) -> Option<Result<(), ScanFailure>> {
+    fn walk(&mut self, folder: &Location, root: &Location) -> Option<Result<(), ScanFailure>> {
         let entries = match fs::read_dir(path_from_location(folder)) {
             Ok(entries) => entries,
             Err(error) => return Some(Err(ScanFailure { failure: OperationFailure { item: folder.clone(), kind: error_kind(&error) }, entry_kind: EntryKind::Directory })),
@@ -188,7 +188,7 @@ impl Scanner<'_> {
             }
             let Ok(name) = EntryName::new(bytes) else { continue };
             let child = folder.join(&name);
-            if self.placeholder(&child) {
+            if self.placeholder(&child, root) {
                 continue;
             }
             let path = path_from_location(&child);
@@ -205,9 +205,9 @@ impl Scanner<'_> {
                 NativeKind::Symlink => EntryKind::Symlink { points_to_directory: fs::metadata(&path).is_ok_and(|target| target.is_dir()) },
                 NativeKind::Other => EntryKind::Other,
             };
-            self.push(child.clone(), kind, Some(identity));
+            self.push(child.clone(), root, kind, Some(identity));
             if kind == EntryKind::Directory {
-                match self.walk(&child)? {
+                match self.walk(&child, root)? {
                     Ok(()) => {}
                     Err(failure) => return Some(Err(failure)),
                 }
@@ -223,7 +223,7 @@ mod tests {
     use std::path::Path;
 
     use dual_pane_application::{Command, Event, OperationEffect, WorkRequest, Workspace};
-    use dual_pane_domain::{BrowserSide, Entry, OperationTarget};
+    use dual_pane_domain::{BrowserSide, Entry, OperationRoot, OperationTarget};
 
     use super::*;
     use crate::native_location::location_from_path;
@@ -370,5 +370,23 @@ mod tests {
         assert_eq!(kind(libc::EROFS), OperationErrorKind::ReadOnly);
         assert_eq!(kind(libc::ENOTEMPTY), OperationErrorKind::FolderNotEmpty);
         assert_eq!(kind(libc::EIO), OperationErrorKind::Other);
+    }
+
+    #[test]
+    fn mixed_parent_roots_keep_their_leaf_names_and_relative_descendants() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first/a");
+        let second = directory.path().join("second/b");
+        let destination = directory.path().join("destination");
+        fs::create_dir_all(first.join("inside")).unwrap();
+        fs::create_dir_all(second.parent().unwrap()).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(&second, b"b").unwrap();
+        fs::write(first.join("inside/file"), b"a").unwrap();
+        let intent = OperationIntent::transfer(OperationKind::Copy, vec![OperationRoot { source: location(&first), kind: EntryKind::Directory }, OperationRoot { source: location(&second), kind: EntryKind::File }], location(&destination)).unwrap();
+        let scanned = scan(&intent, &[], launch(), &AtomicBool::new(false)).unwrap().unwrap();
+        assert_eq!(scanned.plan[0].destination, Some(location(&destination.join("a"))));
+        assert_eq!(scanned.plan[2].destination, Some(location(&destination.join("a/inside/file"))));
+        assert_eq!(scanned.plan[3].destination, Some(location(&destination.join("b"))));
     }
 }

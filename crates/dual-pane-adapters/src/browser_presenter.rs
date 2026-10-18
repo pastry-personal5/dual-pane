@@ -570,7 +570,7 @@ impl BrowserPresenter {
     pub fn apply(&mut self, output: &Output) {
         let output_browser = match output {
             Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
-            Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
+            Output::ClipboardRejected { .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
             return;

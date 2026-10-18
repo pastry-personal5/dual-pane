@@ -69,12 +69,21 @@ pub struct OperationTarget {
     pub kind: EntryKind,
 }
 
+/// One frozen top-level source of a transfer. Its byte-exact location is the
+/// identity; the kind is revalidated without following links before work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationRoot {
+    pub source: Location,
+    pub kind: EntryKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationIntent {
     kind: OperationKind,
     source: Location,
     targets: Vec<OperationTarget>,
     destination: Option<Location>,
+    roots: Vec<OperationRoot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +116,37 @@ impl OperationIntent {
                 return Err(OperationRejection::UnchangedName);
             }
         }
-        Ok(Self { kind, source, targets, destination })
+        let roots = match &kind {
+            OperationKind::NewFolder { name } => vec![OperationRoot { source: source.join(name), kind: EntryKind::Directory }],
+            _ => targets.iter().map(|target| OperationRoot { source: source.join(&target.name), kind: target.kind }).collect(),
+        };
+        Ok(Self { kind, source, targets, destination, roots })
+    }
+    /// Creates one Copy or Move from arbitrary frozen roots, including roots
+    /// that do not share a parent. Clipboard order is retained.
+    pub fn transfer(kind: OperationKind, roots: Vec<OperationRoot>, destination: Location) -> Result<Self, OperationRejection> {
+        if !matches!(kind, OperationKind::Copy | OperationKind::Move) {
+            return Err(OperationRejection::DestinationNotAllowed);
+        }
+        if roots.is_empty() {
+            return Err(OperationRejection::NoTargets);
+        }
+        let mut seen = HashSet::new();
+        if roots.iter().any(|root| !seen.insert(&root.source)) {
+            return Err(OperationRejection::DuplicateTarget);
+        }
+        if roots.iter().enumerate().any(|(index, root)| roots.iter().skip(index + 1).any(|other| starts_with(&root.source, &other.source) || starts_with(&other.source, &root.source))) {
+            return Err(OperationRejection::DuplicateTarget);
+        }
+        if roots.iter().any(|root| root.source.parent().as_ref() == Some(&destination)) {
+            return Err(OperationRejection::SameSourceAndDestination);
+        }
+        if roots.iter().any(|root| root.kind == EntryKind::Directory && starts_with(&destination, &root.source)) {
+            return Err(OperationRejection::DestinationWithinSource);
+        }
+        let source = roots[0].source.parent().ok_or(OperationRejection::SourceUnavailable)?;
+        let targets = roots.iter().map(|root| Ok(OperationTarget { name: root.source.components().last().cloned().ok_or(OperationRejection::SourceUnavailable)?, kind: root.kind })).collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { kind, source, targets, destination: Some(destination), roots })
     }
     /// The checks that do not depend on a proposed name, so a file command's
     /// availability is known before a name is typed. [`Self::new`] applies
@@ -149,6 +188,17 @@ impl OperationIntent {
     }
     pub fn destination(&self) -> Option<&Location> {
         self.destination.as_ref()
+    }
+    pub fn roots(&self) -> &[OperationRoot] {
+        &self.roots
+    }
+    /// Maps a source item to its destination using the owning top-level root.
+    pub fn destination_for(&self, source: &Location) -> Option<Location> {
+        let destination = self.destination.as_ref()?;
+        let root = self.roots.iter().find(|root| starts_with(source, &root.source))?;
+        let relative = &source.components()[root.source.components().len()..];
+        let leaf = root.source.components().last()?;
+        Some(Location::from_components(destination.components().iter().cloned().chain(std::iter::once(leaf.clone())).chain(relative.iter().cloned())))
     }
 }
 

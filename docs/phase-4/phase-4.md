@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, and safe drag and drop.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed the P4-M1 decision milestone and the Qt-free filtering model in P4-M2; P4-M3 is active. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, and the clipboard-transfer model in P4-M4; P4-M3 remains active. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -61,7 +61,7 @@ Plan: [overview](milestone-03-overview.md), [architecture](milestone-03-architec
 
 ### P4-M4: Model clipboard transfer safely
 
-Status: Planned
+Status: Done
 Goal: Turn Copy, Cut, and Paste intents into validated, frozen requests for the existing file-operation workflow.
 Plan: [overview](milestone-04-overview.md), [architecture](milestone-04-architecture.md)
 

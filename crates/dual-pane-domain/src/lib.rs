@@ -21,7 +21,7 @@ pub use entry::{Activation, Entry, EntryKind, EntryMetadata, ListingSortKey, ent
 pub use favorites::{FavoriteError, FavoriteGroup, FavoriteGroupId, FavoriteItem, FavoriteItemId, Favorites, valid_favorite_name};
 pub use listing_error::{ListingError, ListingErrorKind};
 pub use location::{EntryName, InvalidEntryName, Location};
-pub use operation::{DecisionToken, OperationChoice, OperationCommand, OperationId, OperationIntent, OperationIssue, OperationKind, OperationRejection, OperationTarget, starts_with};
+pub use operation::{DecisionToken, OperationChoice, OperationCommand, OperationId, OperationIntent, OperationIssue, OperationKind, OperationRejection, OperationRoot, OperationTarget, starts_with};
 pub use request_token::RequestToken;
 pub use selection::Selection;
 pub use sort_spec::{SortDirection, SortField, SortSpec};

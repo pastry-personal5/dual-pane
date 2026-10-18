@@ -353,7 +353,7 @@ impl OperationCoordinator {
         self.next_id += 1;
         let id = OperationId::new(self.next_id);
         let confirmation = matches!(intent.kind(), OperationKind::DeletePermanently);
-        let status = if confirmation { OperationStatus::AwaitingConfirmation { targets: intent.targets().len() } } else { OperationStatus::Scanning };
+        let status = if confirmation { OperationStatus::AwaitingConfirmation { targets: intent.roots().len() } } else { OperationStatus::Scanning };
         let effects = if confirmation { vec![] } else { vec![OperationEffect::Scan { id, generation: 1, intent: intent.clone(), skipped: Arc::from([]) }] };
         self.jobs.push(OperationJob { id, intent, status, generation: if confirmation { 0 } else { 1 }, plan: None, progress: OperationProgress::default(), failure: None, scan_skips: vec![], scan_skip_positions: Arc::from([]), all_conflicts: None, auto_attempted: None, issued_choice: None, decision_skips: vec![], finalization: None, finalize_skipped: 0, bytes: None, interrupted: None });
         (id, effects)
@@ -704,8 +704,6 @@ fn finalization_list(plan: &[PlannedItem], scan_skips: &[usize], decision_skips:
 
 fn valid_plan(intent: &OperationIntent, skips: &[ScanSkip], plan: &[PlannedItem]) -> bool {
     let roots = intent_roots(intent);
-    let source_depth = intent.source().components().len();
-    let root_indices: HashMap<_, _> = roots.iter().enumerate().map(|(index, (root, _))| (root.components()[source_depth].clone(), index)).collect();
     let skip_kinds: HashMap<_, _> = skips.iter().map(|skip| (&skip.item, skip.kind)).collect();
     if skip_kinds.len() != skips.len() {
         return false;
@@ -732,7 +730,7 @@ fn valid_plan(intent: &OperationIntent, skips: &[ScanSkip], plan: &[PlannedItem]
         if seen.insert(item.source.clone(), item.kind).is_some() {
             return false;
         }
-        let Some(root_index) = item.source.components().get(source_depth).and_then(|name| root_indices.get(name)).copied() else { return false };
+        let Some(root_index) = roots.iter().position(|(root, _)| starts_with(&item.source, root)) else { return false };
         let (root, kind) = &roots[root_index];
         if !starts_with(&item.source, root) {
             return false;
@@ -752,7 +750,7 @@ fn valid_plan(intent: &OperationIntent, skips: &[ScanSkip], plan: &[PlannedItem]
             }
         }
         let destination = match intent.kind() {
-            OperationKind::Copy | OperationKind::Move => intent.destination().map(|dest| Location::from_components(dest.components().iter().cloned().chain(item.source.components()[intent.source().components().len()..].iter().cloned()))),
+            OperationKind::Copy | OperationKind::Move => intent.destination_for(&item.source),
             OperationKind::Rename { to } => Some(intent.source().join(to)),
             _ => None,
         };
@@ -765,8 +763,5 @@ fn valid_plan(intent: &OperationIntent, skips: &[ScanSkip], plan: &[PlannedItem]
 }
 
 fn intent_roots(intent: &OperationIntent) -> Vec<(Location, EntryKind)> {
-    match intent.kind() {
-        OperationKind::NewFolder { name } => vec![(intent.source().join(name), EntryKind::Directory)],
-        _ => intent.targets().iter().map(|target| (intent.source().join(&target.name), target.kind)).collect(),
-    }
+    intent.roots().iter().map(|root| (root.source.clone(), root.kind)).collect()
 }
