@@ -6,6 +6,21 @@ Chronological record of planning, owner decisions, and design changes for Phase 
 
 ## Entries
 
+- 2026-10-18 — P4-M6 plan review — Expanded the P4-M6 plans and decided no owner-visible behavior. The overview now lists twelve proposed owner decisions for interview, each with a recommendation:
+  - failed-submission ownership
+  - feedback placement
+  - editing entry
+  - focus after success and after failure
+  - tab switches during a check
+  - links and `..`
+  - file and package targets
+  - special text
+  - non-UTF-8 folders
+  - pending and cancel behavior
+  - `Command+L` inside other text fields
+
+  Today a failed navigation sets a tab error that disables Copy, Cut, Paste, and file commands, so proposal 1 recommends checking a path before the tab navigates. APFS lookups ignore Unicode normalization, and on default volumes letter case too, so the architecture resolves each component to its stored name without replacing link names. Otherwise a typed path would split sort memory, history, operation refresh, and the pending-Cut cue from the row-reached folder. Resolution runs on the Browser's read lanes, because a stall on the serial probe lane would block link activation, Favorite probes, and Finder Paste preflight. The checklist adds the `EditPath` catalogue work, guards that keep confirmed-path updates from overwriting a draft, path-editor coverage in `scripts/check-text-editor-focus.sh`, a definition of cancellation, and a note that APFS refuses non-UTF-8 fixture names. The milestone list in `phase-4.md` now names P4-M3 as active, and the UX GUI path-entry link now points to P4-M6 and P4-M8.
+
 - 2026-10-18 — P4-M5 second review — Focus separation now has automated evidence: the offscreen `scripts/check-text-editor-focus.sh` delivers Command+C, Command+X, Command+V, and Command+A through Qt's shortcut map to the real Folder Items Lists, filter row, and name editors. It verifies that a focused list receives Copy, Cut, and Paste Items while a focused text field keeps text editing, without touching the system clipboard. Any focused text field now disables the workspace's other shortcuts, replacing the per-editor opt-in property. A clipboard replacement observed while a Paste reads or preflights now reports “The clipboard changed before Paste was ready.” in the pasting Browser instead of dropping the Paste without feedback; a replacement with nothing pending stays silent. The pending-Cut cue matches rows through a parent-folder index, so a Browser update no longer builds a path for every row. `scripts/lint-cpp.sh` now holds the pasteboard adapter to the configured clang-tidy checks, and native tests also reject dot segments in file URLs. The P4-M5 architecture doc is marked Done.
 
 - 2026-10-18 — P4-M5 review fix — The clipboard adapter now refuses a file URL with an encoded slash (`%2F`) instead of reading it as a path separator, since no file name contains a slash and the URL would name a different path. A native adapter test covers it; `make check` passes.

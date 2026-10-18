@@ -39,7 +39,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestones run in the order below. P4-M1 and P4-M2 are complete; no feature implementation milestone is active.
+Milestones run in the order below. P4-M1, P4-M2, P4-M4, and P4-M5 are complete; P4-M3 is active.
 
 ### P4-M1: Decide interaction and safety behavior
 
