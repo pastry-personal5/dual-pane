@@ -4468,6 +4468,35 @@ auto run_text_editor_focus_checks(QApplication &app) -> int {
         press(Qt::Key_V);
         check(clipboard->text() == QStringLiteral("waiting") && rename->text() == QStringLiteral("waiting") && list_commands == observed, "a read-only rename editor copies and keeps its keys");
 
+        // Composed text: a Folder Items List hands preedit and commit to its
+        // handler unchanged, and the filter field's text, which drives the
+        // query, changes once, on commit only.
+        QString handed_preedit, handed_commit;
+        int handed_events = 0;
+        left->setInputMethodHandler([&](const QString &preedit, const QString &commit, const QList<QInputMethodEvent::Attribute> &) {
+            handed_preedit = preedit;
+            handed_commit = commit;
+            ++handed_events;
+        });
+        check(focus(left), "the Left Folder Items List takes focus for composed text");
+        QInputMethodEvent list_preedit(QStringLiteral("ni"), {});
+        QApplication::sendEvent(left, &list_preedit);
+        QInputMethodEvent list_commit(QString(), {});
+        list_commit.setCommitString(QStringLiteral("你"));
+        QApplication::sendEvent(left, &list_commit);
+        check(handed_events == 2 && handed_commit == QStringLiteral("你") && handed_preedit.isEmpty(), "a Folder Items List hands composed text to its handler");
+        filter->clear();
+        int text_changes = 0;
+        QObject::connect(filter, &QLineEdit::textChanged, filter, [&text_changes] { ++text_changes; });
+        check(focus(filter), "the filter row takes focus for composed text");
+        QInputMethodEvent preedit(QStringLiteral("ni"), {});
+        QApplication::sendEvent(filter, &preedit);
+        check(text_changes == 0 && filter->text().isEmpty(), "composition in the filter field leaves the query unchanged");
+        QInputMethodEvent commit(QString(), {});
+        commit.setCommitString(QStringLiteral("你"));
+        QApplication::sendEvent(filter, &commit);
+        check(text_changes == 1 && filter->text() == QStringLiteral("你"), "committed text changes the query exactly once");
+
         check(focus(filter), "the filter row takes focus again");
         press(Qt::Key_Q);
         check(quits == 1, "Quit stays bound while a text field has focus");
