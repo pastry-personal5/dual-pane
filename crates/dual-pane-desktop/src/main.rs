@@ -2,6 +2,7 @@ mod browser_session;
 mod clipboard_native;
 mod folder_items;
 mod folder_items_list_model;
+mod instance;
 mod launch_target;
 mod location_probe;
 mod location_watcher;
@@ -27,11 +28,11 @@ use dual_pane_domain::Location;
 
 use crate::browser_session::BrowserStartup;
 use crate::folder_items::ListingRules;
-use crate::operation_journal::{LaunchId, is_launch_temporary};
+use crate::operation_journal::{LaunchId, is_reserved_temporary};
 use crate::runtime::{FolderItemsSource, FolderItemsSourceFactory, LocationProbe};
 fn main() -> ExitCode {
-    let target = match env::current_dir().map_err(|error| format!("cannot read the working directory: {error}")).and_then(|cwd| launch_target::parse(env::args_os().skip(1), &cwd, env::var_os("HOME").map(PathBuf::from).as_deref())) {
-        Ok(launch_target::Launch::Run(target)) => target,
+    let (target, new_instance) = match env::current_dir().map_err(|error| format!("cannot read the working directory: {error}")).and_then(|cwd| launch_target::parse(env::args_os().skip(1), &cwd, env::var_os("HOME").map(PathBuf::from).as_deref())) {
+        Ok(launch_target::Launch::Run { target, new_instance }) => (target, new_instance),
         Ok(launch_target::Launch::Help) => {
             println!("{}", launch_target::USAGE);
             return ExitCode::SUCCESS;
@@ -54,16 +55,36 @@ fn main() -> ExitCode {
     };
     #[cfg(not(debug_assertions))]
     let profile = env::var_os("HOME");
+    let receiver = if new_instance {
+        None
+    } else {
+        let identity = match instance::ProfileIdentity::resolve(profile.as_deref().map(Path::new)) {
+            Ok(identity) => identity,
+            Err(error) => {
+                eprintln!("dual-pane: cannot identify the profile: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let request = target.clone().map_or(instance::Request::Raise, instance::Request::Open);
+        match instance::forward_or_claim(identity, request) {
+            Ok(instance::LaunchAction::Forwarded) => return ExitCode::SUCCESS,
+            Ok(instance::LaunchAction::Receiver(receiver)) => Some(receiver),
+            Err(message) => {
+                eprintln!("dual-pane: {message}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
     let home = profile.as_ref().and_then(|path| native_location::location_from_path(Path::new(path))).unwrap_or_else(Location::root);
     let launch = LaunchId::generate();
-    // Listings hide this launch's operation temporaries and mark packages.
+    // Listings hide reserved operation temporaries from every launch and mark packages.
     let source_factory: FolderItemsSourceFactory = Arc::new(move || {
-        let source: FolderItemsSource = Box::new(move |location, sort, visibility, cancelled| folder_items::read_listing(location, sort, visibility, cancelled, &ListingRules { hidden: &|name| is_launch_temporary(name, launch), package: &native_shell::is_bundle, volume_root: &native_calls::is_volume_root, invisible: &native_calls::is_macos_invisible }));
+        let source: FolderItemsSource = Box::new(move |location, sort, visibility, cancelled| folder_items::read_listing(location, sort, visibility, cancelled, &ListingRules { hidden: &is_reserved_temporary, package: &native_shell::is_bundle, volume_root: &native_calls::is_volume_root, invisible: &native_calls::is_macos_invisible }));
         source
     });
     let settings_path = profile.as_ref().map(|path| settings_storage::application_support_database_path(Path::new(path)));
     let location_probe: LocationProbe = Box::new(location_probe::probe_directory);
-    let startup = BrowserStartup { home, settings_path, source_factory, location_probe, launch, target };
+    let startup = BrowserStartup { home, settings_path, source_factory, location_probe, launch, target, receiver };
     let status = workspace_bridge::ffi::run_desktop(Box::new(startup));
 
     u8::try_from(status).map_or(ExitCode::FAILURE, ExitCode::from)

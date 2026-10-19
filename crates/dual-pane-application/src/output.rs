@@ -76,6 +76,11 @@ pub enum Output {
     },
     /// Every operation was told to cancel; the application may exit.
     QuitAccepted,
+    /// Brings the workspace forward. An `Some` Browser also asks its Folder
+    /// Items List to take focus when no modal window owns focus.
+    ActivateWindow {
+        focus_browser: Option<BrowserSide>,
+    },
     /// Emitted once after the first settings answer or the protected timeout;
     /// the desktop applies the supplied layout before revealing the window.
     SessionRestored {

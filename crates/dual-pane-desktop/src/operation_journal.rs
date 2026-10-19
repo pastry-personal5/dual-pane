@@ -4,11 +4,12 @@
 //! file of its own beside the settings database and shares no connection or
 //! transaction with settings.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -64,24 +65,33 @@ pub fn temporary_name(launch: LaunchId, operation: u64, n: u64) -> String {
 }
 
 /// The `<operation>-<n>` part of a temporary name of `launch`, if `name` is one.
-fn temporary_counters<'a>(name: &'a [u8], launch_hex: &str) -> Option<(&'a [u8], &'a [u8])> {
-    let rest = name.strip_prefix(PREFIX.as_bytes())?.strip_prefix(launch_hex.as_bytes())?.strip_prefix(b"-")?.strip_suffix(SUFFIX.as_bytes())?;
-    let dash = rest.iter().position(|byte| *byte == b'-')?;
-    let (operation, n) = (&rest[..dash], &rest[dash + 1..]);
+fn temporary_parts(name: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let rest = name.strip_prefix(PREFIX.as_bytes())?.strip_suffix(SUFFIX.as_bytes())?;
+    let mut parts = rest.split(|byte| *byte == b'-');
+    let (launch, operation, n) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() || launch.len() != 32 || !launch.iter().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)) {
+        return None;
+    }
     let digits = |part: &[u8]| !part.is_empty() && part.iter().all(u8::is_ascii_digit);
-    (digits(operation) && digits(n)).then_some((operation, n))
+    (digits(operation) && digits(n)).then_some((launch, operation, n))
+}
+
+/// Whether `name` uses Dual Pane's exact reserved operation-temporary shape.
+pub fn is_reserved_temporary(name: &[u8]) -> bool {
+    temporary_parts(name).is_some()
 }
 
 /// Whether `name` is a temporary created during `launch`, which listings and
 /// scans never show.
+#[cfg(test)]
 pub fn is_launch_temporary(name: &[u8], launch: LaunchId) -> bool {
-    temporary_counters(name, &launch.hex()).is_some()
+    temporary_parts(name).is_some_and(|(found, _, _)| found == launch.hex().as_bytes())
 }
 
 /// Whether `name` is exactly a temporary of `operation` during the launch
 /// whose identity is `launch_hex`.
 pub fn is_operation_temporary(name: &[u8], launch_hex: &str, operation: u64) -> bool {
-    temporary_counters(name, launch_hex).is_some_and(|(found, _)| found == operation.to_string().as_bytes())
+    temporary_parts(name).is_some_and(|(launch, found, _)| launch == launch_hex.as_bytes() && found == operation.to_string().as_bytes())
 }
 
 /// One recorded folder that may hold an operation's temporaries.
@@ -143,13 +153,14 @@ pub struct Journal {
     path: Option<PathBuf>,
     launch: LaunchId,
     database: Arc<Mutex<Option<SafetyJournal>>>,
+    liveness: Arc<Mutex<Option<File>>>,
 }
 
 impl Journal {
     /// A journal at `path`, opened later by [`Self::reopen`]. `None` means no
     /// user location is known, so the journal stays unavailable.
     pub fn new(path: Option<PathBuf>, launch: LaunchId) -> Self {
-        Self { path, launch, database: Arc::new(Mutex::new(None)) }
+        Self { path, launch, database: Arc::new(Mutex::new(None)), liveness: Arc::new(Mutex::new(None)) }
     }
     pub fn launch(&self) -> LaunchId {
         self.launch
@@ -161,7 +172,15 @@ impl Journal {
     pub fn reopen(&self) -> bool {
         let mut database = self.lock();
         if database.is_none() {
-            *database = self.path.as_deref().and_then(|path| SafetyJournal::open(path).map_err(|error| log_journal_error("open", &error)).ok());
+            let Some(path) = self.path.as_deref() else { return false };
+            let mut liveness = self.liveness.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if liveness.is_none() {
+                *liveness = acquire_liveness(path, &self.launch.hex()).map_err(|error| log_liveness_error("acquire", &error)).ok();
+            }
+            if liveness.is_none() {
+                return false;
+            }
+            *database = SafetyJournal::open(path).map_err(|error| log_journal_error("open", &error)).ok();
         }
         database.is_some()
     }
@@ -193,22 +212,112 @@ impl Journal {
         let database = self.lock();
         let Some(database) = database.as_ref() else { return (0, vec![]) };
         let Ok(records) = database.earlier_records(&self.launch.hex()) else { return (0, vec![]) };
+        let groups = records.into_iter().fold(BTreeMap::<String, Vec<JournalRecord>>::new(), |mut groups, record| {
+            groups.entry(record.launch.clone()).or_default().push(record);
+            groups
+        });
+        let recorded_launches = groups.keys().cloned().collect::<std::collections::BTreeSet<_>>();
+        let Some(journal_path) = self.path.as_deref() else { return (0, vec![]) };
         let mut removed = 0;
         let mut failed = Vec::new();
-        for record in records {
-            match sweep_folder(&record) {
-                SweepOutcome::Done(count) => {
-                    removed += count;
-                    database.remove(&record).ok();
+        for (launch, records) in groups {
+            let lock = match lock_dead_launch(journal_path, &launch) {
+                Ok(Some(lock)) => lock,
+                Ok(None) => continue,
+                Err(_) => {
+                    failed.extend(records.iter().filter_map(|record| location_from_path(&record.folder)));
+                    continue;
                 }
-                SweepOutcome::Unreachable => {}
-                SweepOutcome::Failed(count) => {
-                    removed += count;
-                    failed.extend(location_from_path(&record.folder));
+            };
+            let mut group_complete = true;
+            for record in &records {
+                match sweep_folder(record) {
+                    SweepOutcome::Done(count) => {
+                        removed += count;
+                        if database.remove(record).is_err() {
+                            group_complete = false;
+                        }
+                    }
+                    SweepOutcome::Unreachable => group_complete = false,
+                    SweepOutcome::Failed(count) => {
+                        removed += count;
+                        group_complete = false;
+                        failed.extend(location_from_path(&record.folder));
+                    }
                 }
             }
+            if group_complete {
+                let path = liveness_path(journal_path, &launch);
+                if let Err(error) = fs::remove_file(&path)
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    log_liveness_error("remove", &error);
+                }
+            }
+            drop(lock);
         }
+        prune_orphan_liveness(journal_path, &self.launch.hex(), &recorded_launches);
         (removed, failed)
+    }
+}
+
+fn liveness_path(journal: &Path, launch: &str) -> PathBuf {
+    journal.with_file_name(format!("launch-{launch}.lock"))
+}
+
+fn validated_lock_file(path: &Path, create: bool) -> io::Result<File> {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && !metadata.file_type().is_file()
+    {
+        return Err(io::Error::other("liveness path is not a regular file"));
+    }
+    let file = OpenOptions::new().read(true).write(true).create(create).mode(0o600).open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::other("liveness path is not a regular file"));
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
+fn acquire_liveness(journal: &Path, launch: &str) -> io::Result<File> {
+    let path = liveness_path(journal, launch);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = validated_lock_file(&path, true)?;
+    file.try_lock().map_err(io::Error::from)?;
+    Ok(file)
+}
+
+/// Returns a held lock when `launch` is dead, `None` while it is live, and an
+/// error when its liveness cannot be established safely.
+fn lock_dead_launch(journal: &Path, launch: &str) -> io::Result<Option<File>> {
+    if launch.len() != 32 || !launch.as_bytes().iter().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)) {
+        return Err(io::Error::other("invalid launch identity"));
+    }
+    let file = validated_lock_file(&liveness_path(journal, launch), false)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(error)) => Err(error),
+    }
+}
+
+fn prune_orphan_liveness(journal: &Path, current: &str, recorded: &std::collections::BTreeSet<String>) {
+    let Some(parent) = journal.parent() else { return };
+    let Ok(entries) = fs::read_dir(parent) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let bytes = name.as_bytes();
+        let Some(launch) = bytes.strip_prefix(b"launch-").and_then(|bytes| bytes.strip_suffix(b".lock")).and_then(|bytes| std::str::from_utf8(bytes).ok()) else { continue };
+        if launch == current || recorded.contains(launch) {
+            continue;
+        }
+        if let Ok(Some(lock)) = lock_dead_launch(journal, launch) {
+            let _ = fs::remove_file(entry.path());
+            drop(lock);
+        }
     }
 }
 
@@ -272,6 +381,10 @@ fn log_journal_error(action: &str, error: &rusqlite::Error) {
     eprintln!("Dual Pane safety journal {action} failed: {error}");
 }
 
+fn log_liveness_error(action: &str, error: &io::Error) {
+    eprintln!("Dual Pane safety journal liveness {action} failed: {error}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,12 +399,15 @@ mod tests {
         let name = temporary_name(current, 7, 3);
         assert_eq!(name, format!(".dual-pane-{}-7-3.partial", "ab".repeat(16)));
         assert!(is_launch_temporary(name.as_bytes(), current));
+        assert!(is_reserved_temporary(name.as_bytes()));
         assert!(!is_launch_temporary(name.as_bytes(), launch(1)));
         assert!(is_operation_temporary(name.as_bytes(), &current.hex(), 7));
         assert!(!is_operation_temporary(name.as_bytes(), &current.hex(), 70));
         for near in [format!(".dual-pane-{}-7-.partial", current.hex()), format!(".dual-pane-{}-7-3.partial.txt", current.hex()), format!(".dual-pane-{}-7-3", current.hex()), format!("x.dual-pane-{}-7-3.partial", current.hex()), format!(".dual-pane-{}-7-a.partial", current.hex())] {
             assert!(!is_launch_temporary(near.as_bytes(), current), "{near}");
+            assert!(!is_reserved_temporary(near.as_bytes()), "{near}");
         }
+        assert!(!is_reserved_temporary(format!(".dual-pane-{}-7-3.partial", "AB".repeat(16)).as_bytes()));
     }
 
     #[test]
@@ -349,6 +465,88 @@ mod tests {
     }
 
     #[test]
+    fn a_live_launch_is_skipped_until_its_lock_is_released() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(JOURNAL_FILE_NAME);
+        let folder = directory.path().join("target");
+        fs::create_dir(&folder).unwrap();
+        let earlier = Journal::new(Some(path.clone()), launch(1));
+        assert!(earlier.reopen());
+        earlier.record(7, &folder, fs::metadata(&folder).unwrap().dev()).unwrap();
+        let temporary = folder.join(temporary_name(launch(1), 7, 0));
+        fs::write(&temporary, b"live").unwrap();
+
+        let current = Journal::new(Some(path), launch(2));
+        assert!(current.reopen());
+        assert_eq!(current.sweep(), (0, vec![]));
+        assert!(temporary.exists());
+        drop(earlier);
+        assert_eq!(current.sweep(), (1, vec![]));
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn a_record_without_a_trustworthy_liveness_file_is_retained() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(JOURNAL_FILE_NAME);
+        let folder = directory.path().join("target");
+        fs::create_dir(&folder).unwrap();
+        SafetyJournal::open(&path).unwrap().record(&JournalRecord { launch: launch(1).hex(), operation: 4, folder: folder.clone(), device: fs::metadata(&folder).unwrap().dev() }).unwrap();
+        let temporary = folder.join(temporary_name(launch(1), 4, 0));
+        fs::write(&temporary, b"unknown").unwrap();
+        let current = Journal::new(Some(path.clone()), launch(2));
+        assert!(current.reopen());
+        assert_eq!(current.sweep(), (0, vec![location_from_path(&folder).unwrap()]));
+        assert!(temporary.exists());
+        assert_eq!(SafetyJournal::open(&path).unwrap().earlier_records(&launch(2).hex()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn malformed_symlinked_and_unreadable_liveness_paths_are_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let journal = directory.path().join(JOURNAL_FILE_NAME);
+        let launch = launch(1).hex();
+        let path = liveness_path(&journal, &launch);
+
+        fs::create_dir(&path).unwrap();
+        assert!(lock_dead_launch(&journal, &launch).is_err());
+        fs::remove_dir(&path).unwrap();
+
+        let target = directory.path().join("target");
+        fs::write(&target, b"").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(lock_dead_launch(&journal, &launch).is_err());
+        fs::remove_file(&path).unwrap();
+
+        fs::write(&path, b"").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = lock_dead_launch(&journal, &launch);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        if OpenOptions::new().read(true).write(true).open(&path).is_err() {
+            assert!(unreadable.is_err());
+        }
+
+        assert!(lock_dead_launch(&journal, "not-a-launch-id").is_err());
+    }
+
+    #[test]
+    fn an_unlocked_liveness_file_without_records_is_pruned() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(JOURNAL_FILE_NAME);
+        let earlier = Journal::new(Some(path.clone()), launch(1));
+        assert!(earlier.reopen());
+        let orphan = liveness_path(&path, &launch(1).hex());
+        assert!(orphan.exists());
+        drop(earlier);
+        let current = Journal::new(Some(path), launch(2));
+        assert!(current.reopen());
+        assert_eq!(current.sweep(), (0, vec![]));
+        assert!(!orphan.exists());
+    }
+
+    #[test]
     fn a_folder_whose_leftovers_cannot_be_removed_is_reported_and_kept() {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
@@ -390,8 +588,8 @@ mod tests {
         assert!(journal.reopen());
         journal.record(6, &folder, fs::metadata(&folder).unwrap().dev()).unwrap();
         fs::write(folder.join(temporary_name(launch(1), 6, 0)), b"partial").unwrap();
-        // A crash: the process ends without clearing or closing cleanly.
-        std::mem::forget(journal);
+        // A crash releases the kernel lock but leaves both durable files.
+        drop(journal);
         let next = Journal::new(Some(path), launch(2));
         assert!(next.reopen());
         assert_eq!(next.sweep(), (1, vec![]));

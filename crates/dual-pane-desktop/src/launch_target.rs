@@ -9,10 +9,11 @@ use dual_pane_domain::{EntryName, Location};
 
 use crate::native_location::location_from_path;
 
-pub const USAGE: &str = "Usage: dual-pane [FOLDER | FILE]\n\nOpens FOLDER in the left Browser, or the folder containing FILE with FILE selected.";
+pub const USAGE: &str = "Usage: dual-pane [--new-instance] [FOLDER | FILE]\n\nOpens FOLDER in Dual Pane, or the folder containing FILE with FILE selected.\nWithout --new-instance, a running instance for the same profile is reused.";
 
-/// A folder for the Left Browser and, for a file argument, the Item to select.
-#[derive(Debug, PartialEq, Eq)]
+/// A folder for the application-selected Browser and, for a file argument,
+/// the Item to select.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchTarget {
     pub folder: Location,
     pub select: Option<EntryName>,
@@ -20,7 +21,7 @@ pub struct LaunchTarget {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Launch {
-    Run(Option<LaunchTarget>),
+    Run { target: Option<LaunchTarget>, new_instance: bool },
     Help,
 }
 
@@ -29,17 +30,20 @@ pub enum Launch {
 pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path, home: Option<&Path>) -> Result<Launch, String> {
     let mut paths = Vec::new();
     let mut options_ended = false;
+    let mut new_instance = false;
     for arg in args {
         match arg.to_str() {
             Some("--help" | "-h") if !options_ended => return Ok(Launch::Help),
+            Some("--new-instance") if !options_ended && !new_instance => new_instance = true,
+            Some("--new-instance") if !options_ended => return Err(format!("option --new-instance was given more than once\n{USAGE}")),
             Some("--") if !options_ended => options_ended = true,
             _ if !options_ended && arg.as_bytes().first() == Some(&b'-') => return Err(format!("unknown option {}\n{USAGE}", arg.to_string_lossy())),
             _ => paths.push(arg),
         }
     }
     match paths.as_slice() {
-        [] => Ok(Launch::Run(None)),
-        [path] => resolve(path, cwd, home).map(|target| Launch::Run(Some(target))),
+        [] => Ok(Launch::Run { target: None, new_instance }),
+        [path] => resolve(path, cwd, home).map(|target| Launch::Run { target: Some(target), new_instance }),
         _ => Err(format!("expected at most one path, got {}\n{USAGE}", paths.len())),
     }
 }
@@ -89,7 +93,7 @@ mod tests {
     #[test]
     fn no_arguments_run_normally_and_help_prints_usage() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(parse(args(&[]), dir.path(), None), Ok(Launch::Run(None)));
+        assert_eq!(parse(args(&[]), dir.path(), None), Ok(Launch::Run { target: None, new_instance: false }));
         assert_eq!(parse(args(&["--help"]), dir.path(), None), Ok(Launch::Help));
         assert_eq!(parse(args(&["-h", "ignored"]), dir.path(), None), Ok(Launch::Help));
     }
@@ -99,7 +103,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("a/b")).unwrap();
         let parsed = parse(args(&["a/../a/b"]), dir.path(), None).unwrap();
-        assert_eq!(parsed, Launch::Run(Some(LaunchTarget { folder: canonical_location(&dir.path().join("a/b")), select: None })));
+        assert_eq!(parsed, Launch::Run { target: Some(LaunchTarget { folder: canonical_location(&dir.path().join("a/b")), select: None }), new_instance: false });
     }
 
     #[test]
@@ -107,7 +111,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("note.txt"), b"x").unwrap();
         let parsed = parse(args(&["./note.txt"]), dir.path(), None).unwrap();
-        assert_eq!(parsed, Launch::Run(Some(LaunchTarget { folder: canonical_location(dir.path()), select: Some(name("note.txt")) })));
+        assert_eq!(parsed, Launch::Run { target: Some(LaunchTarget { folder: canonical_location(dir.path()), select: Some(name("note.txt")) }), new_instance: false });
     }
 
     #[test]
@@ -115,7 +119,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("real"), b"x").unwrap();
         std::os::unix::fs::symlink("real", dir.path().join("link")).unwrap();
-        let Launch::Run(Some(target)) = parse(args(&["link"]), dir.path(), None).unwrap() else { panic!("target") };
+        let Launch::Run { target: Some(target), .. } = parse(args(&["link"]), dir.path(), None).unwrap() else { panic!("target") };
         assert_eq!(target.select, Some(name("link")));
     }
 
@@ -124,7 +128,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         fs::create_dir(home.path().join("docs")).unwrap();
         let cwd = tempfile::tempdir().unwrap();
-        let expected = |sub: &str| Launch::Run(Some(LaunchTarget { folder: canonical_location(&home.path().join(sub)), select: None }));
+        let expected = |sub: &str| Launch::Run { target: Some(LaunchTarget { folder: canonical_location(&home.path().join(sub)), select: None }), new_instance: false };
         assert_eq!(parse(args(&["~"]), cwd.path(), Some(home.path())), Ok(expected("")));
         assert_eq!(parse(args(&["~/docs"]), cwd.path(), Some(home.path())), Ok(expected("docs")));
         assert!(parse(args(&["~"]), cwd.path(), None).unwrap_err().contains("HOME"));
@@ -148,7 +152,16 @@ mod tests {
     fn a_dash_prefixed_name_opens_after_the_option_terminator() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("-odd")).unwrap();
-        assert!(matches!(parse(args(&["--", "-odd"]), dir.path(), None), Ok(Launch::Run(Some(_)))));
+        assert!(matches!(parse(args(&["--", "-odd"]), dir.path(), None), Ok(Launch::Run { target: Some(_), .. })));
+    }
+
+    #[test]
+    fn new_instance_is_an_option_and_may_precede_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("folder")).unwrap();
+        assert!(matches!(parse(args(&["--new-instance"]), dir.path(), None), Ok(Launch::Run { target: None, new_instance: true })));
+        assert!(matches!(parse(args(&["--new-instance", "folder"]), dir.path(), None), Ok(Launch::Run { target: Some(_), new_instance: true })));
+        assert!(parse(args(&["--new-instance", "--new-instance"]), dir.path(), None).is_err());
     }
 
     #[cfg(unix)]

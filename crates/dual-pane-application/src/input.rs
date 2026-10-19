@@ -84,7 +84,8 @@ pub enum Command {
     ActivateBrowser {
         browser: BrowserSide,
     },
-    /// Shows `folder` in the Left Browser as requested on the command line,
+    /// Shows `folder` in an existing tab in either Browser, preferring the
+    /// active Browser, or opens it in the active Browser,
     /// with `select` selected when it names a file inside it. An open tab on
     /// the folder is activated instead of duplicated. It waits for the
     /// session restore at launch and applies once.
@@ -92,6 +93,8 @@ pub enum Command {
         folder: Location,
         select: Option<EntryName>,
     },
+    /// Brings the existing workspace window forward without changing tabs.
+    RaiseWindow,
     ActivateTab {
         browser: BrowserSide,
         tab: TabId,

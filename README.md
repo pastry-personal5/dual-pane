@@ -60,19 +60,21 @@ make run
 
 ```sh
 dual-pane              # open normally
-dual-pane <folder>     # show the folder in the left Browser
+dual-pane <folder>     # show the folder in the running workspace
 dual-pane <file>       # show the file's folder with the file selected
+dual-pane --new-instance [<folder> | <file>]  # start an independent window
 ```
 
-The path may be relative or start with `~`. A missing or unreadable path, or more than one path, prints an error and exits without opening a window.
+The path may be relative or start with `~`. By default, a launch reuses the running instance for the same profile: an existing tab on the folder is activated in either Browser, or the active Browser opens it, and the workspace comes forward. A launch without a path only brings the running workspace forward. `--new-instance` bypasses forwarding. A missing or unreadable path, or more than one path, prints an error and exits without opening a window.
 
 ## Development
 
 ```sh
 make check
+scripts/check-single-instance.sh
 ```
 
-`make fmt`, `make fmt-check`, `make lint-rust`, `make lint-cpp`, and `make test` expose each part of the gate. Rustfmt has a practical unlimited width (`max_width = 1000000`); clang-format has no column limit (`ColumnLimit: 0`); neither linter applies a line-length diagnostic.
+`make fmt`, `make fmt-check`, `make lint-rust`, `make lint-cpp`, and `make test` expose each part of the gate. The single-instance check launches isolated offscreen processes and profiles. Rustfmt has a practical unlimited width (`max_width = 1000000`); clang-format has no column limit (`ColumnLimit: 0`); neither linter applies a line-length diagnostic.
 
 The contributor and coding-agent guidelines are in [AGENTS.md](AGENTS.md). Design docs, the development process (phases and milestones), and plans are in [docs/](docs/README.md).
 

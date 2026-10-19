@@ -36,8 +36,10 @@ pub struct BrowserStartup {
     pub location_probe: LocationProbe,
     /// This launch's identity, carried by every operation temporary.
     pub launch: LaunchId,
-    /// The folder or file named on the command line, shown in the Left Browser.
+    /// The folder or file named on the command line.
     pub target: Option<crate::launch_target::LaunchTarget>,
+    /// The per-profile receiver, absent for `--new-instance`.
+    pub receiver: Option<crate::instance::Receiver>,
 }
 
 /// Opens an item with its default application on the GUI thread and reports
@@ -63,6 +65,7 @@ pub struct WorkspaceSession<R = Runtime> {
     /// The latest native layout request emitted by the application. A nested
     /// option distinguishes no new output from a request for default layout.
     layout_request: Option<Option<WindowLayout>>,
+    activation_requests: VecDeque<Option<BrowserSide>>,
 }
 
 impl<R: WorkRunner> WorkspaceSession<R> {
@@ -81,7 +84,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             worker.submit(SettingsJob::Load);
         }
         let missing_worker = settings_worker.is_none();
-        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), layout_request: None };
+        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), layout_request: None, activation_requests: VecDeque::new() };
         session.apply_chrome();
         if missing_worker {
             // Unit-test sessions intentionally use the legacy no-store event
@@ -159,6 +162,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                 match output {
                     Output::SessionRestored { layout, .. } => self.layout_request = Some(*layout),
                     Output::LayoutReset => self.layout_request = Some(None),
+                    Output::ActivateWindow { focus_browser } => self.activation_requests.push_back(*focus_browser),
                     _ => {}
                 }
                 // Opening is a GUI-thread request; a refusal returns as an event.
@@ -198,6 +202,16 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     /// Returns one pending layout request for the native shell.
     pub fn take_layout_request(&mut self) -> Option<Option<WindowLayout>> {
         self.layout_request.take()
+    }
+
+    /// Returns one request to bring the workspace forward. `Some(None)` is
+    /// raise-only; a Browser asks for its Folder Items List to take focus.
+    pub fn take_activation_request(&mut self) -> Option<Option<BrowserSide>> {
+        self.activation_requests.pop_front()
+    }
+
+    pub fn is_quitting(&self) -> bool {
+        self.workspace.is_quitting()
     }
 
     /// How long until the Operation Panels next need a tick.

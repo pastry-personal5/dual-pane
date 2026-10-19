@@ -1,7 +1,7 @@
 # Phase 4: Everyday File Workflows
 
 Status: Active
-Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, and safe drag and drop.
+Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, and command-line entry into the running workspace.
 
 Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, the clipboard-transfer model in P4-M4, and clipboard delivery in P4-M5; P4-M3 remains active. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
@@ -16,6 +16,7 @@ The intended feature set is:
 - Enter a folder path in the existing Path Edit Control and navigate through the ordinary tab history and error behavior.
 - Click an ancestor component of the confirmed absolute path to navigate the active tab. Expand the control vertically to browse available folder options in columns, then collapse it without changing the active path.
 - Drag selected Folder Items to supported targets in the workspace, using the same copy/move decisions, progress, cancellation, and data-safety rules as menu or keyboard commands.
+- Open a command-line target in the running instance, reusing an existing tab in either Browser when possible and bringing the workspace forward.
 
 Phase 4 supports file Copy between Dual Pane and Finder in both directions. Finder-sourced Paste into Dual Pane is a Copy through the existing safeguarded operation workflow, never a move of Finder's source. This does not export Cut as a Finder move or support drags to or from Finder. Unsupported or malformed clipboard content, and external drag payloads, must not start a Dual Pane operation.
 
@@ -25,6 +26,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 - Copy in Dual Pane can be pasted into Finder while the clipboard is unchanged, including after Dual Pane quits or relaunches; Finder performs the resulting copy and the source remains intact. Files copied in Finder can be pasted into Dual Pane as a safe Copy with unchanged sources. Paste within Dual Pane initiates safe file operations with a frozen source and destination at command start. Conflicts, progress, cancellation, partial results, and refresh use the existing operation workflow and [data-safety invariants](../architecture.md#44-data-safety-invariants).
 - The Path Edit Control accepts a folder path, navigates when a confirmed breadcrumb component is activated, and expands into a bounded-height column browser for available folders. It gives clear validation and navigation feedback without replacing the last successful Folder Items when navigation fails.
 - Drag and drop uses explicit supported source and target types and a visible copy or move outcome; a rejected or cancelled drop changes no files.
+- A command-line launch forwards one resolved target to the registered instance for that profile, or raises it without changing tabs when no target is given. An explicit new-instance launch remains available, and concurrent instances cannot sweep one another's live operation temporaries.
 - The new controls and commands work by pointer and keyboard where appropriate, have accessible names and feedback, and preserve the existing shortcut editor's conflict rules.
 - All milestone checklists and the full repository gate pass. Native checks use a disposable profile and temporary file data.
 
@@ -39,7 +41,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestones run in the order below. P4-M1, P4-M2, P4-M4, and P4-M5 are complete; P4-M3 is active.
+Milestones run in the order below, except P4-M9, which is independent and may be implemented while P4-M3 is active, ahead of P4-M6 to P4-M8. P4-M1, P4-M2, P4-M4, and P4-M5 are complete; P4-M3 is active.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -88,3 +90,9 @@ Plan: [overview](milestone-07-overview.md), [architecture](milestone-07-architec
 Status: Planned
 Goal: Turn the confirmed path into clickable components and add an expandable, column-based folder navigator inside each Browser.
 Plan: [overview](milestone-08-overview.md), [architecture](milestone-08-architecture.md)
+
+### P4-M9: Single-instance command-line launch
+
+Status: Active
+Goal: Make `dual-pane <folder>` open the folder in the running instance, activating and focusing a tab that already shows it, and bring that window forward.
+Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architecture.md)

@@ -15,7 +15,7 @@ type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 
 /// What a listing leaves out and how it recognizes packages.
 pub struct ListingRules<'a> {
-    /// Names never listed, such as this launch's operation temporaries.
+    /// Names never listed, such as reserved operation temporaries.
     pub hidden: &'a dyn Fn(&[u8]) -> bool,
     /// Whether a folder is a macOS package.
     pub package: &'a dyn Fn(&Path) -> bool,

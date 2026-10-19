@@ -16,6 +16,7 @@ fn main() {
             .cpp_file("cpp/src/quick_look_preview.mm")
             .cpp_file("cpp/src/keyboard_layout.mm")
             .cpp_file("cpp/src/clipboard_adapter.mm")
+            .cpp_file("cpp/src/application_activation.mm")
             .cpp_file("cpp/src/location_watcher.cpp")
             .qt_module("Widgets")
             .cc_builder(|builder| {

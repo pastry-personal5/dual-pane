@@ -2,6 +2,7 @@
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
 #include "dual-pane-desktop/src/operations_bridge.cxxqt.h"
 #include "dual-pane-desktop/src/workspace_bridge.cxxqt.h"
+#include "dual_pane_desktop/application_activation.hpp"
 #include "dual_pane_desktop/clipboard_adapter.hpp"
 #include "dual_pane_desktop/keyboard_layout.hpp"
 #include "dual_pane_desktop/notices_glyph.hpp"
@@ -4699,6 +4700,35 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     const std::array<Browser *, 2> browsers = {left_browser, right_browser};
     const std::array<FolderItemsListModel *, 2> models = {&left_model, &right_model};
     const auto focus_active_list = [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->view()->focusList(); };
+    coordinator.addListener([&bridge, &window, waiting, browsers] {
+        for (int request = bridge.takeActivationRequest(); request != -2; request = bridge.takeActivationRequest()) {
+            QWidget *modal = QApplication::activeModalWidget();
+            QWidget *target = &window;
+            if (modal != nullptr)
+                target = modal;
+            else if (waiting->isVisible())
+                target = waiting;
+            if (target == &window && window.isMinimized()) {
+                window.setWindowState((window.windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+                window.show();
+            } else {
+                target->show();
+            }
+            target->raise();
+            target->activateWindow();
+            QTimer::singleShot(0, &window, [&window, waiting, browsers, request] {
+                if (QApplication::applicationState() != Qt::ApplicationActive)
+                    activate_application();
+                QWidget *current_target = QApplication::activeModalWidget();
+                if (current_target == nullptr)
+                    current_target = waiting->isVisible() ? static_cast<QWidget *>(waiting) : static_cast<QWidget *>(&window);
+                current_target->raise();
+                current_target->activateWindow();
+                if (current_target == &window && request >= 0)
+                    browsers.at(request == 0 ? 0 : 1)->view()->focusList();
+            });
+        }
+    });
     auto *notices = new NoticesWindow(&bridge, &window);
     const auto show_notices = [notices] {
         notices->show();
@@ -5009,6 +5039,10 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         state.scheduler = &scheduler;
     }
     bridge.start(std::move(startup));
+    bool instance_exit_ok = false;
+    const int instance_exit_ms = qEnvironmentVariableIntValue("DUAL_PANE_INTERNAL_INSTANCE_EXIT_MS", &instance_exit_ok);
+    if (instance_exit_ok && instance_exit_ms > 0)
+        QTimer::singleShot(instance_exit_ms, &app, [] { QApplication::quit(); });
     bridge.observeClipboard();
     bridge.setApplicationActive(QApplication::applicationState() == Qt::ApplicationActive);
     waiting_delay.start(150);

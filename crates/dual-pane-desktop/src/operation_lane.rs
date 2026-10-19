@@ -322,21 +322,18 @@ fn respond(services: &Services, state: &mut Option<OperationState>, request: Req
     let Request { id, generation, work } = request;
     let unavailable = || vec![Event::OperationExecutorUnavailable { id, generation }];
     match work {
-        Work::Scan { intent, skipped } => {
-            let launch = services.journal.launch();
-            match scan(&intent, &skipped, launch, cancelled) {
-                None => vec![],
-                Some(Err(failure)) => {
-                    state.get_or_insert_with(|| OperationState::new(id, intent));
-                    vec![Event::OperationScanned { id, generation, plan: Err(failure) }]
-                }
-                Some(Ok(scanned)) => {
-                    let plan = Arc::clone(&scanned.plan);
-                    state.get_or_insert_with(|| OperationState::new(id, intent)).scanned(scanned);
-                    vec![Event::OperationScanned { id, generation, plan: Ok(plan) }]
-                }
+        Work::Scan { intent, skipped } => match scan(&intent, &skipped, cancelled) {
+            None => vec![],
+            Some(Err(failure)) => {
+                state.get_or_insert_with(|| OperationState::new(id, intent));
+                vec![Event::OperationScanned { id, generation, plan: Err(failure) }]
             }
-        }
+            Some(Ok(scanned)) => {
+                let plan = Arc::clone(&scanned.plan);
+                state.get_or_insert_with(|| OperationState::new(id, intent)).scanned(scanned);
+                vec![Event::OperationScanned { id, generation, plan: Ok(plan) }]
+            }
+        },
         Work::Execute { plan, at, choice, progress: accepted } => {
             let Some(operation) = state.as_mut() else { return unavailable() };
             let mut events = Vec::new();

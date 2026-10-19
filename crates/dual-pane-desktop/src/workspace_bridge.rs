@@ -2,8 +2,10 @@
 //! Notices, effective shortcuts, and the active Browser. It also owns the one
 //! session that both Browser models share.
 
+use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
@@ -12,6 +14,7 @@ use dual_pane_application::{ActionId, Command, Key, Shortcut, ShortcutRejection,
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
+use crate::instance::{PendingRequest, Reply, Request, Server};
 use crate::launch_target::LaunchTarget;
 use crate::operation_journal::{Journal, journal_path};
 use crate::operation_lane::{STEP_BUDGET, Services};
@@ -96,6 +99,9 @@ pub mod ffi {
         fn start(self: Pin<&mut WorkspaceBridge>, startup: Box<BrowserStartup>);
         fn drain(self: Pin<&mut WorkspaceBridge>) -> bool;
         fn refresh(self: Pin<&mut WorkspaceBridge>);
+        /// -2: none, -1: raise only, 0: focus Left, 1: focus Right.
+        #[cxx_name = "takeActivationRequest"]
+        fn take_activation_request(self: Pin<&mut WorkspaceBridge>) -> i32;
         #[cxx_name = "setRootVolumeName"]
         fn set_root_volume_name(self: Pin<&mut WorkspaceBridge>, name: &QString);
 
@@ -208,6 +214,10 @@ pub mod ffi {
 /// synchronization; its order comes from the GUI thread's event loop. Each
 /// caller releases it before notifying Qt, which may call back into a binder.
 static SESSION: OnceLock<Mutex<Option<WorkspaceSession>>> = OnceLock::new();
+static INSTANCE_REQUESTS: OnceLock<Mutex<VecDeque<PendingRequest>>> = OnceLock::new();
+static INSTANCE_SERVER: OnceLock<Mutex<Option<Server>>> = OnceLock::new();
+static INSTANCE_STOPPING: AtomicBool = AtomicBool::new(false);
+const INSTANCE_QUEUE_CAPACITY: usize = 16;
 
 /// Runs `action` on the session, if it has started.
 pub(crate) fn with_session<T>(action: impl FnOnce(&mut WorkspaceSession) -> T) -> Option<T> {
@@ -217,10 +227,42 @@ pub(crate) fn with_session<T>(action: impl FnOnce(&mut WorkspaceSession) -> T) -
 /// Ends the session after the Qt event loop has exited: unsaved settings get
 /// a bounded flush, and outstanding reads are cancelled.
 fn shutdown_desktop() {
+    INSTANCE_STOPPING.store(true, Ordering::Release);
+    let pending = INSTANCE_REQUESTS.get_or_init(|| Mutex::new(VecDeque::new())).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).drain(..).collect::<Vec<_>>();
+    for pending in pending {
+        let _ = pending.reply.send(Reply::ShuttingDown);
+    }
+    if let Some(server) = INSTANCE_SERVER.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
+        server.shutdown();
+    }
     let session = SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
     if let Some(session) = session {
         session.shutdown(SHUTDOWN_TIMEOUT);
     }
+}
+
+fn drain_instance_requests() -> bool {
+    let requests = {
+        let mut queue = INSTANCE_REQUESTS.get_or_init(|| Mutex::new(VecDeque::new())).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = queue.len().min(INSTANCE_QUEUE_CAPACITY);
+        let requests = queue.drain(..count).collect::<Vec<_>>();
+        (requests, !queue.is_empty())
+    };
+    for pending in requests.0 {
+        let reply = with_session(|session| {
+            if session.is_quitting() {
+                return Reply::ShuttingDown;
+            }
+            match pending.request {
+                Request::Raise => session.submit(Command::RaiseWindow),
+                Request::Open(LaunchTarget { folder, select }) => session.submit(Command::OpenLaunchTarget { folder, select }),
+            }
+            Reply::Accepted
+        })
+        .unwrap_or(Reply::Refused);
+        let _ = pending.reply.send(reply);
+    }
+    requests.1
 }
 
 /// Converts a revision counter to a Qt `int` that changes whenever it does.
@@ -261,7 +303,7 @@ pub struct WorkspaceBridgeRust {
 impl ffi::WorkspaceBridge {
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
-        let BrowserStartup { home, settings_path, source_factory, location_probe, launch, target } = *startup;
+        let BrowserStartup { home, settings_path, source_factory, location_probe, launch, target, receiver } = *startup;
         match Runtime::start(source_factory, location_probe, Box::new(ffi::schedule_gui_drain)) {
             Ok(mut runtime) => {
                 // Without the lane, operations fail closed with a Notice.
@@ -273,6 +315,27 @@ impl ffi::WorkspaceBridge {
                     coordinator.submit(Command::OpenLaunchTarget { folder, select });
                 }
                 *SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(coordinator);
+                if let Some(receiver) = receiver {
+                    let enqueue = Arc::new(|pending: PendingRequest| {
+                        if INSTANCE_STOPPING.load(Ordering::Acquire) {
+                            let _ = pending.reply.send(Reply::ShuttingDown);
+                            return;
+                        }
+                        let mut queue = INSTANCE_REQUESTS.get_or_init(|| Mutex::new(VecDeque::new())).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if queue.len() >= INSTANCE_QUEUE_CAPACITY {
+                            drop(queue);
+                            let _ = pending.reply.send(Reply::Refused);
+                            return;
+                        }
+                        queue.push_back(pending);
+                        drop(queue);
+                        ffi::schedule_gui_drain();
+                    });
+                    match receiver.start(enqueue) {
+                        Ok(server) => *INSTANCE_SERVER.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(server),
+                        Err(error) => eprintln!("Dual Pane instance receiver could not start: {error}"),
+                    }
+                }
                 self.as_mut().session_changed();
             }
             Err(_) => self.set_startup_failure(QString::from(reader_start_failure_status())),
@@ -280,9 +343,18 @@ impl ffi::WorkspaceBridge {
     }
 
     fn drain(mut self: Pin<&mut Self>) -> bool {
-        let more = with_session(WorkspaceSession::drain).unwrap_or(false);
+        let instance_more = drain_instance_requests();
+        let more = with_session(WorkspaceSession::drain).unwrap_or(false) || instance_more;
         self.as_mut().session_changed();
         more
+    }
+
+    fn take_activation_request(self: Pin<&mut Self>) -> i32 {
+        with_session(WorkspaceSession::take_activation_request).flatten().map_or(-2, |browser| match browser {
+            Some(BrowserSide::Left) => 0,
+            Some(BrowserSide::Right) => 1,
+            None => -1,
+        })
     }
 
     fn refresh(mut self: Pin<&mut Self>) {

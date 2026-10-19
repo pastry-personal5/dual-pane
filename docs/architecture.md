@@ -210,6 +210,8 @@ The runtime, not the application, chooses threads, queues, cancellation handles,
 
 Every asynchronous request has a request/version token. The application records the token when issuing work and ignores a result that no longer describes the current tab, location, or operation generation. A blocked network or provider-backed location may delay a worker but cannot overwrite newer state or freeze the UI.
 
+The per-profile command-line receiver is another external-event source. Its Unix-socket worker decodes one bounded request at a time and submits it through a bounded driver-owned queue using the ordinary coalesced GUI wake. Only the GUI/application owner may turn that request into an application command; the socket worker waits for that acceptance without blocking the GUI thread. Shutdown refuses pending requests before the session owner is destroyed. The detailed protocol and election rules are in the [P4-M9 architecture](phase-4/milestone-09-architecture.md).
+
 ### 4.3 File operations and decisions
 
 File operations cross two boundaries: policy decides whether the operation may proceed and which decision is needed; the outer executor performs the actual file-system work safely. The application drives the operation step by step, so no worker ever waits for a person.

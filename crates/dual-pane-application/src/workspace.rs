@@ -212,6 +212,9 @@ impl Workspace {
         let right_id = TabId::new(1);
         Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, journal_available: true, pending_selection: None, launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
+    pub fn is_quitting(&self) -> bool {
+        self.quitting
+    }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::OpenLaunchTarget { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
         let mut transition = match input {
@@ -265,6 +268,7 @@ impl Workspace {
                 self.launch_target = Some(LaunchTarget { folder, select });
                 if self.launch_completed { self.apply_launch_target() } else { Transition::default() }
             }
+            Command::RaiseWindow => Transition::output(Output::ActivateWindow { focus_browser: None }),
             Command::ActivateTab { browser, tab } => self.activate_tab(browser, tab),
             Command::NewTab { browser } => self.new_tab(browser),
             Command::CloseTab { browser, tab } => self.close_tab(browser, tab),
@@ -1073,16 +1077,35 @@ impl Workspace {
         transition.outputs.insert(1, self.tab_view(browser, id));
         Some(transition)
     }
-    /// Shows the command-line target in the Left Browser once the launch
-    /// session exists, and forgets it.
+    fn launch_tab(&self, browser: BrowserSide, folder: &Location) -> Option<TabId> {
+        let state = self.browser(browser);
+        let matches = |tab: &TabState| tab.folder_items.as_ref().is_some_and(|items| &items.location == folder) || tab.requested.as_ref() == Some(folder);
+        state.tabs.iter().find(|tab| tab.id == state.order.active() && matches(tab)).or_else(|| state.tabs.iter().find(|tab| matches(tab))).map(|tab| tab.id)
+    }
+    /// Shows the command-line target once the launch session exists, and
+    /// forgets it. The active Browser and its active tab have preference.
     fn apply_launch_target(&mut self) -> Transition {
         let Some(LaunchTarget { folder, select }) = self.launch_target.take() else { return Transition::default() };
-        let side = BrowserSide::Left;
-        let existing = self.browser(side).tabs.iter().find(|tab| tab.folder_items.as_ref().map(|items| &items.location).or(tab.requested.as_ref()) == Some(&folder)).map(|tab| tab.id);
+        let active = self.active_browser;
+        let other = match active {
+            BrowserSide::Left => BrowserSide::Right,
+            BrowserSide::Right => BrowserSide::Left,
+        };
+        let matched = self.launch_tab(active, &folder).map(|tab| (active, tab)).or_else(|| self.launch_tab(other, &folder).map(|tab| (other, tab)));
+        let side = matched.map_or(active, |(browser, _)| browser);
+        let existing = matched.map(|(_, tab)| tab);
         let mut transition = self.activate_browser(side);
+        let mut redirected = false;
         let tab = match existing {
             Some(tab) => {
                 transition.append(self.activate_tab(side, tab));
+                // A tab may still display this folder while a navigation away
+                // is in flight. Cancel that read so the launch actually lands
+                // on the requested folder.
+                if self.tab(side, tab).and_then(|state| state.pending.as_ref()).is_some_and(|pending| pending.location != folder) {
+                    transition.append(self.start_read(side, tab, folder.clone(), None));
+                    redirected = true;
+                }
                 tab
             }
             None => match self.open_tab_at(side, folder.clone()) {
@@ -1100,10 +1123,11 @@ impl Workspace {
         if let Some(name) = select {
             self.pending_selection = Some(PendingSelection { browser: side, tab, folder: folder.clone(), name });
             // A tab that already shows the folder rereads it so the file is selected as the listing arrives.
-            if existing.is_some() {
+            if existing.is_some() && !redirected {
                 transition.append(self.refresh_tab(side, tab));
             }
         }
+        transition.outputs.push(Output::ActivateWindow { focus_browser: Some(side) });
         transition
     }
     fn close_tab(&mut self, browser: BrowserSide, tab: TabId) -> Transition {

@@ -14,7 +14,7 @@ use dual_pane_application::{OperationErrorKind, OperationFailure, PlannedItem, S
 use dual_pane_domain::{EntryKind, EntryName, Location, OperationIntent, OperationKind};
 
 use crate::native_location::path_from_location;
-use crate::operation_journal::{LaunchId, is_launch_temporary};
+use crate::operation_journal::is_reserved_temporary;
 
 /// What kind of object an entry is, without following links.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,17 +95,16 @@ pub fn error_kind(error: &io::Error) -> OperationErrorKind {
 struct Scanner<'a> {
     intent: &'a OperationIntent,
     skipped: &'a [ScanSkip],
-    launch: LaunchId,
     cancelled: &'a AtomicBool,
     plan: Vec<PlannedItem>,
     identities: Vec<Option<Identity>>,
 }
 
 /// Scans the frozen roots of `intent`. `skipped` items appear as typed
-/// placeholders and are not read. Temporaries of this launch never appear.
+/// placeholders and are not read. Reserved operation temporaries never appear.
 /// Returns `None` once cancelled.
-pub fn scan(intent: &OperationIntent, skipped: &[ScanSkip], launch: LaunchId, cancelled: &AtomicBool) -> Option<Result<ScannedPlan, ScanFailure>> {
-    let mut scanner = Scanner { intent, skipped, launch, cancelled, plan: Vec::new(), identities: Vec::new() };
+pub fn scan(intent: &OperationIntent, skipped: &[ScanSkip], cancelled: &AtomicBool) -> Option<Result<ScannedPlan, ScanFailure>> {
+    let mut scanner = Scanner { intent, skipped, cancelled, plan: Vec::new(), identities: Vec::new() };
     let roots = intent.roots().iter().map(|root| (root.source.clone(), root.kind)).collect::<Vec<_>>();
     let recursive = matches!(intent.kind(), OperationKind::Copy | OperationKind::Move | OperationKind::DeletePermanently);
     for (root, kind) in roots {
@@ -177,7 +176,7 @@ impl Scanner<'_> {
                 Err(error) => return Some(Err(ScanFailure { failure: OperationFailure { item: folder.clone(), kind: error_kind(&error) }, entry_kind: EntryKind::Directory })),
             };
             let bytes = entry.file_name().as_bytes().to_vec();
-            if !is_launch_temporary(&bytes, self.launch) {
+            if !is_reserved_temporary(&bytes) {
                 names.insert(bytes);
             }
         }
@@ -227,11 +226,8 @@ mod tests {
 
     use super::*;
     use crate::native_location::location_from_path;
-    use crate::operation_journal::temporary_name;
+    use crate::operation_journal::{LaunchId, temporary_name};
 
-    fn launch() -> LaunchId {
-        LaunchId::from_bytes([3; 16])
-    }
     fn location(path: &Path) -> Location {
         location_from_path(path).unwrap()
     }
@@ -265,7 +261,7 @@ mod tests {
         let tab = ws.active_tab(BrowserSide::Left);
         let started = ws.handle(Command::StartOperation { browser: BrowserSide::Left, tab, kind }.into());
         let Some(WorkRequest::Operation(OperationEffect::Scan { id, generation, intent, skipped })) = started.work.into_iter().next() else { panic!("a scan") };
-        let scanned = scan(&intent, &skipped, launch(), &AtomicBool::new(false)).unwrap().unwrap();
+        let scanned = scan(&intent, &skipped, &AtomicBool::new(false)).unwrap().unwrap();
         let work = ws.handle(Event::OperationScanned { id, generation, plan: Ok(Arc::clone(&scanned.plan)) }.into()).work;
         (scanned, work)
     }
@@ -280,7 +276,7 @@ mod tests {
         fs::write(source.join("dir/sub/a"), b"a").unwrap();
         fs::write(source.join("dir/.env"), b"private").unwrap();
         symlink("sub", source.join("dir/link")).unwrap();
-        fs::write(source.join("dir").join(temporary_name(launch(), 1, 0)), b"partial").unwrap();
+        fs::write(source.join("dir").join(temporary_name(LaunchId::from_bytes([2; 16]), 1, 0)), b"another live launch's partial").unwrap();
         let mut ws = workspace(&source, &[("dir", EntryKind::Directory)], &destination);
         let (scanned, work) = scan_through(&mut ws, OperationKind::Copy);
         assert_eq!(plan(&scanned), vec![("dir".to_owned(), EntryKind::Directory), (".env".to_owned(), EntryKind::File), ("b".to_owned(), EntryKind::File), ("link".to_owned(), EntryKind::Symlink { points_to_directory: true }), ("sub".to_owned(), EntryKind::Directory), ("a".to_owned(), EntryKind::File)]);
@@ -315,14 +311,14 @@ mod tests {
         let tab = ws.active_tab(BrowserSide::Left);
         let started = ws.handle(Command::StartOperation { browser: BrowserSide::Left, tab, kind: OperationKind::Copy }.into());
         let Some(WorkRequest::Operation(OperationEffect::Scan { id, generation, intent, skipped })) = started.work.into_iter().next() else { panic!() };
-        let failed = scan(&intent, &skipped, launch(), &AtomicBool::new(false)).unwrap();
+        let failed = scan(&intent, &skipped, &AtomicBool::new(false)).unwrap();
         let Err(failure) = &failed else { panic!("{failed:?}") };
         assert_eq!((failure.failure.kind, failure.failure.item.clone()), (OperationErrorKind::PermissionDenied, location(&source.join("dir/locked"))));
         ws.handle(Event::OperationScanned { id, generation, plan: failed.map(|scanned| scanned.plan) }.into());
         let decision = ws.operation_jobs()[0].decision().map(|decision| (decision.token, decision.item.clone())).unwrap();
         let rescan = ws.handle(Command::DecideOperation { id, token: decision.0, item: decision.1, choice: dual_pane_domain::OperationChoice::Skip, apply_to_all: false }.into());
         let Some(WorkRequest::Operation(OperationEffect::Scan { generation, intent, skipped, .. })) = rescan.work.into_iter().next() else { panic!() };
-        let scanned = scan(&intent, &skipped, launch(), &AtomicBool::new(false)).unwrap().unwrap();
+        let scanned = scan(&intent, &skipped, &AtomicBool::new(false)).unwrap().unwrap();
         fs::set_permissions(source.join("dir/locked"), fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(plan(&scanned), vec![("dir".to_owned(), EntryKind::Directory), ("locked".to_owned(), EntryKind::Directory), ("z".to_owned(), EntryKind::File)]);
         assert_eq!(scanned.identities[1], None, "the placeholder was not read");
@@ -335,12 +331,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir(directory.path().join("was-a-file")).unwrap();
         let missing = intent(OperationKind::MoveToTrash, directory.path(), &[("gone", EntryKind::File)], None);
-        let Some(Err(failure)) = scan(&missing, &[], launch(), &AtomicBool::new(false)) else { panic!() };
+        let Some(Err(failure)) = scan(&missing, &[], &AtomicBool::new(false)) else { panic!() };
         assert_eq!(failure.failure.kind, OperationErrorKind::NotFound);
         let changed = intent(OperationKind::MoveToTrash, directory.path(), &[("was-a-file", EntryKind::File)], None);
-        let Some(Err(failure)) = scan(&changed, &[], launch(), &AtomicBool::new(false)) else { panic!() };
+        let Some(Err(failure)) = scan(&changed, &[], &AtomicBool::new(false)) else { panic!() };
         assert_eq!((failure.failure.kind, failure.entry_kind), (OperationErrorKind::ChangedSinceScan, EntryKind::File));
-        assert!(scan(&changed, &[], launch(), &AtomicBool::new(true)).is_none(), "a cancelled scan reports nothing");
+        assert!(scan(&changed, &[], &AtomicBool::new(true)).is_none(), "a cancelled scan reports nothing");
     }
 
     #[test]
@@ -384,7 +380,7 @@ mod tests {
         fs::write(&second, b"b").unwrap();
         fs::write(first.join("inside/file"), b"a").unwrap();
         let intent = OperationIntent::transfer(OperationKind::Copy, vec![OperationRoot { source: location(&first), kind: EntryKind::Directory }, OperationRoot { source: location(&second), kind: EntryKind::File }], location(&destination)).unwrap();
-        let scanned = scan(&intent, &[], launch(), &AtomicBool::new(false)).unwrap().unwrap();
+        let scanned = scan(&intent, &[], &AtomicBool::new(false)).unwrap().unwrap();
         assert_eq!(scanned.plan[0].destination, Some(location(&destination.join("a"))));
         assert_eq!(scanned.plan[2].destination, Some(location(&destination.join("a/inside/file"))));
         assert_eq!(scanned.plan[3].destination, Some(location(&destination.join("b"))));
