@@ -43,7 +43,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestone IDs and entries remain in numeric order below. P4-M9 was independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M5 and P4-M9 are complete; P4-M10 is active and remains ahead of every other planned milestone.
+Milestone IDs and entries remain in numeric order below. P4-M9 was independent and completed ahead of P4-M6 to P4-M8. P4-M11 is independent and, once P4-M10 finishes, runs ahead of P4-M6 through P4-M8 for the same reason. P4-M1 through P4-M5 and P4-M9 are complete; P4-M10 is active; P4-M11 is planned to start right after it.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -104,3 +104,9 @@ Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architec
 Status: Active
 Goal: Add configurable Normal and Comprehensive Folder Items Context Menus that open responsively, expose only available existing file commands, and cannot retarget stale state.
 Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architecture.md)
+
+### P4-M11: Modularize the desktop GUI code
+
+Status: Planned
+Goal: Split the oversized `desktop_window.cpp` and its matching large Rust bridge/model files into feature-area modules, and add a single registration seam for folder-item actions so adding one no longer touches five files.
+Plan: [overview](milestone-11-overview.md), [architecture](milestone-11-architecture.md)

@@ -4,6 +4,8 @@ Status: Active
 
 Chronological record of planning, owner decisions, and design changes for Phase 4. Newest entry first.
 
+- 2026-10-21 — Owner direction — Added P4-M11 to split the oversized `desktop_window.cpp` (about thirty classes in one 5,771-line file) and the large Rust bridge/model files it talks to into feature-area modules, and to add one registration seam for folder-item actions so a future action needs fewer than the five file touches the P4-M10 commits required. It runs right after P4-M10, ahead of P4-M6 through P4-M8, like P4-M9 did. No behavior changes; the existing full gate and native scripts are the acceptance bar.
+
 ## Entries
 
 - 2026-10-21 — Defect fix — Home and volume-root listings failed with “couldn’t determine an item’s macOS visibility” because macOS refuses `getxattr` on `~/.Trash` and volume-root service folders with `EPERM`, and the reader treated any error but a missing attribute as a failed read. A refused or unsupported Finder-information read now means no readable Finder flag, so the item lists as visible; other metadata errors still fail the read with the retryable listing error. The latent defect dates from P3-M15 and is unrelated to Open in Finder.
