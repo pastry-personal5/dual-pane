@@ -34,6 +34,7 @@ pub enum ActionId {
     DeletePermanently,
     ShowPackageContents,
     OpenItem,
+    OpenInFinder,
     FocusFolderItemsFilter,
     CopyItems,
     CutItems,
@@ -85,12 +86,12 @@ impl ContextMenuGroup {
 
 /// The only actions eligible for Folder Items Context Menus, in fixed group
 /// and row order.
-pub const CONTEXT_MENU_ACTIONS: [ActionId; 11] = [ActionId::RenameItem, ActionId::NewFolder, ActionId::OpenItem, ActionId::ShowPackageContents, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::MoveToTrash, ActionId::DeletePermanently];
+pub const CONTEXT_MENU_ACTIONS: [ActionId; 12] = [ActionId::RenameItem, ActionId::NewFolder, ActionId::OpenItem, ActionId::ShowPackageContents, ActionId::OpenInFinder, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::MoveToTrash, ActionId::DeletePermanently];
 
 pub const fn context_menu_group(action: ActionId) -> Option<ContextMenuGroup> {
     match action {
         ActionId::RenameItem | ActionId::NewFolder => Some(ContextMenuGroup::RenameAndCreate),
-        ActionId::OpenItem | ActionId::ShowPackageContents => Some(ContextMenuGroup::Open),
+        ActionId::OpenItem | ActionId::ShowPackageContents | ActionId::OpenInFinder => Some(ContextMenuGroup::Open),
         ActionId::CopyItems | ActionId::CutItems | ActionId::PasteItems => Some(ContextMenuGroup::Clipboard),
         ActionId::CopyToOtherBrowser | ActionId::MoveToOtherBrowser => Some(ContextMenuGroup::OtherBrowser),
         ActionId::MoveToTrash | ActionId::DeletePermanently => Some(ContextMenuGroup::Delete),
@@ -178,7 +179,7 @@ impl ContextMenuPreferences {
 impl ActionId {
     /// Every catalogued action. Later IDs are appended, so a shortcut held by
     /// an earlier action keeps it when bindings are validated in this order.
-    pub const ALL: [Self; 29] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem, Self::FocusFolderItemsFilter, Self::CopyItems, Self::CutItems, Self::PasteItems];
+    pub const ALL: [Self; 30] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem, Self::OpenInFinder, Self::FocusFolderItemsFilter, Self::CopyItems, Self::CutItems, Self::PasteItems];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -207,6 +208,7 @@ impl ActionId {
             Self::DeletePermanently => "DeletePermanently",
             Self::ShowPackageContents => "ShowPackageContents",
             Self::OpenItem => "OpenItem",
+            Self::OpenInFinder => "OpenInFinder",
             Self::FocusFolderItemsFilter => "FocusFolderItemsFilter",
             Self::CopyItems => "CopyItems",
             Self::CutItems => "CutItems",
@@ -221,7 +223,7 @@ impl ActionId {
     /// Where this action's shortcut acts.
     pub const fn scope(self) -> ShortcutScope {
         match self {
-            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents | Self::OpenItem | Self::CopyItems | Self::CutItems | Self::PasteItems => ShortcutScope::FolderItemsList,
+            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents | Self::OpenItem | Self::OpenInFinder | Self::CopyItems | Self::CutItems | Self::PasteItems => ShortcutScope::FolderItemsList,
             Self::QuitApplication => ShortcutScope::Application,
             Self::FocusOtherBrowser | Self::FocusFolderItemsFilter | Self::NavigateParent | Self::CloseWindow | Self::NewFolder | Self::SortByNameAscending | Self::SortByNameDescending | Self::SortByTypeAscending | Self::SortByTypeDescending | Self::SortByDateAscending | Self::SortByDateDescending | Self::SortBySizeAscending | Self::SortBySizeDescending | Self::NewTab | Self::CloseTab | Self::NavigateBack | Self::NavigateForward | Self::RefreshFolder => ShortcutScope::Window,
         }
@@ -355,7 +357,7 @@ pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
         ActionId::PasteItems => Some(Shortcut::new(true, false, false, false, Key::Character('V'))),
         // Command+W closes a tab; Close Window keeps its meaning but has no
         // default shortcut. Show Package Contents is a Context Menu command.
-        ActionId::CloseWindow | ActionId::ShowPackageContents | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
+        ActionId::CloseWindow | ActionId::ShowPackageContents | ActionId::OpenInFinder | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
     }
 }
 
@@ -898,11 +900,12 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::CutItems), shortcut(true, false, Key::Character('X')));
         assert_eq!(default_shortcut(ActionId::PasteItems), shortcut(true, false, Key::Character('V')));
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
+        assert_eq!(default_shortcut(ActionId::OpenInFinder), None);
         assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 3..], &[ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems], "clipboard IDs are appended");
     }
     #[test]
     fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
-        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems];
+        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems];
         for action in ActionId::ALL {
             let expected = if list.contains(&action) {
                 ShortcutScope::FolderItemsList
@@ -940,7 +943,7 @@ mod tests {
         let older = ActionId::ALL[..18].iter().map(|action| ActionBinding { action: *action, shortcut: default_shortcut(*action) }).collect::<Vec<_>>();
         let mut state = SettingsState::new();
         state.apply(SettingsSnapshot { bindings: older, ..SettingsSnapshot::default() });
-        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem] {
+        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder] {
             assert_eq!(state.binding(action), default_shortcut(action), "{action:?}");
         }
         let taken = ActionBinding { action: ActionId::NewTab, shortcut: default_shortcut(ActionId::RenameItem) };

@@ -7,7 +7,7 @@ use dual_pane_application::{ClipboardAction, Command, ContextMenuKind, Event, Fa
 use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection, TabId};
 
 use crate::native_location::{location_from_path, path_from_location};
-use crate::native_shell::open_with_default_application;
+use crate::native_shell::{open_with_default_application, reveal_in_finder};
 use crate::operation_journal::LaunchId;
 use crate::runtime::{FolderItemsSourceFactory, LocationProbe, Runtime, WorkRunner};
 use crate::settings_storage::{SettingsJob, SettingsResult, SettingsWorker};
@@ -62,6 +62,7 @@ pub struct WorkspaceSession<R = Runtime> {
     buffered_events: VecDeque<dual_pane_application::Event>,
     runner_more_pending: bool,
     opener: Opener,
+    revealer: Opener,
     /// The latest native layout request emitted by the application. A nested
     /// option distinguishes no new output from a request for default layout.
     layout_request: Option<Option<WindowLayout>>,
@@ -84,7 +85,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             worker.submit(SettingsJob::Load);
         }
         let missing_worker = settings_worker.is_none();
-        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), layout_request: None, activation_requests: VecDeque::new() };
+        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), revealer: Box::new(|item| reveal_in_finder(&path_from_location(item))), layout_request: None, activation_requests: VecDeque::new() };
         session.apply_chrome();
         if missing_worker {
             // Unit-test sessions intentionally use the legacy no-store event
@@ -182,6 +183,9 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                     && !(self.opener)(item)
                 {
                     inputs.push_back(Event::OpenFailed { item: item.clone() }.into());
+                }
+                if let Output::RevealInFinder { item } = output {
+                    (self.revealer)(item);
                 }
                 self.left.apply(output);
                 self.right.apply(output);

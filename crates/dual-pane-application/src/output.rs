@@ -76,6 +76,11 @@ pub enum Output {
     OpenItem {
         item: Location,
     },
+    /// Reveal `item` in the Finder on the GUI thread. The system shell either
+    /// shows the item or does nothing visible; there is no refusal to report.
+    RevealInFinder {
+        item: Location,
+    },
     /// Quitting needs confirmation because `running` operations are active.
     QuitConfirmationRequired {
         running: usize,

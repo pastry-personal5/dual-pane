@@ -14,6 +14,7 @@ mod ffi {
         fn move_to_trash(path: &[u8], trashed: &mut Vec<u8>) -> bool;
         fn is_bundle(path: &[u8]) -> bool;
         fn open_with_default_application(path: &[u8]) -> bool;
+        fn reveal_in_finder(path: &[u8]) -> bool;
     }
 }
 
@@ -34,6 +35,13 @@ pub fn is_bundle(path: &Path) -> bool {
 /// GUI thread; it reports only whether macOS accepted the request.
 pub fn open_with_default_application(path: &Path) -> bool {
     ffi::open_with_default_application(path.as_os_str().as_bytes())
+}
+
+/// Asks the Finder to reveal `path`, selecting it in its enclosing folder.
+/// Call it on the GUI thread; it reports only whether macOS accepted the
+/// request.
+pub fn reveal_in_finder(path: &Path) -> bool {
+    ffi::reveal_in_finder(path.as_os_str().as_bytes())
 }
 
 #[cfg(test)]

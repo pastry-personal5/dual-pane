@@ -3,7 +3,9 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QProcess>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
 
@@ -38,6 +40,10 @@ auto is_bundle(::rust::Slice<const std::uint8_t> path) -> bool {
 
 auto open_with_default_application(::rust::Slice<const std::uint8_t> path) -> bool {
     return QDesktopServices::openUrl(QUrl::fromLocalFile(file_name(path)));
+}
+
+auto reveal_in_finder(::rust::Slice<const std::uint8_t> path) -> bool {
+    return QProcess::startDetached(QStringLiteral("open"), {QStringLiteral("-R"), file_name(path)});
 }
 
 } // namespace dual_pane_desktop

@@ -39,7 +39,7 @@ Favorite Group names and Favorite Item Aliases reject empty or whitespace-only t
 - When permanent deletion or a move removes a source folder after handling its contents, a folder that cannot be removed offers **Try Again**, **Skip**, and **Cancel**; Skip keeps it. Folders that still hold skipped or failed content are kept without asking.
 - Try Again/Skip/Cancel decisions have no option to apply the choice to remaining items.
 - A rename or New Folder name collision never overwrites the existing Item.
-- Opening a symbolic link to a folder navigates into it; activating a link to a regular file opens its target. Activating a macOS package (a bundle such as an `.app`), or a link to one, launches or opens it with its default application; **Show Package Contents** navigates into it. Copy and move act on the link itself, and operations never follow links inside folders.
+- Opening a symbolic link to a folder navigates into it; activating a link to a regular file opens its target. Activating a macOS package (a bundle such as an `.app`), or a link to one, launches or opens it with its default application; **Show Package Contents** navigates into it. **Open in Finder**, available in the Comprehensive Folder Items Context Menu, reveals the one selected Item in the Finder without opening or navigating to it. Copy and move act on the link itself, and operations never follow links inside folders.
 - The safety invariants for replacement, cross-volume moves, symlinks, cancellation, and error handling are defined in [architecture.md](architecture.md#44-data-safety-invariants).
 
 ## Command-line launch

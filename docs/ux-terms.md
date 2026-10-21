@@ -131,6 +131,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Delete Permanently | `DeletePermanently` | Catalogued; current command; `Option+Command+Delete` default |
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
 | Open Item | `OpenItem` | Catalogued; current command; `Command+Down` default |
+| Open in Finder | `OpenInFinder` | Catalogued; current command, no default shortcut |
 | Focus Folder Items Filter | `FocusFolderItemsFilter` | Planned ID; `Command+F` default |
 | Copy Items | `CopyItems` | P4-M5 ID; `Command+C` default with Folder Items List focus |
 | Cut Items | `CutItems` | P4-M5 ID; `Command+X` default with Folder Items List focus |

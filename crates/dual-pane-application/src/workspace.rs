@@ -326,6 +326,7 @@ impl Workspace {
             Command::ClearSelection { browser, tab } => self.on_active(browser, tab, |workspace| workspace.clear_selection(browser)),
             Command::OpenEntry { browser, tab, row, name } => self.on_active(browser, tab, |workspace| workspace.open_entry(browser, row, &name)),
             Command::ShowPackageContents { browser, tab, row, name } => self.on_active(browser, tab, |workspace| workspace.show_package_contents(browser, row, &name)),
+            Command::RevealEntryInFinder { browser, tab, row, name } => self.on_active(browser, tab, |workspace| workspace.reveal_entry_in_finder(browser, row, &name)),
             Command::UpdateScrollHint { browser, tab, row, scroll } => self.on_active(browser, tab, |workspace| workspace.scroll(browser, row, scroll)),
         }
     }
@@ -508,6 +509,7 @@ impl Workspace {
             ActionId::NewFolder => self.command_availability(browser, tab, OperationCommand::NewFolder).is_ok(),
             ActionId::OpenItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.activation() != Activation::None),
             ActionId::ShowPackageContents => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.is_package()),
+            ActionId::OpenInFinder => self.single_selected_entry(browser, tab).is_some(),
             ActionId::CopyItems | ActionId::CutItems => self.clipboard_capture_availability(browser, tab).is_ok(),
             ActionId::PasteItems => self.paste_availability(browser, tab).is_ok(),
             ActionId::CopyToOtherBrowser => self.command_availability(browser, tab, OperationCommand::Copy).is_ok(),
@@ -558,6 +560,11 @@ impl Workspace {
                 let Some((row, entry)) = self.single_selected_entry(menu.browser, menu.tab) else { return Transition::default() };
                 let name = entry.name().clone();
                 if action == ActionId::OpenItem { self.command(Command::OpenEntry { browser: menu.browser, tab: menu.tab, row, name }) } else { self.command(Command::ShowPackageContents { browser: menu.browser, tab: menu.tab, row, name }) }
+            }
+            ActionId::OpenInFinder => {
+                let Some((row, entry)) = self.single_selected_entry(menu.browser, menu.tab) else { return Transition::default() };
+                let name = entry.name().clone();
+                self.command(Command::RevealEntryInFinder { browser: menu.browser, tab: menu.tab, row, name })
             }
             ActionId::CopyItems => self.command(Command::CaptureClipboard { browser: menu.browser, tab: menu.tab, action: ClipboardAction::Copy }),
             ActionId::CutItems => self.command(Command::CaptureClipboard { browser: menu.browser, tab: menu.tab, action: ClipboardAction::Cut }),
@@ -2256,6 +2263,12 @@ impl Workspace {
         match self.shown_entry(browser, row, name) {
             Some((location, entry)) if entry.is_package() => self.navigate(browser, location, None),
             _ => Transition::default(),
+        }
+    }
+    fn reveal_entry_in_finder(&mut self, browser: BrowserSide, row: usize, name: &EntryName) -> Transition {
+        match self.shown_entry(browser, row, name) {
+            Some((location, _)) => Transition::output(Output::RevealInFinder { item: location }),
+            None => Transition::default(),
         }
     }
     /// Finishes a link activation while its tab is still active and still

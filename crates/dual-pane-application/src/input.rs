@@ -219,6 +219,13 @@ pub enum Command {
         row: usize,
         name: EntryName,
     },
+    /// Reveals the entry in the Finder without opening or navigating to it.
+    RevealEntryInFinder {
+        browser: BrowserSide,
+        tab: TabId,
+        row: usize,
+        name: EntryName,
+    },
     GoToParent {
         browser: BrowserSide,
         tab: TabId,
@@ -293,7 +300,7 @@ impl Command {
     /// shown by a Browser must carry an observed visible revision.
     pub fn visible_target(&self) -> Option<(BrowserSide, TabId)> {
         match self {
-            Self::CaptureClipboard { browser, tab, .. } | Self::StartOperation { browser, tab, .. } | Self::RequestNameEditor { browser, tab, .. } | Self::SelectEntry { browser, tab, .. } | Self::ToggleEntry { browser, tab, .. } | Self::SelectRange { browser, tab, .. } | Self::MoveSelection { browser, tab, .. } | Self::SecondarySelect { browser, tab, .. } | Self::SelectAll { browser, tab } | Self::ClearSelection { browser, tab } | Self::OpenEntry { browser, tab, .. } | Self::ShowPackageContents { browser, tab, .. } | Self::UpdateScrollHint { browser, tab, .. } => Some((*browser, *tab)),
+            Self::CaptureClipboard { browser, tab, .. } | Self::StartOperation { browser, tab, .. } | Self::RequestNameEditor { browser, tab, .. } | Self::SelectEntry { browser, tab, .. } | Self::ToggleEntry { browser, tab, .. } | Self::SelectRange { browser, tab, .. } | Self::MoveSelection { browser, tab, .. } | Self::SecondarySelect { browser, tab, .. } | Self::SelectAll { browser, tab } | Self::ClearSelection { browser, tab } | Self::OpenEntry { browser, tab, .. } | Self::ShowPackageContents { browser, tab, .. } | Self::RevealEntryInFinder { browser, tab, .. } | Self::UpdateScrollHint { browser, tab, .. } => Some((*browser, *tab)),
             _ => None,
         }
     }

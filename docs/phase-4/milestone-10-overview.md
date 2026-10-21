@@ -54,7 +54,7 @@ Both variants use one fixed, flat section order. Settings changes visibility onl
 | Section | Commands, in order | Invocation context |
 |---|---|---|
 | Rename and Create | Rename Item; New Folder | Rename requires exactly one selected Item. New Folder requires a ready confirmed destination and is eligible on a row or empty space. |
-| Open | Open Item; Show Package Contents | Open Item requires exactly one selected Item. Show Package Contents requires exactly one selected Item whose direct kind is package. |
+| Open | Open Item; Show Package Contents; Open in Finder | Open Item requires exactly one selected Item. Show Package Contents requires exactly one selected Item whose direct kind is package. Open in Finder requires exactly one selected Item and reveals it in the Finder without opening or navigating to it. |
 | Clipboard | Copy Items; Cut Items; Paste Items | Copy and Cut require one or more selected Items. Paste requires a ready confirmed destination and a supported cached clipboard offer; it is eligible on a row or empty space. |
 | Other Browser | Copy to Other Browser; Move to Other Browser | One or more selected Items and a ready other-Browser destination are required. |
 | Delete | Move to Trash; Delete Permanently | One or more selected Items are required. |
@@ -64,7 +64,7 @@ The factory-visible commands are:
 | Variant | Factory configuration |
 |---|---|
 | Normal | Open Item; Copy Items; Cut Items; Paste Items; Copy to Other Browser; Move to Other Browser; Move to Trash |
-| Comprehensive | Every command in the table above |
+| Comprehensive | Every command in the table above, including Open in Finder |
 
 The existing application admission rules remain authoritative in addition to the table: loading, failed, missing, stale, filtered-update, journal, clipboard, destination, and operation conditions can make an action unavailable. Empty-space invocation reduces either configured variant to configured, available destination actions such as New Folder or Paste Items even though it preserves the existing selection. Every visible command shows only the first shortcut in its effective ordered shortcut list, using native macOS notation; an unbound command shows no annotation. The annotation is display-only and does not install another shortcut.
 
@@ -86,7 +86,7 @@ The screen provides Reset Normal…, Reset Comprehensive…, and Reset Both…. 
 ## Completion checklist
 
 - [x] The owner decides the [variants, invocation, command hierarchy, defaults, Settings information architecture, persistence behavior, and acceptance level](#owner-decisions). The accepted behavior is recorded in product behavior, UX GUI, UX terms, information architecture, and the Phase 4 changelog before implementation.
-- [x] Add the application-owned eleven-action catalogue and complete Normal and Comprehensive preferences, with fixed group/order, independent visibility, at-least-one validation, no-op behavior, local resets, global reset integration, and immediate settings-save output.
+- [x] Add the application-owned twelve-action catalogue (extended from eleven by Open in Finder) and complete Normal and Comprehensive preferences, with fixed group/order, independent visibility, at-least-one validation, no-op behavior, local resets, global reset integration, and immediate settings-save output.
 - [x] Add one typed, observation-bearing menu request that atomically activates the Browser, applies the accepted row-selection rule, and returns either an immutable grouped snapshot plus one-use token or no menu. Row, empty-space, keyboard, accessibility, exact-modifier, both-Browser, and stale-request behavior match the accepted rules.
 - [x] Application-owned projection hides unavailable commands and empty groups, suppresses source actions for empty-space invocation, uses the cached clipboard offer without blocking work, and carries only the first effective shortcut as display metadata. Shortcut edit, removal, reset, and global Reset Settings update later menus and the Settings matrix immediately.
 - [x] Rename and Create, Open, Clipboard, Other Browser, and Delete render in the accepted flat order and obey the action-context table. Package, link, multiple-selection, empty-space, pending-load, failed-folder, filtered-update, journal, clipboard, destination, and same-folder conditions use application policy rather than Qt policy.
@@ -117,6 +117,11 @@ Implementation and hardening evidence on 2026-10-21:
 - Schema tests cover fresh and customized round trips, versions 1 through 10, missing and extra counts, unknown kind/action, invalid visibility, empty variants, and the duplicate-row/missing-row combination. The duplicate check fixed a corruption-validation gap found during this audit.
 - `scripts/check-folder-items-context-menu.sh` runs the application policy scenarios and then passes an offscreen native check without observing the global clipboard. Together they cover gesture selection, exact modifier routing, rows and empty space, keyboard/accessibility requests, empty results, package/link/multiple-selection shapes, both Browser widgets, accessible names, flat sections, native shortcut annotations, event-loop return while open, state change while open, both native signal orders, one dispatch, and idempotent dismissal.
 - Direct `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass. `make check` passes outside the filesystem sandbox, as required by its native clipboard, metadata, and local-socket tests. `scripts/check-settings-window.sh` and `scripts/check-folder-items-context-menu.sh` pass outside the sandbox with isolated profiles.
+
+Catalogue extension evidence on 2026-10-21:
+
+- Added `OpenInFinder` as a twelfth catalogued action (Open group), enabled by default only in Comprehensive, revealing the one selected Item in the Finder via `open -R` without opening or navigating to it. Settings and Context Menus Settings surface it through the existing generic catalogue and matrix code with no action-specific UI.
+- Application tests (`context_menus.rs`, `settings.rs`) extended to cover the twelfth action's scope, default shortcut, availability, and comprehensive-only default visibility. `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass across the workspace; `make fmt-check` and `make lint-cpp` pass for the changed C++.
 
 Review fixes on 2026-10-21:
 
