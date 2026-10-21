@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::clipboard::CapturedTransfer;
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, BrowserChrome, BrowserSnapshot, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, fresh_profile_favorites, fresh_profile_screenshots};
+use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, fresh_profile_favorites, fresh_profile_screenshots};
 use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationRoot, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
@@ -73,6 +73,8 @@ pub struct Workspace {
     clipboard_offer: ClipboardOffer,
     next_clipboard_request: u64,
     next_transfer: u64,
+    next_menu_token: u64,
+    live_menu: Option<LiveFolderItemsMenu>,
     /// Whether the runtime can record temporaries, which Copy needs. It
     /// counts as available until the runtime reports otherwise.
     journal_available: bool,
@@ -143,6 +145,17 @@ struct PendingPaste {
     generation: Option<ClipboardGeneration>,
     external_sources: Option<Arc<[Location]>>,
 }
+#[derive(Debug)]
+struct LiveFolderItemsMenu {
+    token: FolderItemsMenuToken,
+    browser: BrowserSide,
+    tab: TabId,
+    visible_revision: u64,
+    source: Location,
+    selection: Vec<EntryName>,
+    destination: Option<(BrowserSide, TabId, Location, u64)>,
+    actions: Vec<ActionId>,
+}
 /// One Browser: the domain's ordered tab identities and active tab, plus the
 /// application's per-tab state, which is stored in no particular order.
 #[derive(Debug)]
@@ -210,7 +223,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, journal_available: true, pending_selection: None, launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, journal_available: true, pending_selection: None, launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn is_quitting(&self) -> bool {
         self.quitting
@@ -251,6 +264,12 @@ impl Workspace {
     }
     fn command(&mut self, command: Command) -> Transition {
         match command {
+            Command::RequestFolderItemsMenu { browser, tab, visible_revision, kind, target } => self.request_folder_items_menu(browser, tab, visible_revision, kind, target),
+            Command::InvokeFolderItemsMenu { token, action } => self.invoke_folder_items_menu(token, action),
+            Command::DismissFolderItemsMenu { token } => {
+                self.live_menu.take_if(|menu| menu.token == token);
+                Transition::default()
+            }
             Command::CaptureClipboard { browser, tab, action } => self.capture_clipboard(browser, tab, action),
             Command::PasteClipboard { browser, tab } => self.paste_clipboard(browser, tab),
             Command::SetFilterText { browser, tab, text } => self.set_filter_text(browser, tab, text),
@@ -290,6 +309,9 @@ impl Workspace {
             Command::SetVisibilityPolicy { visibility } => self.set_visibility_policy(visibility),
             Command::SetActionShortcuts { action, shortcuts } => self.set_action_shortcuts(action, shortcuts),
             Command::RestoreActionShortcuts { action } => self.restore_action_shortcuts(action),
+            Command::SetContextMenuVisibility { kind, action, visible } => self.set_context_menu_visibility(kind, action, visible),
+            Command::ResetContextMenu { kind } => self.reset_context_menu(kind),
+            Command::ResetContextMenus => self.reset_context_menus(),
             Command::UpdateWindowLayout { layout } => self.update_window_layout(layout),
             Command::SetPreviewTarget { browser, tab, width, height } => self.set_preview_target(browser, tab, width, height),
             Command::GoBack { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, false)),
@@ -421,6 +443,130 @@ impl Workspace {
                 Some(_) => Ok(()),
             },
             ClipboardOffer::Private | ClipboardOffer::Files | ClipboardOffer::PrivateAndFiles => Ok(()),
+        }
+    }
+    fn request_folder_items_menu(&mut self, browser: BrowserSide, tab: TabId, visible_revision: u64, kind: ContextMenuKind, target: FolderItemsMenuTarget) -> Transition {
+        self.live_menu = None;
+        if !self.valid_observation(browser, tab, visible_revision) {
+            return Transition::output(Output::FolderItemsMenuReady { snapshot: None });
+        }
+        let row_target = match &target {
+            FolderItemsMenuTarget::Row { row, name } => self.tab(browser, tab).and_then(|state| state.visible_entries().get(*row)).is_some_and(|entry| entry.name() == name),
+            FolderItemsMenuTarget::EmptySpace => true,
+        };
+        if !row_target {
+            return Transition::output(Output::FolderItemsMenuReady { snapshot: None });
+        }
+        let mut transition = self.activate_browser(browser);
+        if let FolderItemsMenuTarget::Row { row, name } = &target {
+            transition.append(self.change_visit(browser, Some(*row), |visit, entries| visit.select_secondary(entries, *row, name)));
+        }
+        let Some(state) = self.tab(browser, tab) else {
+            transition.outputs.push(Output::FolderItemsMenuReady { snapshot: None });
+            return transition;
+        };
+        let Some(source) = state.folder_items.as_ref().map(|items| items.location.clone()) else {
+            transition.outputs.push(Output::FolderItemsMenuReady { snapshot: None });
+            return transition;
+        };
+        let selection = state.history.current().map(|visit| visit.state().selection().entries().to_vec()).unwrap_or_default();
+        let row_invocation = matches!(target, FolderItemsMenuTarget::Row { .. });
+        let actions = CONTEXT_MENU_ACTIONS.into_iter().filter(|action| self.settings.context_menus().visible(kind, *action) && self.context_menu_action_available(browser, tab, *action, row_invocation)).collect::<Vec<_>>();
+        if actions.is_empty() {
+            transition.outputs.push(Output::FolderItemsMenuReady { snapshot: None });
+            return transition;
+        }
+        let mut sections = Vec::new();
+        for group in crate::ContextMenuGroup::ALL {
+            let rows = actions.iter().copied().filter(|action| context_menu_group(*action) == Some(group)).map(|action| FolderItemsMenuAction { action, shortcut: self.settings.binding(action) }).collect::<Vec<_>>();
+            if !rows.is_empty() {
+                sections.push(FolderItemsMenuSection { group, actions: rows });
+            }
+        }
+        self.next_menu_token = self.next_menu_token.wrapping_add(1).max(1);
+        let token = FolderItemsMenuToken(self.next_menu_token);
+        let other = if actions.iter().any(|action| matches!(action, ActionId::CopyToOtherBrowser | ActionId::MoveToOtherBrowser)) {
+            let side = match browser {
+                BrowserSide::Left => BrowserSide::Right,
+                BrowserSide::Right => BrowserSide::Left,
+            };
+            let other_tab = self.active_tab(side);
+            self.tab(side, other_tab).and_then(|state| state.folder_items.as_ref().map(|items| (side, other_tab, items.location.clone(), state.visible_revision)))
+        } else {
+            None
+        };
+        self.live_menu = Some(LiveFolderItemsMenu { token, browser, tab, visible_revision, source, selection, destination: other, actions: actions.clone() });
+        transition.outputs.push(Output::FolderItemsMenuReady { snapshot: Some(FolderItemsMenuSnapshot { token, kind, sections }) });
+        transition
+    }
+    fn context_menu_action_available(&self, browser: BrowserSide, tab: TabId, action: ActionId, row_invocation: bool) -> bool {
+        if !row_invocation && !matches!(action, ActionId::NewFolder | ActionId::PasteItems) {
+            return false;
+        }
+        match action {
+            ActionId::RenameItem => self.command_availability(browser, tab, OperationCommand::Rename).is_ok(),
+            ActionId::NewFolder => self.command_availability(browser, tab, OperationCommand::NewFolder).is_ok(),
+            ActionId::OpenItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.activation() != Activation::None),
+            ActionId::ShowPackageContents => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.is_package()),
+            ActionId::CopyItems | ActionId::CutItems => self.clipboard_capture_availability(browser, tab).is_ok(),
+            ActionId::PasteItems => self.paste_availability(browser, tab).is_ok(),
+            ActionId::CopyToOtherBrowser => self.command_availability(browser, tab, OperationCommand::Copy).is_ok(),
+            ActionId::MoveToOtherBrowser => self.command_availability(browser, tab, OperationCommand::Move).is_ok(),
+            ActionId::MoveToTrash => self.command_availability(browser, tab, OperationCommand::MoveToTrash).is_ok(),
+            ActionId::DeletePermanently => self.command_availability(browser, tab, OperationCommand::DeletePermanently).is_ok(),
+            _ => false,
+        }
+    }
+    fn single_selected_entry(&self, browser: BrowserSide, tab: TabId) -> Option<(usize, &Entry)> {
+        let state = self.tab(browser, tab)?;
+        if state.pending.is_some() || state.error.is_some() || state.filter_status != FilterStatus::Ready {
+            return None;
+        }
+        let [name] = state.history.current()?.state().selection().entries() else { return None };
+        state.visible_entries().iter().enumerate().find(|(_, entry)| entry.name() == name)
+    }
+    fn invoke_folder_items_menu(&mut self, token: FolderItemsMenuToken, action: ActionId) -> Transition {
+        if self.live_menu.as_ref().is_none_or(|menu| menu.token != token) {
+            return Transition::default();
+        }
+        let menu = self.live_menu.take().unwrap_or_else(|| unreachable!());
+        if !menu.actions.contains(&action) || self.active_browser != menu.browser || self.active_tab(menu.browser) != menu.tab {
+            return Transition::default();
+        }
+        let Some(state) = self.tab(menu.browser, menu.tab) else { return Transition::default() };
+        if state.pending.is_some() || state.error.is_some() || state.filter_status != FilterStatus::Ready || state.visible_revision != menu.visible_revision || state.folder_items.as_ref().map(|items| &items.location) != Some(&menu.source) {
+            return Transition::default();
+        }
+        let source_action = !matches!(action, ActionId::NewFolder | ActionId::PasteItems);
+        if source_action {
+            let selection = state.history.current().map(|visit| visit.state().selection().entries()).unwrap_or(&[]);
+            if selection != menu.selection {
+                return Transition::default();
+            }
+        }
+        if matches!(action, ActionId::CopyToOtherBrowser | ActionId::MoveToOtherBrowser) {
+            let Some((side, tab, location, visible_revision)) = menu.destination else { return Transition::default() };
+            let Some(state) = self.tab(side, tab) else { return Transition::default() };
+            if self.active_tab(side) != tab || state.pending.is_some() || state.error.is_some() || state.visible_revision != visible_revision || state.folder_items.as_ref().map(|items| &items.location) != Some(&location) {
+                return Transition::default();
+            }
+        }
+        match action {
+            ActionId::RenameItem => self.command(Command::RequestNameEditor { browser: menu.browser, tab: menu.tab, command: OperationCommand::Rename }),
+            ActionId::NewFolder => self.command(Command::RequestNameEditor { browser: menu.browser, tab: menu.tab, command: OperationCommand::NewFolder }),
+            ActionId::OpenItem | ActionId::ShowPackageContents => {
+                let Some((row, entry)) = self.single_selected_entry(menu.browser, menu.tab) else { return Transition::default() };
+                let name = entry.name().clone();
+                if action == ActionId::OpenItem { self.command(Command::OpenEntry { browser: menu.browser, tab: menu.tab, row, name }) } else { self.command(Command::ShowPackageContents { browser: menu.browser, tab: menu.tab, row, name }) }
+            }
+            ActionId::CopyItems => self.command(Command::CaptureClipboard { browser: menu.browser, tab: menu.tab, action: ClipboardAction::Copy }),
+            ActionId::CutItems => self.command(Command::CaptureClipboard { browser: menu.browser, tab: menu.tab, action: ClipboardAction::Cut }),
+            ActionId::PasteItems => self.command(Command::PasteClipboard { browser: menu.browser, tab: menu.tab }),
+            ActionId::CopyToOtherBrowser => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::Copy }),
+            ActionId::MoveToOtherBrowser => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::Move }),
+            ActionId::MoveToTrash => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::MoveToTrash }),
+            ActionId::DeletePermanently => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::DeletePermanently }),
+            _ => Transition::default(),
         }
     }
     fn clipboard_roots(&self, browser: BrowserSide, tab: TabId) -> Result<Arc<[OperationRoot]>, ClipboardRejection> {
@@ -900,6 +1046,9 @@ impl Workspace {
     }
     pub fn shortcuts(&self, action: crate::ActionId) -> &[crate::Shortcut] {
         self.settings.shortcuts(action)
+    }
+    pub fn context_menu_preferences(&self) -> &crate::ContextMenuPreferences {
+        self.settings.context_menus()
     }
     pub fn notices(&self) -> &[Notice] {
         &self.notices
@@ -1660,6 +1809,28 @@ impl Workspace {
             Ok(false) => Transition::default(),
             Err(reason) => Transition::output(Output::ShortcutEditRejected { action, reason }),
         }
+    }
+    fn set_context_menu_visibility(&mut self, kind: ContextMenuKind, action: ActionId, visible: bool) -> Transition {
+        if !self.settings_interaction_available {
+            return Transition::default();
+        }
+        match self.settings.set_context_menu_visible(kind, action, visible) {
+            Ok(true) => Transition { outputs: vec![], work: self.save_settings().into_iter().collect() },
+            Ok(false) => Transition::default(),
+            Err(reason) => Transition::output(Output::ContextMenuPreferenceRejected { reason }),
+        }
+    }
+    fn reset_context_menu(&mut self, kind: ContextMenuKind) -> Transition {
+        if !self.settings_interaction_available || !self.settings.reset_context_menu(kind) {
+            return Transition::default();
+        }
+        Transition { outputs: vec![], work: self.save_settings().into_iter().collect() }
+    }
+    fn reset_context_menus(&mut self) -> Transition {
+        if !self.settings_interaction_available || !self.settings.reset_context_menus() {
+            return Transition::default();
+        }
+        Transition { outputs: vec![], work: self.save_settings().into_iter().collect() }
     }
     fn update_window_layout(&mut self, layout: WindowLayout) -> Transition {
         if !layout.valid() {

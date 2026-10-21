@@ -2,7 +2,7 @@
 
 Status: Active
 
-This document describes the current component hierarchy of Dual Pane. It records containment; visual treatment and interaction rules are in [ux-gui.md](ux-gui.md), and not every conceptual container has a separate Qt widget.
+This document describes the current component hierarchy of Dual Pane and explicitly named accepted additions that remain planned. It records containment; visual treatment and interaction rules are in [ux-gui.md](ux-gui.md), and not every conceptual container has a separate Qt widget.
 
 ## Workspace Window
 
@@ -71,6 +71,15 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
           - Shortcut scope
           - Add Shortcut Button in its own column
           - Inline capture or rejection feedback when needed
+    - Context Menus Settings
+      - Scrollable Folder Items menu action matrix grouped, in order, as Rename and Create, Open, Clipboard, Other Browser, and Delete
+        - Repeated header: Action, Normal, Comprehensive, Shortcut
+        - Action rows with independent Normal and Comprehensive visibility checkboxes and a read-only first effective shortcut
+        - Inline feedback when a change would leave either menu with no configured action
+      - Reset Normal Button
+      - Reset Comprehensive Button
+      - Reset Both Button
+      - A separate confirmation for each reset, with Cancel as the default and Escape action
   - Anchored Settings Information Overlay
 - Waiting Window while the workspace session loads
 - Permanent Delete Confirmation Window

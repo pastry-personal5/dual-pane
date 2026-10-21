@@ -70,6 +70,8 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Size Descending Sort Button | `size_descending_sort_button` |
 | Folder Items List | `folder_items_list` |
 | Folder Items Context Menu | `folder_items_context_menu` |
+| Normal Folder Items Context Menu | `normal_folder_items_context_menu` |
+| Comprehensive Folder Items Context Menu | `comprehensive_folder_items_context_menu` |
 | Missing Folder Overlay | `missing_folder_overlay` |
 | Rename Item Editor | `rename_item_editor` |
 | New Folder Name Editor | `new_folder_name_editor` |
@@ -90,6 +92,7 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Relative Date Column | `relative_date_column` |
 | Exact Date Column | `exact_date_column` |
 | Browser Status Bar | `browser_status_bar` |
+| Context Menus Settings | `context_menus_settings` |
 
 `Browser` replaces the former logical side-specific component term: `BrowserSide`, `BrowserState`, `BrowserStartup`, `BrowserPresenter`, and `BrowserViewModel` are the corresponding code names. `Folder Items` names a displayed directory result: `FolderItems`, `FolderItemsListModel`, and `FolderItemsList` are the corresponding code names.
 

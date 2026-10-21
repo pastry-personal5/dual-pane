@@ -20,6 +20,7 @@ chmod 700 "$runtime_root/main"
 
 cd "$repo_root"
 cargo build -q -p dual-pane-desktop
+DUAL_PANE_TEST_PROFILE="$test_root/profile" QT_QPA_PLATFORM=offscreen DUAL_PANE_INTERNAL_INSTANCE_ACTIVATION_CHECK=1 "$binary"
 
 start_instance() {
     profile=$1

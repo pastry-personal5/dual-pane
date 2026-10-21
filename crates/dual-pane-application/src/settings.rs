@@ -40,6 +40,141 @@ pub enum ActionId {
     PasteItems,
 }
 
+/// The two persistent Folder Items Context Menu configurations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContextMenuKind {
+    Normal,
+    Comprehensive,
+}
+
+impl ContextMenuKind {
+    pub const ALL: [Self; 2] = [Self::Normal, Self::Comprehensive];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Comprehensive => "Comprehensive",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == value)
+    }
+
+    /// Non-user modifier flags are removed by the native adapter before this
+    /// policy is called.
+    pub const fn for_modifiers(shift: bool, command: bool, option: bool, control: bool) -> Self {
+        if shift && !command && !option && !control { Self::Comprehensive } else { Self::Normal }
+    }
+}
+
+/// Fixed menu sections. Their order is product policy, not presentation
+/// configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContextMenuGroup {
+    RenameAndCreate,
+    Open,
+    Clipboard,
+    OtherBrowser,
+    Delete,
+}
+
+impl ContextMenuGroup {
+    pub const ALL: [Self; 5] = [Self::RenameAndCreate, Self::Open, Self::Clipboard, Self::OtherBrowser, Self::Delete];
+}
+
+/// The only actions eligible for Folder Items Context Menus, in fixed group
+/// and row order.
+pub const CONTEXT_MENU_ACTIONS: [ActionId; 11] = [ActionId::RenameItem, ActionId::NewFolder, ActionId::OpenItem, ActionId::ShowPackageContents, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::MoveToTrash, ActionId::DeletePermanently];
+
+pub const fn context_menu_group(action: ActionId) -> Option<ContextMenuGroup> {
+    match action {
+        ActionId::RenameItem | ActionId::NewFolder => Some(ContextMenuGroup::RenameAndCreate),
+        ActionId::OpenItem | ActionId::ShowPackageContents => Some(ContextMenuGroup::Open),
+        ActionId::CopyItems | ActionId::CutItems | ActionId::PasteItems => Some(ContextMenuGroup::Clipboard),
+        ActionId::CopyToOtherBrowser | ActionId::MoveToOtherBrowser => Some(ContextMenuGroup::OtherBrowser),
+        ActionId::MoveToTrash | ActionId::DeletePermanently => Some(ContextMenuGroup::Delete),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenuPreference {
+    pub action: ActionId,
+    pub normal: bool,
+    pub comprehensive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenuPreferences {
+    entries: Vec<ContextMenuPreference>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextMenuPreferenceRejection {
+    IneligibleAction,
+    LastVisibleAction(ContextMenuKind),
+    Malformed,
+}
+
+impl Default for ContextMenuPreferences {
+    fn default() -> Self {
+        let normal = [ActionId::OpenItem, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::MoveToTrash];
+        Self { entries: CONTEXT_MENU_ACTIONS.into_iter().map(|action| ContextMenuPreference { action, normal: normal.contains(&action), comprehensive: true }).collect() }
+    }
+}
+
+impl ContextMenuPreferences {
+    pub fn from_entries(entries: Vec<ContextMenuPreference>) -> Result<Self, ContextMenuPreferenceRejection> {
+        if entries.len() != CONTEXT_MENU_ACTIONS.len() || entries.iter().any(|entry| !CONTEXT_MENU_ACTIONS.contains(&entry.action)) || CONTEXT_MENU_ACTIONS.iter().any(|action| entries.iter().filter(|entry| entry.action == *action).count() != 1) {
+            return Err(ContextMenuPreferenceRejection::Malformed);
+        }
+        let preferences = Self { entries: CONTEXT_MENU_ACTIONS.into_iter().map(|action| entries.iter().find(|entry| entry.action == action).cloned().unwrap_or_else(|| unreachable!())).collect() };
+        if ContextMenuKind::ALL.into_iter().any(|kind| !preferences.entries.iter().any(|entry| preferences.visible(kind, entry.action))) {
+            return Err(ContextMenuPreferenceRejection::Malformed);
+        }
+        Ok(preferences)
+    }
+    pub fn entries(&self) -> &[ContextMenuPreference] {
+        &self.entries
+    }
+    pub fn visible(&self, kind: ContextMenuKind, action: ActionId) -> bool {
+        self.entries.iter().find(|entry| entry.action == action).is_some_and(|entry| match kind {
+            ContextMenuKind::Normal => entry.normal,
+            ContextMenuKind::Comprehensive => entry.comprehensive,
+        })
+    }
+    pub fn set_visible(&mut self, kind: ContextMenuKind, action: ActionId, visible: bool) -> Result<bool, ContextMenuPreferenceRejection> {
+        let Some(index) = self.entries.iter().position(|entry| entry.action == action) else { return Err(ContextMenuPreferenceRejection::IneligibleAction) };
+        let current = self.visible(kind, action);
+        if current == visible {
+            return Ok(false);
+        }
+        if !visible && self.entries.iter().filter(|entry| self.visible(kind, entry.action)).count() == 1 {
+            return Err(ContextMenuPreferenceRejection::LastVisibleAction(kind));
+        }
+        match kind {
+            ContextMenuKind::Normal => self.entries[index].normal = visible,
+            ContextMenuKind::Comprehensive => self.entries[index].comprehensive = visible,
+        }
+        Ok(true)
+    }
+    pub fn reset(&mut self, kind: ContextMenuKind) -> bool {
+        let defaults = Self::default();
+        let mut changed = false;
+        for entry in &mut self.entries {
+            let default = defaults.visible(kind, entry.action);
+            let value = match kind {
+                ContextMenuKind::Normal => &mut entry.normal,
+                ContextMenuKind::Comprehensive => &mut entry.comprehensive,
+            };
+            changed |= *value != default;
+            *value = default;
+        }
+        changed
+    }
+}
+
 impl ActionId {
     /// Every catalogued action. Later IDs are appended, so a shortcut held by
     /// an earlier action keeps it when bindings are validated in this order.
@@ -427,6 +562,7 @@ pub struct SettingsSnapshot {
     /// The Application Close Button quits without asking first.
     pub skip_quit_confirmation: bool,
     pub visibility: VisibilityPolicy,
+    pub context_menus: ContextMenuPreferences,
 }
 
 /// Global Folder Items visibility choices. An item that matches several rules
@@ -461,6 +597,7 @@ pub struct SettingsState {
     hide_notices_at_startup: bool,
     skip_quit_confirmation: bool,
     visibility: VisibilityPolicy,
+    context_menus: ContextMenuPreferences,
     revision: u64,
     saved_revision: u64,
 }
@@ -558,7 +695,7 @@ impl SettingsState {
         let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect::<Vec<_>>();
         bindings.sort_by_key(|binding| binding.action.as_str());
         let folder_sorts = self.lru.iter().filter_map(|location| self.folder_sorts.get(location).copied().map(|sort| (location.clone(), sort))).collect();
-        SettingsSnapshot { bindings, shortcut_lists: self.shortcut_lists(), folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup, skip_quit_confirmation: self.skip_quit_confirmation, visibility: self.visibility }
+        SettingsSnapshot { bindings, shortcut_lists: self.shortcut_lists(), folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup, skip_quit_confirmation: self.skip_quit_confirmation, visibility: self.visibility, context_menus: self.context_menus.clone() }
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -605,6 +742,7 @@ impl SettingsState {
         self.hide_notices_at_startup = snapshot.hide_notices_at_startup;
         self.skip_quit_confirmation = snapshot.skip_quit_confirmation;
         self.visibility = snapshot.visibility;
+        self.context_menus = snapshot.context_menus;
         self.revision += 1;
     }
     pub fn hide_notices_at_startup(&self) -> bool {
@@ -635,6 +773,31 @@ impl SettingsState {
         self.visibility = visibility;
         self.revision += 1;
         true
+    }
+    pub fn context_menus(&self) -> &ContextMenuPreferences {
+        &self.context_menus
+    }
+    pub fn set_context_menu_visible(&mut self, kind: ContextMenuKind, action: ActionId, visible: bool) -> Result<bool, ContextMenuPreferenceRejection> {
+        let changed = self.context_menus.set_visible(kind, action, visible)?;
+        if changed {
+            self.revision += 1;
+        }
+        Ok(changed)
+    }
+    pub fn reset_context_menu(&mut self, kind: ContextMenuKind) -> bool {
+        let changed = self.context_menus.reset(kind);
+        if changed {
+            self.revision += 1;
+        }
+        changed
+    }
+    pub fn reset_context_menus(&mut self) -> bool {
+        let changed = self.context_menus != ContextMenuPreferences::default();
+        if changed {
+            self.context_menus = ContextMenuPreferences::default();
+            self.revision += 1;
+        }
+        changed
     }
     fn touch(&mut self, location: &Location) {
         self.lru.retain(|candidate| candidate != location);

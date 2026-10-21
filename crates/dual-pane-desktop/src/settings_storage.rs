@@ -7,11 +7,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, BrowserSnapshot, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, VisibilityPolicy, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot, default_shortcuts};
+use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ContextMenuKind, ContextMenuPreference, ContextMenuPreferences, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, VisibilityPolicy, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot, default_shortcuts};
 use dual_pane_domain::{BrowserSide, EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 /// Move to Trash factory lists as the migrations that introduced them wrote
 /// them, so a later default never changes what an earlier step writes.
 const VERSION_NINE_TRASH: [Shortcut; 3] = [Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)];
@@ -124,6 +124,24 @@ impl SettingsDatabase {
         let items = connection.prepare("SELECT id, group_id, name, target, position FROM favorite_item ORDER BY group_id, position, id")?.query_map([], |row| Ok(FavoriteItemRecord { id: row.get(0)?, group_id: row.get(1)?, name: row.get(2)?, target: decode_location(&row.get::<_, Vec<u8>>(3)?).map_err(to_sql_error)?, position: row.get(4)? }))?.collect::<Result<Vec<_>, _>>()?;
         let favorites = FavoritesRecords { initialized, groups, items };
         favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
+        let stored_context_menus = connection.prepare("SELECT menu_kind, action, visible FROM context_menu_action ORDER BY menu_kind, action")?.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+        if stored_context_menus.len() != CONTEXT_MENU_ACTIONS.len() * ContextMenuKind::ALL.len() {
+            return Err(SettingsStorageError::InvalidData("context menu row count"));
+        }
+        let mut context_entries = CONTEXT_MENU_ACTIONS.into_iter().map(|action| ContextMenuPreference { action, normal: false, comprehensive: false }).collect::<Vec<_>>();
+        for (kind, action, visible) in stored_context_menus {
+            let kind = ContextMenuKind::parse(&kind).ok_or(SettingsStorageError::InvalidData("context menu kind"))?;
+            let action = ActionId::parse(&action).filter(|action| CONTEXT_MENU_ACTIONS.contains(action)).ok_or(SettingsStorageError::InvalidData("context menu action"))?;
+            if !matches!(visible, 0 | 1) {
+                return Err(SettingsStorageError::InvalidData("context menu visibility"));
+            }
+            let Some(entry) = context_entries.iter_mut().find(|entry| entry.action == action) else { return Err(SettingsStorageError::InvalidData("context menu action")) };
+            match kind {
+                ContextMenuKind::Normal => entry.normal = visible == 1,
+                ContextMenuKind::Comprehensive => entry.comprehensive = visible == 1,
+            }
+        }
+        let context_menus = ContextMenuPreferences::from_entries(context_entries).map_err(|_| SettingsStorageError::InvalidData("context menu configuration"))?;
         let mut shortcut_lists = Vec::new();
         for binding in &bindings {
             let mut statement = connection.prepare("SELECT command, shift, option, control, key FROM action_shortcut WHERE action = ?1 ORDER BY position")?;
@@ -141,12 +159,13 @@ impl SettingsDatabase {
                 shortcut_lists.push(ActionShortcuts { action: binding.action, shortcuts: entries.into_iter().flatten().collect() });
             }
         }
-        let snapshot = SettingsSnapshot { bindings, shortcut_lists, folder_sorts, favorites, hide_notices_at_startup, skip_quit_confirmation, visibility };
+        let snapshot = SettingsSnapshot { bindings, shortcut_lists, folder_sorts, favorites, hide_notices_at_startup, skip_quit_confirmation, visibility, context_menus };
         let session = read_session(connection)?;
         Ok(LoadedSettings { snapshot, session })
     }
     pub fn save(&mut self, snapshot: &SettingsSnapshot) -> Result<(), SettingsStorageError> {
         snapshot.favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
+        let context_menus = ContextMenuPreferences::from_entries(snapshot.context_menus.entries().to_vec()).map_err(|_| SettingsStorageError::InvalidData("context menu configuration"))?;
         let tx = self.connection.transaction()?;
         tx.execute("DELETE FROM action_shortcut", [])?;
         tx.execute("DELETE FROM action_binding", [])?;
@@ -176,6 +195,12 @@ impl SettingsDatabase {
         }
         for item in &snapshot.favorites.items {
             tx.execute("INSERT INTO favorite_item(id, group_id, name, target, position) VALUES (?1, ?2, ?3, ?4, ?5)", params![item.id, item.group_id, item.name, encode_location(&item.target), item.position])?;
+        }
+        tx.execute("DELETE FROM context_menu_action", [])?;
+        for kind in ContextMenuKind::ALL {
+            for action in CONTEXT_MENU_ACTIONS {
+                tx.execute("INSERT INTO context_menu_action(menu_kind, action, visible) VALUES (?1, ?2, ?3)", params![kind.as_str(), action.as_str(), i64::from(context_menus.visible(kind, action))])?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -307,6 +332,15 @@ fn migrate(connection: &mut Connection) -> Result<(), SettingsStorageError> {
         let taken: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM action_shortcut WHERE action <> 'MoveToTrash' AND command = 1 AND shift = 0 AND option = 0 AND control = 0 AND key = 'Forward Delete')", [], |row| row.get(0))?;
         if !taken && stored_shortcuts(&tx, ActionId::MoveToTrash)? == VERSION_NINE_TRASH {
             replace_shortcuts(&tx, ActionId::MoveToTrash, &VERSION_TEN_TRASH)?;
+        }
+    }
+    if version < 11 {
+        tx.execute_batch("CREATE TABLE context_menu_action(menu_kind TEXT NOT NULL CHECK(menu_kind IN ('Normal', 'Comprehensive')), action TEXT NOT NULL, visible INTEGER NOT NULL CHECK(visible IN (0, 1)), PRIMARY KEY(menu_kind, action));")?;
+        let defaults = ContextMenuPreferences::default();
+        for kind in ContextMenuKind::ALL {
+            for action in CONTEXT_MENU_ACTIONS {
+                tx.execute("INSERT INTO context_menu_action(menu_kind, action, visible) VALUES (?1, ?2, ?3)", params![kind.as_str(), action.as_str(), i64::from(defaults.visible(kind, action))])?;
+            }
         }
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -724,6 +758,13 @@ mod tests {
     fn drop_preview_height_columns(connection: &Connection) {
         connection.execute_batch("ALTER TABLE session_window DROP COLUMN right_preview_height; ALTER TABLE session_window DROP COLUMN left_preview_height;").unwrap();
     }
+    /// Removes structures a database at `version` did not have before a test
+    /// asks the production migrator to upgrade it again.
+    fn remove_newer_schema(connection: &Connection, version: i64) {
+        if version < 11 {
+            connection.execute("DROP TABLE context_menu_action", []).unwrap();
+        }
+    }
     fn wait_for_results(worker: &SettingsWorker) -> Vec<SettingsResult> {
         std::iter::repeat_with(|| worker.take_results()).find(|items| !items.is_empty()).unwrap()
     }
@@ -743,6 +784,28 @@ mod tests {
         assert_eq!(loaded.folder_sorts, snapshot.folder_sorts);
         assert!(loaded.favorites.initialized);
         assert!(loaded.favorites.groups.is_empty());
+    }
+    #[test]
+    fn context_menu_preferences_round_trip_and_reject_malformed_rows() {
+        let (_directory, path) = temp_database();
+        let mut database = SettingsDatabase::open(&path).unwrap();
+        let mut snapshot = database.load().unwrap();
+        snapshot.context_menus.set_visible(ContextMenuKind::Normal, ActionId::OpenItem, false).unwrap();
+        database.save(&snapshot).unwrap();
+        assert_eq!(database.load().unwrap().context_menus, snapshot.context_menus);
+
+        database.connection.execute("DELETE FROM context_menu_action WHERE menu_kind = 'Normal' AND action = 'CopyItems'", []).unwrap();
+        assert!(matches!(database.load(), Err(SettingsStorageError::InvalidData("context menu row count"))));
+    }
+    #[test]
+    fn version_ten_migration_seeds_context_menu_defaults() {
+        let (_directory, path) = temp_database();
+        let database = SettingsDatabase::open(&path).unwrap();
+        database.connection.execute("DROP TABLE context_menu_action", []).unwrap();
+        database.connection.pragma_update(None, "user_version", 10).unwrap();
+        drop(database);
+        let database = SettingsDatabase::open(&path).unwrap();
+        assert_eq!(database.load().unwrap().context_menus, ContextMenuPreferences::default());
     }
     #[test]
     fn session_round_trips_tab_order_active_tabs_and_each_window_state() {
@@ -798,6 +861,7 @@ mod tests {
             if version < 8 {
                 drop_preview_height_columns(&db.connection);
             }
+            remove_newer_schema(&db.connection, version);
             db.connection.execute("DELETE FROM action_binding WHERE action = 'NewTab'", []).unwrap();
             db.connection.execute("INSERT INTO favorite_group(id, name, position) VALUES (1, ' ', 0)", []).unwrap();
             db.connection.pragma_update(None, "user_version", version).unwrap();
@@ -818,6 +882,7 @@ mod tests {
         drop(database);
         let connection = Connection::open(&path).unwrap();
         drop_preview_height_columns(&connection);
+        remove_newer_schema(&connection, 0);
         connection.pragma_update(None, "user_version", 0).unwrap();
         drop(connection);
         let db = SettingsDatabase::open(&path).unwrap();
@@ -851,6 +916,7 @@ mod tests {
         drop(SettingsDatabase::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
         drop_preview_height_columns(&connection);
+        remove_newer_schema(&connection, 6);
         connection.execute("DELETE FROM setting_marker WHERE key IN ('show_macos_items', 'show_dotfiles', 'show_macos_invisible')", []).unwrap();
         connection.pragma_update(None, "user_version", 6).unwrap();
         drop(connection);
@@ -1091,6 +1157,7 @@ mod tests {
         let (_directory, path) = temp_database();
         drop(SettingsDatabase::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
+        remove_newer_schema(&connection, 8);
         connection.execute_batch("DELETE FROM action_shortcut WHERE action IN ('RenameItem', 'MoveToTrash'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('RenameItem', 0, 0, 0, 0, 0, 'F2'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 0, 1, 0, 0, 'Delete'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 1, 0, 1, 0, 0, 'Forward Delete'); UPDATE action_binding SET command = 0, shift = 0, option = 0, control = 0, key = 'F2' WHERE action = 'RenameItem'; UPDATE action_binding SET command = 0, shift = 1, option = 0, control = 0, key = 'Delete' WHERE action = 'MoveToTrash'; PRAGMA user_version = 8;").unwrap();
         drop(connection);
 
@@ -1104,6 +1171,7 @@ mod tests {
         let (_directory, path) = temp_database();
         drop(SettingsDatabase::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
+        remove_newer_schema(&connection, 8);
         connection.execute_batch("DELETE FROM action_shortcut WHERE action IN ('RenameItem', 'MoveToTrash'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('RenameItem', 0, 1, 0, 0, 0, 'J'); INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 1, 0, 0, 0, 'K'); UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'J' WHERE action = 'RenameItem'; UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'K' WHERE action = 'MoveToTrash'; PRAGMA user_version = 8;").unwrap();
         drop(connection);
 
@@ -1117,6 +1185,7 @@ mod tests {
         let (_directory, path) = temp_database();
         drop(SettingsDatabase::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
+        remove_newer_schema(&connection, 9);
         connection.execute_batch("DELETE FROM action_shortcut WHERE action = 'MoveToTrash'; INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 1, 0, 0, 0, 'Delete'), ('MoveToTrash', 1, 0, 1, 0, 0, 'Delete'), ('MoveToTrash', 2, 0, 1, 0, 0, 'Forward Delete'); PRAGMA user_version = 9;").unwrap();
         drop(connection);
 
@@ -1129,6 +1198,7 @@ mod tests {
         let (_directory, path) = temp_database();
         drop(SettingsDatabase::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
+        remove_newer_schema(&connection, 9);
         connection.execute_batch("DELETE FROM action_shortcut WHERE action = 'MoveToTrash'; INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('MoveToTrash', 0, 1, 0, 0, 0, 'Delete'), ('MoveToTrash', 1, 0, 1, 0, 0, 'Delete'); PRAGMA user_version = 9;").unwrap();
         drop(connection);
 
@@ -1144,6 +1214,7 @@ mod tests {
             let (_directory, path) = temp_database();
             drop(SettingsDatabase::open(&path).unwrap());
             let connection = Connection::open(&path).unwrap();
+            remove_newer_schema(&connection, version);
             // Open Item loads after Move to Trash, so a conflicting trash list
             // would win and drop this custom shortcut.
             connection.execute_batch(&format!("DELETE FROM action_shortcut WHERE action IN ('MoveToTrash', 'OpenItem'); {trash} INSERT INTO action_shortcut(action, position, command, shift, option, control, key) VALUES ('OpenItem', 0, 1, 0, 0, 0, 'Forward Delete'); UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'Forward Delete' WHERE action = 'OpenItem'; PRAGMA user_version = {version};")).unwrap();
@@ -1227,6 +1298,7 @@ mod tests {
     fn version_four_shortcuts_migrate_to_ordered_entries() {
         let (_directory, path) = temp_database();
         let database = SettingsDatabase::open(&path).unwrap();
+        remove_newer_schema(&database.connection, 4);
         database.connection.execute_batch("DROP TABLE action_shortcut; UPDATE action_binding SET command = 1, shift = 0, option = 0, control = 0, key = 'J' WHERE action = 'NewFolder'; UPDATE action_binding SET command = NULL, shift = NULL, option = NULL, control = NULL, key = NULL WHERE action = 'NewTab'; PRAGMA user_version = 4;").unwrap();
         drop_preview_height_columns(&database.connection);
         drop(database);

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
+use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, ContextMenuKind, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, FolderItemsMenuTarget, FolderItemsMenuToken, MonitoringStatus, PlannedItem, PreviewRequest, PreviewResult, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, OperationRoot, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,20 @@ pub enum Input {
 /// Browser's active tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    RequestFolderItemsMenu {
+        browser: BrowserSide,
+        tab: TabId,
+        visible_revision: u64,
+        kind: ContextMenuKind,
+        target: FolderItemsMenuTarget,
+    },
+    InvokeFolderItemsMenu {
+        token: FolderItemsMenuToken,
+        action: ActionId,
+    },
+    DismissFolderItemsMenu {
+        token: FolderItemsMenuToken,
+    },
     CaptureClipboard {
         browser: BrowserSide,
         tab: TabId,
@@ -252,6 +266,15 @@ pub enum Command {
     RestoreActionShortcuts {
         action: ActionId,
     },
+    SetContextMenuVisibility {
+        kind: ContextMenuKind,
+        action: ActionId,
+        visible: bool,
+    },
+    ResetContextMenu {
+        kind: ContextMenuKind,
+    },
+    ResetContextMenus,
     UpdateWindowLayout {
         layout: WindowLayout,
     },

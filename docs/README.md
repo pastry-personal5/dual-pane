@@ -34,6 +34,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-4/milestone-08-architecture.md](phase-4/milestone-08-architecture.md) | P4-M8 breadcrumb, column-loading, and tab-navigation approach. |
 | [phase-4/milestone-09-overview.md](phase-4/milestone-09-overview.md) | P4-M9 owner decisions and checklist for single-instance command-line launch. |
 | [phase-4/milestone-09-architecture.md](phase-4/milestone-09-architecture.md) | P4-M9 journal safety, socket rendezvous, protocol, Browser search, and window activation. |
+| [phase-4/milestone-10-overview.md](phase-4/milestone-10-overview.md) | P4-M10 owner decisions and checklist for configurable Normal and Comprehensive Folder Items Context Menus. |
+| [phase-4/milestone-10-architecture.md](phase-4/milestone-10-architecture.md) | P4-M10 settings model, schema migration, typed menu projection, observed dispatch, and native verification approach. |
 | [phase-4/changelog.md](phase-4/changelog.md) | Phase 4 planning and later owner or design decisions. |
 | [archive/phases/phase-3/phase-3.md](archive/phases/phase-3/phase-3.md) | Completed Phase 3 goal, exit criteria, and milestone sequence. |
 | [archive/phases/phase-3/milestone-01-overview.md](archive/phases/phase-3/milestone-01-overview.md) | P3-M1 scope and executable completion checklist. |

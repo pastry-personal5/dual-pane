@@ -133,13 +133,19 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ISOLATED_PASTEBOARD: Mutex<()> = Mutex::new(());
 
     /// Gives the test thread a unique pasteboard, never the user's clipboard.
-    struct Isolated;
+    struct Isolated {
+        _guard: MutexGuard<'static, ()>,
+    }
     impl Isolated {
         fn new() -> Self {
+            let guard = ISOLATED_PASTEBOARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             ffi::clipboard_isolation_begin();
-            Self
+            Self { _guard: guard }
         }
     }
     impl Drop for Isolated {

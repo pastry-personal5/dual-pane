@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, EditorOutcome, FavoritesEvent, InputController, OperationsPresenter, OperationsViewModel, UNREPRESENTABLE_NAME_TEXT, UiEvent, WorkspacePresenter, WorkspaceViewModel, name_rejection_text};
-use dual_pane_application::{ClipboardAction, Command, Event, FavoriteEdit, FavoriteRejection, Input, Output, SettingsFailure, WindowLayout, WorkRequest, Workspace};
+use dual_pane_application::{ClipboardAction, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteRejection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, Input, Output, SettingsFailure, WindowLayout, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection, TabId};
 
 use crate::native_location::{location_from_path, path_from_location};
@@ -365,6 +365,28 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         } else {
             self.submit(command);
         }
+    }
+
+    /// Obtains the application-owned, one-use context-menu projection for
+    /// exactly the rows currently shown by the native view.
+    pub fn request_folder_items_menu(&mut self, browser: BrowserSide, kind: ContextMenuKind, row: Option<usize>, shown: &BrowserViewModel) -> Option<FolderItemsMenuSnapshot> {
+        let tab = shown.active_tab()?;
+        let target = match row {
+            Some(row) => FolderItemsMenuTarget::Row { row, name: shown.row_entry_name(row)? },
+            None => FolderItemsMenuTarget::EmptySpace,
+        };
+        self.handle_all(Command::RequestFolderItemsMenu { browser, tab, visible_revision: shown.visible_revision(), kind, target }.into()).into_iter().find_map(|output| match output {
+            Output::FolderItemsMenuReady { snapshot } => snapshot,
+            _ => None,
+        })
+    }
+
+    pub fn invoke_folder_items_menu(&mut self, token: dual_pane_application::FolderItemsMenuToken, action: dual_pane_application::ActionId) {
+        self.submit(Command::InvokeFolderItemsMenu { token, action });
+    }
+
+    pub fn dismiss_folder_items_menu(&mut self, token: dual_pane_application::FolderItemsMenuToken) {
+        self.submit(Command::DismissFolderItemsMenu { token });
     }
 
     /// Applies a filter edit only to the tab whose row produced the edit.

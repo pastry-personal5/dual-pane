@@ -1,6 +1,6 @@
 # P4-M9 architecture
 
-Status: Active
+Status: Done
 
 A launcher process either forwards its resolved command-line target to the instance that owns the profile's socket, or becomes that instance. The receiving instance turns the request into the existing `OpenLaunchTarget` command plus a window-activation output; the application, not the launcher, chooses the Browser. The [overview checklist](milestone-09-overview.md#completion-checklist) defines acceptance.
 

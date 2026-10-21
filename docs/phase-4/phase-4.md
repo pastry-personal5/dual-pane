@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, and command-line entry into the running workspace.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, text-filter delivery in P4-M3, the clipboard-transfer model in P4-M4, and clipboard delivery in P4-M5. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, text-filter delivery in P4-M3, the clipboard-transfer model in P4-M4, clipboard delivery in P4-M5, and independent single-instance command-line launch work in P4-M9. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -17,6 +17,7 @@ The intended feature set is:
 - Click an ancestor component of the confirmed absolute path to navigate the active tab. Expand the control vertically to browse available folder options in columns, then collapse it without changing the active path.
 - Drag selected Folder Items to supported targets in the workspace, using the same copy/move decisions, progress, cancellation, and data-safety rules as menu or keyboard commands.
 - Open a command-line target in the running instance, reusing an existing tab in either Browser when possible and bringing the workspace forward.
+- Provide fast Normal and exact-Shift Comprehensive Folder Items Context Menus, with persistent visibility controls for their existing file actions.
 
 Phase 4 supports file Copy between Dual Pane and Finder in both directions. Finder-sourced Paste into Dual Pane is a Copy through the existing safeguarded operation workflow, never a move of Finder's source. This does not export Cut as a Finder move or support drags to or from Finder. Unsupported or malformed clipboard content, and external drag payloads, must not start a Dual Pane operation.
 
@@ -27,6 +28,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 - The Path Edit Control accepts a folder path, navigates when a confirmed breadcrumb component is activated, and expands into a bounded-height column browser for available folders. It gives clear validation and navigation feedback without replacing the last successful Folder Items when navigation fails.
 - Drag and drop uses explicit supported source and target types and a visible copy or move outcome; a rejected or cancelled drop changes no files.
 - A command-line launch forwards one resolved target to the registered instance for that profile, or raises it without changing tabs when no target is given. An explicit new-instance launch remains available, and concurrent instances cannot sweep one another's live operation temporaries.
+- Normal and Comprehensive Folder Items Context Menus use the approved configuration, grouping, availability, shortcut annotation, platform access, and stale-target rules without adding a separate file-operation path.
 - The new controls and commands work by pointer and keyboard where appropriate, have accessible names and feedback, and preserve the existing shortcut editor's conflict rules.
 - All milestone checklists and the full repository gate pass. Native checks use a disposable profile and temporary file data.
 
@@ -41,7 +43,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestones run in the order below, except P4-M9, which is independent and may be implemented ahead of P4-M6 to P4-M8. P4-M1 through P4-M5 are complete; P4-M9 is active.
+Milestone IDs and entries remain in numeric order below. P4-M9 was independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M5 and P4-M9 are complete; P4-M10 is next and will be implemented before any other planned milestone.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -93,6 +95,12 @@ Plan: [overview](milestone-08-overview.md), [architecture](milestone-08-architec
 
 ### P4-M9: Single-instance command-line launch
 
-Status: Active
+Status: Done
 Goal: Make `dual-pane <folder>` open the folder in the running instance, activating and focusing a tab that already shows it, and bring that window forward.
 Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architecture.md)
+
+### P4-M10: Enhance Folder Items Context Menu
+
+Status: Planned
+Goal: Add configurable Normal and Comprehensive Folder Items Context Menus that open responsively, expose only available existing file commands, and cannot retarget stale state.
+Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architecture.md)

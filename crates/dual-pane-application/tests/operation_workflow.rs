@@ -129,6 +129,8 @@ fn conflicts_tokens_progress_and_cleanup_are_validated() {
     let Output::OperationChanged { job } = &waiting.outputs[0] else { panic!() };
     let OperationStatus::Waiting { token, .. } = job.status() else { panic!() };
     let token = *token;
+    assert_eq!(ws.handle(Command::RaiseWindow.into()).outputs, vec![Output::ActivateWindow { focus_browser: None }]);
+    assert!(matches!(ws.operation_jobs()[0].status(), OperationStatus::Waiting { token: current, .. } if *current == token), "a forwarded raise neither dismisses nor answers the Operation Decision Card");
     assert!(ws.handle(Command::DecideOperation { id, token, item: root.clone(), choice: OperationChoice::Replace, apply_to_all: true }.into()).outputs.is_empty());
     assert!(ws.handle(Command::DecideOperation { id, token, item: child.clone(), choice: OperationChoice::TryAgain, apply_to_all: false }.into()).outputs.is_empty());
     let retry = ws.handle(Command::DecideOperation { id, token, item: child.clone(), choice: OperationChoice::Replace, apply_to_all: true }.into());

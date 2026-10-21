@@ -6,10 +6,10 @@ use std::pin::Pin;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QList, QModelIndex, QString, QVariant};
 use dual_pane_adapters::{BrowserViewModel, EditorOutcome, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent};
-use dual_pane_application::{ClipboardAction, PreviewView};
+use dual_pane_application::{ActionId, ClipboardAction, ContextMenuKind, FolderItemsMenuAction, FolderItemsMenuSnapshot, PreviewView};
 use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection, SortField, SortSpec, TabId};
 
-use crate::workspace_bridge::{revision, with_session};
+use crate::workspace_bridge::{key_sequence, revision, with_session};
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
 pub mod ffi {
@@ -141,6 +141,24 @@ pub mod ffi {
         fn observe_clipboard(self: Pin<&mut FolderItemsListModel>);
         #[cxx_name = "showPackageContentsObserved"]
         fn show_package_contents_observed(self: Pin<&mut FolderItemsListModel>, row: i32, tab: u64, visible_revision: u64);
+        #[cxx_name = "requestContextMenu"]
+        fn request_context_menu(self: Pin<&mut FolderItemsListModel>, kind: i32, row: i32) -> bool;
+        #[cxx_name = "contextMenuActionCount"]
+        fn context_menu_action_count(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "contextMenuActionId"]
+        fn context_menu_action_id(self: &FolderItemsListModel, index: i32) -> i32;
+        #[cxx_name = "contextMenuActionLabel"]
+        fn context_menu_action_label(self: &FolderItemsListModel, index: i32) -> QString;
+        #[cxx_name = "contextMenuActionShortcut"]
+        fn context_menu_action_shortcut(self: &FolderItemsListModel, index: i32) -> QString;
+        #[cxx_name = "contextMenuActionStartsSection"]
+        fn context_menu_action_starts_section(self: &FolderItemsListModel, index: i32) -> bool;
+        #[cxx_name = "contextMenuKind"]
+        fn context_menu_kind(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "invokeContextMenuAction"]
+        fn invoke_context_menu_action(self: Pin<&mut FolderItemsListModel>, index: i32);
+        #[cxx_name = "dismissContextMenu"]
+        fn dismiss_context_menu(self: Pin<&mut FolderItemsListModel>);
 
         #[cxx_name = "selectRow"]
         fn select_row(self: Pin<&mut FolderItemsListModel>, row: i32);
@@ -259,6 +277,28 @@ fn command_code(command: OperationCommand) -> i32 {
     OperationCommand::ALL.iter().position(|candidate| *candidate == command).map_or(-1, qt_int)
 }
 
+fn context_menu_action(menu: Option<&FolderItemsMenuSnapshot>, index: i32) -> Option<&FolderItemsMenuAction> {
+    let index = usize::try_from(index).ok()?;
+    menu?.sections.iter().flat_map(|section| section.actions.iter()).nth(index)
+}
+
+fn action_label(action: ActionId) -> &'static str {
+    match action {
+        ActionId::RenameItem => "Rename Item",
+        ActionId::NewFolder => "New Folder",
+        ActionId::OpenItem => "Open Item",
+        ActionId::ShowPackageContents => "Show Package Contents",
+        ActionId::CopyItems => "Copy Items",
+        ActionId::CutItems => "Cut Items",
+        ActionId::PasteItems => "Paste Items",
+        ActionId::CopyToOtherBrowser => "Copy to Other Browser",
+        ActionId::MoveToOtherBrowser => "Move to Other Browser",
+        ActionId::MoveToTrash => "Move to Trash",
+        ActionId::DeletePermanently => "Delete Permanently",
+        _ => "",
+    }
+}
+
 /// The job a Qt `i64` names, or `None` for a negative value.
 pub fn operation_id(job: i64) -> Option<OperationId> {
     u64::try_from(job).ok().map(OperationId::new)
@@ -340,10 +380,11 @@ pub struct FolderItemsListModelRust {
     name_error: QString,
     browser: BrowserSide,
     shown: BrowserViewModel,
+    context_menu: Option<FolderItemsMenuSnapshot>,
 }
 impl Default for FolderItemsListModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), filter_text: QString::default(), filter_status: 0, filter_result_count: 0, no_filter_matches: false, cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default() }
+        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), filter_text: QString::default(), filter_status: 0, filter_result_count: 0, no_filter_matches: false, cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default(), context_menu: None }
     }
 }
 
@@ -554,6 +595,62 @@ impl ffi::FolderItemsListModel {
             with_session(|session| session.submit_ui_at_observation(browser, UiEvent::ShowPackageContents { row }, tab, visible_revision));
             self.as_mut().session_changed();
         }
+    }
+    fn request_context_menu(mut self: Pin<&mut Self>, kind: i32, row: i32) -> bool {
+        let kind = if kind == 1 { ContextMenuKind::Comprehensive } else { ContextMenuKind::Normal };
+        let browser = self.rust().browser;
+        let shown = self.rust().shown.clone();
+        let menu = with_session(|session| session.request_folder_items_menu(browser, kind, usize::try_from(row).ok(), &shown)).flatten();
+        self.as_mut().rust_mut().get_mut().context_menu = menu;
+        self.as_mut().session_changed();
+        self.rust().context_menu.is_some()
+    }
+    fn context_menu_action_count(&self) -> i32 {
+        self.rust().context_menu.as_ref().map(|menu| menu.sections.iter().map(|section| section.actions.len()).sum::<usize>()).and_then(|count| i32::try_from(count).ok()).unwrap_or(0)
+    }
+    fn context_menu_action_id(&self, index: i32) -> i32 {
+        context_menu_action(self.rust().context_menu.as_ref(), index).map_or(-1, |action| action.action as i32)
+    }
+    fn context_menu_action_label(&self, index: i32) -> QString {
+        context_menu_action(self.rust().context_menu.as_ref(), index).map_or_else(QString::default, |action| QString::from(action_label(action.action)))
+    }
+    fn context_menu_action_shortcut(&self, index: i32) -> QString {
+        context_menu_action(self.rust().context_menu.as_ref(), index).and_then(|action| action.shortcut).map(key_sequence).map_or_else(QString::default, |sequence| QString::from(sequence.as_str()))
+    }
+    fn context_menu_action_starts_section(&self, index: i32) -> bool {
+        let Ok(index) = usize::try_from(index) else { return false };
+        self.rust().context_menu.as_ref().is_some_and(|menu| {
+            menu.sections
+                .iter()
+                .scan(0, |offset, section| {
+                    let first = *offset;
+                    *offset += section.actions.len();
+                    Some(first)
+                })
+                .any(|first| first == index && index != 0)
+        })
+    }
+    fn context_menu_kind(&self) -> i32 {
+        self.rust().context_menu.as_ref().map_or(0, |menu| matches!(menu.kind, ContextMenuKind::Comprehensive) as i32)
+    }
+    fn invoke_context_menu_action(mut self: Pin<&mut Self>, index: i32) {
+        let menu = self.rust().context_menu.as_ref().map(|menu| (menu.token, context_menu_action(Some(menu), index).map(|action| action.action)));
+        self.as_mut().rust_mut().get_mut().context_menu = None;
+        if let Some((token, action)) = menu {
+            with_session(|session| match action {
+                Some(action) => session.invoke_folder_items_menu(token, action),
+                None => session.dismiss_folder_items_menu(token),
+            });
+        }
+        self.as_mut().session_changed();
+    }
+    fn dismiss_context_menu(mut self: Pin<&mut Self>) {
+        let token = self.rust().context_menu.as_ref().map(|menu| menu.token);
+        self.as_mut().rust_mut().get_mut().context_menu = None;
+        if let Some(token) = token {
+            with_session(|session| session.dismiss_folder_items_menu(token));
+        }
+        self.as_mut().session_changed();
     }
     fn select_row(self: Pin<&mut Self>, row: i32) {
         self.row_event(row, |row| UiEvent::SelectRow { row });

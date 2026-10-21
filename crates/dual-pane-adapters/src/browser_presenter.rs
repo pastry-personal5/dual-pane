@@ -249,6 +249,10 @@ impl BrowserViewModel {
     pub fn row_count(&self) -> usize {
         self.entries.len()
     }
+    /// The byte-exact identity of a row displayed in this projection.
+    pub fn row_entry_name(&self, row: usize) -> Option<EntryName> {
+        self.entry(row).map(|entry| entry.name().clone())
+    }
     pub fn filter_text(&self) -> &str {
         &self.filter_text
     }
@@ -622,7 +626,7 @@ impl BrowserPresenter {
         }
         let output_browser = match output {
             Output::ClipboardRejected { browser: Some(browser), .. } | Output::ClipboardPrepared { browser, .. } | Output::ClipboardPasteStarted { browser, .. } | Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
-            Output::ClipboardPresentationChanged { .. } | Output::ClipboardRejected { browser: None, .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::ActivateWindow { .. } | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
+            Output::FolderItemsMenuReady { .. } | Output::ContextMenuPreferenceRejected { .. } | Output::ClipboardPresentationChanged { .. } | Output::ClipboardRejected { browser: None, .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::ActivateWindow { .. } | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
             return;

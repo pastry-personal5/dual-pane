@@ -42,6 +42,7 @@
 #include <QtGui/QImage>
 #include <QtGui/QInputMethodEvent>
 #include <QtGui/QKeyEvent>
+#include <QtGui/QKeySequence>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPainter>
@@ -669,8 +670,9 @@ class FolderItemsList final : public QTreeView {
 
     void setColumnsHandler(std::function<void(const std::array<bool, column_count> &)> handler) { columns_handler_ = std::move(handler); }
     /// Shows the Folder Items Context Menu at a global point for `row`, or
-    /// for empty space when `row` is -1.
-    void setMenuHandler(std::function<void(const QPoint &, int)> handler) { menu_handler_ = std::move(handler); }
+    /// for empty space when `row` is -1. `comprehensive` is true only for an
+    /// exact Shift invocation.
+    void setMenuHandler(std::function<void(const QPoint &, int, bool)> handler) { menu_handler_ = std::move(handler); }
     void setQuickLookFailureHandler(std::function<void()> handler) { quick_look_failure_handler_ = std::move(handler); }
     void setTypeToFilterHandler(std::function<void(const QString &)> handler) { type_to_filter_handler_ = std::move(handler); }
     void setInputMethodHandler(std::function<void(const QString &, const QString &, const QList<QInputMethodEvent::Attribute> &)> handler) { input_method_handler_ = std::move(handler); }
@@ -713,10 +715,6 @@ class FolderItemsList final : public QTreeView {
                 model_->selectRow(index.row());
         } else if (event->button() == Qt::RightButton) {
             focusList();
-            if (index.isValid())
-                model_->secondaryRow(index.row());
-            if (menu_handler_)
-                menu_handler_(event->globalPosition().toPoint(), index.isValid() ? index.row() : -1);
         }
     }
     void mouseReleaseEvent(QMouseEvent *event) override { event->accept(); }
@@ -729,6 +727,27 @@ class FolderItemsList final : public QTreeView {
             model_->selectRow(index.row());
             model_->activateRow(index.row());
         }
+    }
+    void contextMenuEvent(QContextMenuEvent *event) override {
+        event->accept();
+        focusList();
+        const auto index = indexAt(event->pos());
+        const auto modifiers = user_modifiers(event->modifiers());
+        const bool comprehensive = modifiers == Qt::ShiftModifier;
+        QPoint at = event->globalPos();
+        int row = index.isValid() ? index.row() : -1;
+        if (event->reason() != QContextMenuEvent::Mouse) {
+            row = model_->getCursorRow();
+            if (row >= 0) {
+                const auto cursor = model_->index(row, 0, QModelIndex());
+                if (cursor.isValid())
+                    at = viewport()->mapToGlobal(visualRect(cursor).center());
+            }
+            if (row < 0)
+                at = viewport()->mapToGlobal(QPoint(fontMetrics().height(), fontMetrics().height()));
+        }
+        if (menu_handler_)
+            menu_handler_(at, row, comprehensive);
     }
     void keyPressEvent(QKeyEvent *event) override {
         event->accept();
@@ -898,7 +917,7 @@ class FolderItemsList final : public QTreeView {
     FolderItemsListModel *model_;
     ItemIconDelegate *icons_;
     std::function<void(const std::array<bool, column_count> &)> columns_handler_;
-    std::function<void(const QPoint &, int)> menu_handler_;
+    std::function<void(const QPoint &, int, bool)> menu_handler_;
     std::function<void()> quick_look_failure_handler_;
     std::function<void(const QString &)> type_to_filter_handler_;
     std::function<void(const QString &, const QString &, const QList<QInputMethodEvent::Attribute> &)> input_method_handler_;
@@ -1972,7 +1991,7 @@ class Browser final : public QWidget {
             const int token = model->getStatusToken();
             QTimer::singleShot(status_reason_milliseconds, model, [model, token] { model->expireStatus(token); });
         });
-        folder_->view()->setMenuHandler([this](const QPoint &at, int row) { show_menu(at, row); });
+        folder_->view()->setMenuHandler([this](const QPoint &at, int row, bool comprehensive) { show_menu(at, row, comprehensive); });
     }
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return folder_->view(); }
@@ -2038,48 +2057,30 @@ class Browser final : public QWidget {
         if (missing && !narrow)
             missing_->raise();
     }
-    /// The Folder Items Context Menu. Items the application refuses now stay
-    /// disabled; empty space offers New Folder.
-    void show_menu(const QPoint &at, int row) {
-        model_->observeClipboard();
+    /// The application supplies exactly the currently allowed actions and a
+    /// one-use token. Qt only renders and returns the chosen row.
+    void show_menu(const QPoint &at, int row, bool comprehensive) {
+        if (!model_->requestContextMenu(comprehensive ? 1 : 0, row))
+            return;
         QMenu menu(this);
-        const auto observed_tab = model_->activeTabId();
-        const auto observed_revision = model_->visibleRevision();
         menu.setObjectName(QStringLiteral("folderItemsContextMenu"));
-        menu.setAccessibleName(QStringLiteral("Folder Items Context Menu"));
-        const auto add = [this, &menu, observed_tab, observed_revision](const QString &text, int command) {
-            auto *action = menu.addAction(text);
-            action->setEnabled(model_->fileCommandAvailable(command));
-            QObject::connect(action, &QAction::triggered, this, [this, command, observed_tab, observed_revision] { model_->startFileCommandObserved(command, observed_tab, observed_revision); });
-        };
-        const auto add_clipboard = [this, &menu, observed_tab, observed_revision](const QString &text, int command) {
-            auto *action = menu.addAction(text);
-            action->setEnabled(model_->clipboardCommandAvailable(command));
-            QObject::connect(action, &QAction::triggered, this, [this, command, observed_tab, observed_revision] { model_->startClipboardCommandObserved(command, observed_tab, observed_revision); });
-        };
-        if (row >= 0) {
-            add_clipboard(QStringLiteral("Copy Items"), clipboard_copy);
-            add_clipboard(QStringLiteral("Cut Items"), clipboard_cut);
-            add_clipboard(QStringLiteral("Paste Items"), clipboard_paste);
-            menu.addSeparator();
-            add(QStringLiteral("Copy to Other Browser"), command_copy);
-            add(QStringLiteral("Move to Other Browser"), command_move);
-            add(QStringLiteral("Rename Item"), command_rename);
-            menu.addSeparator();
-            add(QStringLiteral("New Folder"), command_new_folder);
-            menu.addSeparator();
-            add(QStringLiteral("Move to Trash"), command_trash);
-            add(QStringLiteral("Delete Permanently"), command_delete);
-            if (model_->rowIsPackage(row)) {
+        menu.setAccessibleName(model_->contextMenuKind() == 1 ? QStringLiteral("Comprehensive Folder Items Context Menu") : QStringLiteral("Normal Folder Items Context Menu"));
+        std::vector<QAction *> actions;
+        for (int index = 0; index < model_->contextMenuActionCount(); ++index) {
+            if (model_->contextMenuActionStartsSection(index))
                 menu.addSeparator();
-                QObject::connect(menu.addAction(QStringLiteral("Show Package Contents")), &QAction::triggered, this, [this, row, observed_tab, observed_revision] { model_->showPackageContentsObserved(row, observed_tab, observed_revision); });
-            }
-        } else {
-            add_clipboard(QStringLiteral("Paste Items"), clipboard_paste);
-            menu.addSeparator();
-            add(QStringLiteral("New Folder"), command_new_folder);
+            auto *action = menu.addAction(model_->contextMenuActionLabel(index));
+            const auto shortcut = QKeySequence::fromString(model_->contextMenuActionShortcut(index), QKeySequence::PortableText).toString(QKeySequence::NativeText);
+            if (!shortcut.isEmpty())
+                action->setText(action->text() + QStringLiteral("\t") + shortcut);
+            actions.push_back(action);
         }
-        menu.exec(at);
+        QAction *chosen = menu.exec(at);
+        const auto found = std::find(actions.cbegin(), actions.cend(), chosen);
+        if (found == actions.cend())
+            model_->dismissContextMenu();
+        else
+            model_->invokeContextMenuAction(static_cast<int>(std::distance(actions.cbegin(), found)));
     }
 
     FolderItemsListModel *model_;
@@ -3067,6 +3068,35 @@ class WaitingWindow final : public QWidget {
   private:
     WorkspaceWindow *workspace_;
 };
+
+/// Brings the workspace's current blocking surface forward. The target is
+/// chosen again on the next GUI turn because a modal can appear between the
+/// application command and the deferred native activation fallback.
+void activate_workspace_window(WorkspaceWindow *window, WaitingWindow *waiting, int request, std::function<void(int)> focus_browser, bool allow_native_fallback = true) {
+    const auto current_target = [window, waiting] {
+        if (QWidget *modal = QApplication::activeModalWidget())
+            return modal;
+        return waiting->isVisible() ? static_cast<QWidget *>(waiting) : static_cast<QWidget *>(window);
+    };
+    QWidget *target = current_target();
+    if (target == window && window->isMinimized()) {
+        window->setWindowState((window->windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+        window->show();
+    } else {
+        target->show();
+    }
+    target->raise();
+    target->activateWindow();
+    QTimer::singleShot(0, window, [window, current_target, request, focus_browser = std::move(focus_browser), allow_native_fallback] {
+        if (allow_native_fallback && QApplication::applicationState() != Qt::ApplicationActive)
+            activate_application();
+        QWidget *target = current_target();
+        target->raise();
+        target->activateWindow();
+        if (target == window && request >= 0)
+            focus_browser(request);
+    });
+}
 
 /// The auxiliary Notices window. It never blocks browsing; storage errors
 /// offer Reset Settings behind an explicit confirmation.
@@ -4661,6 +4691,68 @@ auto run_application_title_row_checks(QApplication &app) -> int {
     return QApplication::exec();
 }
 
+/// Exercises the single-instance activation target with real modal and
+/// waiting widgets. The check keeps native application activation disabled;
+/// foregrounding itself remains an interactive macOS acceptance item.
+auto run_instance_activation_checks(QApplication &app) -> int {
+    if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+        std::cerr << "Instance activation check failed: it runs only on Qt's offscreen platform\n";
+        return 1;
+    }
+    WorkspaceWindow window;
+    WaitingWindow waiting(&window);
+    auto *workspace_control = new QPushButton(QStringLiteral("Workspace"), &window);
+    window.setCentralWidget(workspace_control);
+    window.show();
+    QTimer::singleShot(0, &app, [&] {
+        bool failed = false;
+        const auto check = [&failed](bool condition, const char *name) {
+            if (!condition) {
+                std::cerr << "Instance activation check failed: " << name << '\n';
+                failed = true;
+            }
+        };
+        int list_focus_requests = 0;
+        const auto focus_browser = [&list_focus_requests](int) { ++list_focus_requests; };
+
+        waiting.show();
+        QApplication::processEvents();
+        activate_workspace_window(&window, &waiting, 0, focus_browser, false);
+        QApplication::processEvents();
+        check(waiting.isVisible() && list_focus_requests == 0, "the Waiting Window stays visible and prevents Folder Items focus");
+        waiting.hide();
+        QApplication::processEvents();
+
+        QMessageBox modal(QMessageBox::Question, QStringLiteral("Quit"), QStringLiteral("Keep this decision open"), QMessageBox::Cancel, &window);
+        modal.setWindowModality(Qt::ApplicationModal);
+        modal.show();
+        QApplication::processEvents();
+        auto *modal_focus = modal.button(QMessageBox::Cancel);
+        modal_focus->setFocus(Qt::OtherFocusReason);
+        activate_workspace_window(&window, &waiting, 0, focus_browser, false);
+        QApplication::processEvents();
+        check(modal.isVisible() && QApplication::activeModalWidget() == &modal && QApplication::focusWidget() == modal_focus && list_focus_requests == 0, "an existing modal retains visibility and focus");
+        modal.hide();
+        QApplication::processEvents();
+
+        activate_workspace_window(&window, &waiting, 0, focus_browser, false);
+        modal.show();
+        QApplication::processEvents();
+        check(modal.isVisible() && QApplication::activeModalWidget() == &modal && list_focus_requests == 0, "a modal appearing before the deferred activation prevents Folder Items focus");
+        modal.hide();
+        QApplication::processEvents();
+
+        activate_workspace_window(&window, &waiting, 0, focus_browser, false);
+        QApplication::processEvents();
+        check(list_focus_requests == 1, "a Browser request focuses its Folder Items List when no blocking surface exists");
+        activate_workspace_window(&window, &waiting, -1, focus_browser, false);
+        QApplication::processEvents();
+        check(list_focus_requests == 1, "a raise-only request changes no Browser focus");
+        QApplication::exit(failed ? 1 : 0);
+    });
+    return QApplication::exec();
+}
+
 /// Refreshes every binder after any call that may have changed the session.
 /// A refresh that triggers another call refreshes again instead of nesting.
 class RefreshCoordinator final {
@@ -4754,6 +4846,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         return run_text_editor_focus_checks(app);
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_APPLICATION_TITLE_ROW_CHECK"))
         return run_application_title_row_checks(app);
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_INSTANCE_ACTIVATION_CHECK"))
+        return run_instance_activation_checks(app);
     WorkspaceWindow window;
     auto *waiting = new WaitingWindow(&window);
     FolderItemsListModel left_model, right_model;
@@ -4777,31 +4871,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     const auto focus_active_list = [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->view()->focusList(); };
     coordinator.addListener([&bridge, &window, waiting, browsers] {
         for (int request = bridge.takeActivationRequest(); request != -2; request = bridge.takeActivationRequest()) {
-            QWidget *modal = QApplication::activeModalWidget();
-            QWidget *target = &window;
-            if (modal != nullptr)
-                target = modal;
-            else if (waiting->isVisible())
-                target = waiting;
-            if (target == &window && window.isMinimized()) {
-                window.setWindowState((window.windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
-                window.show();
-            } else {
-                target->show();
-            }
-            target->raise();
-            target->activateWindow();
-            QTimer::singleShot(0, &window, [&window, waiting, browsers, request] {
-                if (QApplication::applicationState() != Qt::ApplicationActive)
-                    activate_application();
-                QWidget *current_target = QApplication::activeModalWidget();
-                if (current_target == nullptr)
-                    current_target = waiting->isVisible() ? static_cast<QWidget *>(waiting) : static_cast<QWidget *>(&window);
-                current_target->raise();
-                current_target->activateWindow();
-                if (current_target == &window && request >= 0)
-                    browsers.at(request == 0 ? 0 : 1)->view()->focusList();
-            });
+            activate_workspace_window(&window, waiting, request, [browsers](int browser) { browsers.at(browser == 0 ? 0 : 1)->view()->focusList(); });
         }
     });
     auto *notices = new NoticesWindow(&bridge, &window);
