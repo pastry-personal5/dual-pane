@@ -93,6 +93,9 @@ fn classify_dir_entry(entry: DirEntry, directory: &Path, visibility: VisibilityP
     match hidden_by_visibility(entry.file_name().as_bytes(), &entry.path(), directory, own_kind, visibility, rules) {
         Ok(Some(true) | None) => return Some(Ok(None)),
         Ok(Some(false)) => {}
+        // One entry's visibility cannot be classified. Leaving it out of this
+        // listing is strictly better than failing the whole directory read.
+        Err(ListingErrorKind::VisibilityClassificationFailed) => return Some(Ok(None)),
         Err(kind) => return Some(Err(kind)),
     }
     if is_cancelled(cancelled) {
@@ -410,6 +413,18 @@ mod tests {
         assert_eq!(hidden_by_visibility(b"plain", &path, temporary.path(), NativeKind::File, default, &missing), Ok(None));
         assert_eq!(hidden_by_visibility(b"plain", &path, temporary.path(), NativeKind::File, default, &unreadable), Err(ListingErrorKind::VisibilityClassificationFailed));
         assert_eq!(hidden_by_visibility(b"plain", &path, temporary.path(), NativeKind::File, VisibilityPolicy { show_macos_invisible: true, ..default }, &unreadable), Ok(Some(false)));
+    }
+
+    #[test]
+    fn an_entry_whose_visibility_cannot_be_classified_is_left_out_but_the_listing_still_succeeds() {
+        let temporary = tempdir().unwrap();
+        File::create(temporary.path().join("plain")).unwrap();
+        File::create(temporary.path().join("unreadable")).unwrap();
+        let location = location_from_path(temporary.path()).unwrap();
+        let rules = ListingRules { hidden: &|_| false, package: &|_| false, volume_root: &|_| Ok(false), invisible: &|path| if path.file_name().is_some_and(|name| name.as_bytes() == b"unreadable") { Err(io::Error::from(io::ErrorKind::PermissionDenied)) } else { Ok(false) } };
+        let entries = read_listing(&location, SortSpec::default(), VisibilityPolicy::default(), &AtomicBool::new(false), &rules).unwrap().unwrap();
+        let names = entries.iter().map(|entry| entry.name().as_bytes().to_vec()).collect::<Vec<_>>();
+        assert_eq!(names, [b"plain".to_vec()]);
     }
 
     #[test]
