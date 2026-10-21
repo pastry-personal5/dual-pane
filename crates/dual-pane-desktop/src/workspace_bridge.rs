@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
-use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, favorite_rejection_text, reader_start_failure_status};
-use dual_pane_application::{ActionId, Command, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, default_shortcuts};
+use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, action_label, context_menu_rejection_text, favorite_rejection_text, reader_start_failure_status};
+use dual_pane_application::{ActionId, Command, ContextMenuKind, ContextMenuPreferenceRejection, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, default_shortcuts};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
@@ -88,6 +88,8 @@ pub mod ffi {
         #[qproperty(i32, saved_left_preview_height, cxx_name = "savedLeftPreviewHeight", READ, NOTIFY)]
         #[qproperty(i32, saved_right_preview_height, cxx_name = "savedRightPreviewHeight", READ, NOTIFY)]
         #[qproperty(i32, bindings_revision, cxx_name = "bindingsRevision", READ, NOTIFY)]
+        #[qproperty(i32, context_menus_revision, cxx_name = "contextMenusRevision", READ, NOTIFY)]
+        #[qproperty(i32, context_menu_rejection_revision, cxx_name = "contextMenuRejectionRevision", READ, NOTIFY)]
         #[qproperty(QString, startup_failure, cxx_name = "startupFailure", READ, NOTIFY)]
         type WorkspaceBridge = super::WorkspaceBridgeRust;
 
@@ -206,6 +208,30 @@ pub mod ffi {
         fn remove_action_shortcut(self: Pin<&mut WorkspaceBridge>, index: i32, position: i32) -> QString;
         #[cxx_name = "restoreActionShortcuts"]
         fn restore_action_shortcuts(self: Pin<&mut WorkspaceBridge>, index: i32) -> QString;
+
+        #[cxx_name = "contextMenuActionCount"]
+        fn context_menu_action_count(self: &WorkspaceBridge) -> i32;
+        #[cxx_name = "contextMenuActionLabel"]
+        fn context_menu_action_label(self: &WorkspaceBridge, index: i32) -> QString;
+        #[cxx_name = "contextMenuGroupLabel"]
+        fn context_menu_group_label(self: &WorkspaceBridge, index: i32) -> QString;
+        #[cxx_name = "contextMenuNormalVisible"]
+        fn context_menu_normal_visible(self: &WorkspaceBridge, index: i32) -> bool;
+        #[cxx_name = "contextMenuComprehensiveVisible"]
+        fn context_menu_comprehensive_visible(self: &WorkspaceBridge, index: i32) -> bool;
+        /// The first effective shortcut as Qt portable key-sequence text.
+        #[cxx_name = "contextMenuShortcut"]
+        fn context_menu_shortcut(self: &WorkspaceBridge, index: i32) -> QString;
+        /// `kind`: 0 Normal, 1 Comprehensive. Returns inline feedback.
+        #[cxx_name = "changeContextMenuVisibility"]
+        fn change_context_menu_visibility(self: Pin<&mut WorkspaceBridge>, index: i32, kind: i32, visible: bool) -> QString;
+        /// `kind`: 0 Normal, 1 Comprehensive.
+        #[cxx_name = "resetContextMenu"]
+        fn reset_context_menu(self: Pin<&mut WorkspaceBridge>, kind: i32);
+        #[cxx_name = "resetContextMenus"]
+        fn reset_context_menus(self: Pin<&mut WorkspaceBridge>);
+        #[cxx_name = "contextMenuRejectionText"]
+        fn context_menu_rejection_text(self: &WorkspaceBridge) -> QString;
     }
 }
 
@@ -296,6 +322,8 @@ pub struct WorkspaceBridgeRust {
     saved_left_preview_height: i32,
     saved_right_preview_height: i32,
     bindings_revision: i32,
+    context_menus_revision: i32,
+    context_menu_rejection_revision: i32,
     startup_failure: QString,
     shown: WorkspaceViewModel,
 }
@@ -365,6 +393,8 @@ impl ffi::WorkspaceBridge {
         let notices = revision(view.notices_revision());
         let opened = revision(view.open_requests());
         let bindings = revision(view.bindings_revision());
+        let context_menus = revision(view.context_menus_revision());
+        let context_menu_rejection = revision(view.context_menu_rejection_revision());
         let active = i32::from(view.active_browser() == BrowserSide::Right);
         let ready = view.favorites_ready();
         let hide_notices = view.hide_notices_at_startup();
@@ -377,6 +407,8 @@ impl ffi::WorkspaceBridge {
         self.as_mut().set_favorites_ready(ready);
         self.as_mut().set_favorites_revision(favorites);
         self.as_mut().set_bindings_revision(bindings);
+        self.as_mut().set_context_menus_revision(context_menus);
+        self.as_mut().set_context_menu_rejection_revision(context_menu_rejection);
         self.as_mut().set_notices_revision(notices);
         self.as_mut().set_notices_open_requests(opened);
         self.as_mut().set_hide_notices_at_startup(hide_notices);
@@ -620,6 +652,50 @@ impl ffi::WorkspaceBridge {
         rejection_text(result)
     }
 
+    fn context_menu_action_count(&self) -> i32 {
+        count(self.rust().shown.context_menu_rows().len())
+    }
+    fn context_menu_action_label(&self, index: i32) -> QString {
+        self.context_menu_row(index).map_or_else(QString::default, |row| QString::from(row.label.as_str()))
+    }
+    fn context_menu_group_label(&self, index: i32) -> QString {
+        self.context_menu_row(index).map_or_else(QString::default, |row| QString::from(row.group_label))
+    }
+    fn context_menu_normal_visible(&self, index: i32) -> bool {
+        self.context_menu_row(index).is_some_and(|row| row.normal)
+    }
+    fn context_menu_comprehensive_visible(&self, index: i32) -> bool {
+        self.context_menu_row(index).is_some_and(|row| row.comprehensive)
+    }
+    fn context_menu_shortcut(&self, index: i32) -> QString {
+        self.context_menu_row(index).and_then(|row| row.shortcut).map(key_sequence).map_or_else(QString::default, |shortcut| QString::from(shortcut.as_str()))
+    }
+    fn context_menu_row(&self, index: i32) -> Option<&dual_pane_adapters::ContextMenuSettingsRowViewModel> {
+        usize::try_from(index).ok().and_then(|index| self.rust().shown.context_menu_rows().get(index))
+    }
+    fn change_context_menu_visibility(mut self: Pin<&mut Self>, index: i32, kind: i32, visible: bool) -> QString {
+        let Some(action) = self.context_menu_row(index).map(|row| row.action) else { return QString::default() };
+        let kind = context_menu_kind(kind);
+        let rejection = with_session(|session| session.set_context_menu_visibility(kind, action, visible)).flatten();
+        self.as_mut().session_changed();
+        match rejection {
+            Some(ContextMenuPreferenceRejection::LastVisibleAction(kind)) => QString::from(context_menu_rejection_text(kind)),
+            Some(ContextMenuPreferenceRejection::IneligibleAction | ContextMenuPreferenceRejection::Malformed) => QString::from("Context Menu settings could not be changed."),
+            None => QString::default(),
+        }
+    }
+    fn reset_context_menu(mut self: Pin<&mut Self>, kind: i32) {
+        with_session(|session| session.reset_context_menu(context_menu_kind(kind)));
+        self.as_mut().session_changed();
+    }
+    fn reset_context_menus(mut self: Pin<&mut Self>) {
+        with_session(WorkspaceSession::reset_context_menus);
+        self.as_mut().session_changed();
+    }
+    fn context_menu_rejection_text(&self) -> QString {
+        self.rust().shown.last_context_menu_rejection().map(context_menu_rejection_text).map_or_else(QString::default, QString::from)
+    }
+
     fn set_active_browser(mut self: Pin<&mut Self>, value: i32) {
         if self.rust().active_browser != value {
             self.as_mut().rust_mut().get_mut().active_browser = value;
@@ -701,6 +777,18 @@ impl ffi::WorkspaceBridge {
         if self.rust().bindings_revision != value {
             self.as_mut().rust_mut().get_mut().bindings_revision = value;
             self.bindings_revision_changed();
+        }
+    }
+    fn set_context_menus_revision(mut self: Pin<&mut Self>, value: i32) {
+        if self.rust().context_menus_revision != value {
+            self.as_mut().rust_mut().get_mut().context_menus_revision = value;
+            self.context_menus_revision_changed();
+        }
+    }
+    fn set_context_menu_rejection_revision(mut self: Pin<&mut Self>, value: i32) {
+        if self.rust().context_menu_rejection_revision != value {
+            self.as_mut().rust_mut().get_mut().context_menu_rejection_revision = value;
+            self.context_menu_rejection_revision_changed();
         }
     }
     fn set_startup_failure(mut self: Pin<&mut Self>, value: QString) {
@@ -805,15 +893,8 @@ fn rejection_text(rejection: Option<ShortcutRejection>) -> QString {
         Some(ShortcutRejection::Conflict(action)) => QString::from(format!("Already assigned to {}.", action_label(action)).as_str()),
     }
 }
-fn action_label(action: ActionId) -> String {
-    let mut label = String::new();
-    for character in action.as_str().chars() {
-        if character.is_ascii_uppercase() && !label.is_empty() {
-            label.push(' ');
-        }
-        label.push(character);
-    }
-    label
+fn context_menu_kind(kind: i32) -> ContextMenuKind {
+    if kind == 1 { ContextMenuKind::Comprehensive } else { ContextMenuKind::Normal }
 }
 
 /// Qt portable key-sequence text for `shortcut`. Qt swaps the keys on macOS:

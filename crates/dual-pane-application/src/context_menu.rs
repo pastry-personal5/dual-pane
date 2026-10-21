@@ -55,4 +55,12 @@ mod tests {
         assert_eq!(preferences.set_visible(ContextMenuKind::Normal, ActionId::OpenItem, false), Err(ContextMenuPreferenceRejection::LastVisibleAction(ContextMenuKind::Normal)));
         assert!(preferences.visible(ContextMenuKind::Normal, ActionId::OpenItem));
     }
+
+    #[test]
+    fn only_exact_shift_selects_the_comprehensive_variant() {
+        assert_eq!(ContextMenuKind::for_modifiers(true, false, false, false), ContextMenuKind::Comprehensive);
+        for modifiers in [(false, false, false, false), (true, true, false, false), (true, false, true, false), (true, false, false, true), (false, true, false, false)] {
+            assert_eq!(ContextMenuKind::for_modifiers(modifiers.0, modifiers.1, modifiers.2, modifiers.3), ContextMenuKind::Normal);
+        }
+    }
 }

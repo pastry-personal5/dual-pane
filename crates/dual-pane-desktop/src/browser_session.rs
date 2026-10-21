@@ -141,6 +141,18 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     pub fn shortcuts(&self, action: dual_pane_application::ActionId) -> Vec<dual_pane_application::Shortcut> {
         self.workspace.shortcuts(action).to_vec()
     }
+    pub fn set_context_menu_visibility(&mut self, kind: dual_pane_application::ContextMenuKind, action: dual_pane_application::ActionId, visible: bool) -> Option<dual_pane_application::ContextMenuPreferenceRejection> {
+        self.handle_all(Command::SetContextMenuVisibility { kind, action, visible }.into()).iter().find_map(|output| match output {
+            Output::ContextMenuPreferenceRejected { reason } => Some(*reason),
+            _ => None,
+        })
+    }
+    pub fn reset_context_menu(&mut self, kind: dual_pane_application::ContextMenuKind) {
+        self.handle_all(Command::ResetContextMenu { kind }.into());
+    }
+    pub fn reset_context_menus(&mut self) {
+        self.handle_all(Command::ResetContextMenus.into());
+    }
 
     /// Handles `input` and every terminal event its work returns at once, and
     /// reports a Favorites rejection among the results.

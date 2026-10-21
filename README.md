@@ -29,6 +29,8 @@ Version v3.0.0 adds:
   - Each operation runs off the GUI thread, never overwrites without a choice, and reports its progress and decisions in an Operation Panel and its result in Notices.
   - Activating a file, an application, or another package opens it with its default application.
 
+The current development build adds Normal and Comprehensive Folder Items Context Menus. Secondary-click opens Normal; exact Shift-secondary-click opens Comprehensive. Each shows currently available file actions, and the Context Menus Settings page controls which actions may appear in each menu.
+
 ## Technology and architecture
 
 The [architecture](docs/architecture.md) defines the selected technologies, Clean Architecture boundaries, threading, file-operation safety, and verification strategy.
@@ -71,10 +73,11 @@ The path may be relative or start with `~`. By default, a launch reuses the runn
 
 ```sh
 make check
+scripts/check-folder-items-context-menu.sh
 scripts/check-single-instance.sh
 ```
 
-`make fmt`, `make fmt-check`, `make lint-rust`, `make lint-cpp`, and `make test` expose each part of the gate. The single-instance check launches isolated offscreen processes and profiles. Rustfmt has a practical unlimited width (`max_width = 1000000`); clang-format has no column limit (`ColumnLimit: 0`); neither linter applies a line-length diagnostic.
+`make fmt`, `make fmt-check`, `make lint-rust`, `make lint-cpp`, and `make test` expose each part of the gate. The Folder Items Context Menu check exercises the owned asynchronous native-menu lifecycle without observing the global clipboard. The single-instance check launches isolated offscreen processes and profiles. Rustfmt has a practical unlimited width (`max_width = 1000000`); clang-format has no column limit (`ColumnLimit: 0`); neither linter applies a line-length diagnostic.
 
 The contributor and coding-agent guidelines are in [AGENTS.md](AGENTS.md). Design docs, the development process (phases and milestones), and plans are in [docs/](docs/README.md).
 

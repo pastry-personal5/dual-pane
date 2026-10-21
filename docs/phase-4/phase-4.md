@@ -43,7 +43,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestone IDs and entries remain in numeric order below. P4-M9 was independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M5 and P4-M9 are complete; P4-M10 is next and will be implemented before any other planned milestone.
+Milestone IDs and entries remain in numeric order below. P4-M9 was independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M5 and P4-M9 are complete; P4-M10 is active and remains ahead of every other planned milestone.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -101,6 +101,6 @@ Plan: [overview](milestone-09-overview.md), [architecture](milestone-09-architec
 
 ### P4-M10: Enhance Folder Items Context Menu
 
-Status: Planned
+Status: Active
 Goal: Add configurable Normal and Comprehensive Folder Items Context Menus that open responsively, expose only available existing file commands, and cannot retarget stale state.
 Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architecture.md)

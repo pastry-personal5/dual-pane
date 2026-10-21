@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::{ActionBinding, FavoritesRecords, OperationFailure, OperationOutcome, OperationProgress, SettingsFailure, VisibilityPolicy};
+use crate::{ActionBinding, ContextMenuPreferences, FavoritesRecords, OperationFailure, OperationOutcome, OperationProgress, SettingsFailure, VisibilityPolicy};
 use dual_pane_domain::{BrowserSide, ListingErrorKind, Location, OperationIntent, SortSpec, TabId};
 
 /// How reliably one open location is being observed for external changes.
@@ -54,6 +54,8 @@ pub struct WorkspaceChrome {
     pub favorites_ready: bool,
     /// The effective shortcut of every catalogued action.
     pub bindings: Vec<ActionBinding>,
+    /// The complete persistent Folder Items Context Menu configuration.
+    pub context_menus: ContextMenuPreferences,
     /// The persisted choice that suppresses routine launch Notices.
     pub hide_notices_at_startup: bool,
     /// The persisted choice that lets the Application Close Button quit

@@ -16,4 +16,4 @@ pub use format::{UNAVAILABLE, format_exact, format_relative, format_size, locati
 pub use input_controller::{FavoritesEvent, GroupMotion, InputController, SelectionMovement, UiEvent};
 pub use operation_panels::{ChoiceViewModel, DecisionCardViewModel, EditorOutcome, HIDE_DELAY, OperationPanelViewModel, OperationsPresenter, OperationsViewModel, REVEAL_DELAY, Ticks};
 pub use operation_presenter::{UNREPRESENTABLE_NAME_TEXT, name_problem_text, name_rejection_text, operation_error_text, operation_summary, operation_title, rejection_text};
-pub use workspace_presenter::{FavoriteGroupViewModel, FavoriteItemViewModel, NoticeViewModel, WorkspacePresenter, WorkspaceViewModel, favorite_rejection_text};
+pub use workspace_presenter::{ContextMenuSettingsRowViewModel, FavoriteGroupViewModel, FavoriteItemViewModel, NoticeViewModel, WorkspacePresenter, WorkspaceViewModel, action_label, context_menu_group_label, context_menu_rejection_text, favorite_rejection_text};

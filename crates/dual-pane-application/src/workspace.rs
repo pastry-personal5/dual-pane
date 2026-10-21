@@ -1064,7 +1064,7 @@ impl Workspace {
     }
     /// Workspace-wide presentation state.
     pub fn workspace_chrome(&self) -> WorkspaceChrome {
-        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), skip_quit_confirmation: self.settings.skip_quit_confirmation(), visibility: self.settings.visibility(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, settings_interaction_available: self.settings_interaction_available, notices: Arc::clone(&self.notices) }
+        WorkspaceChrome { active_browser: self.active_browser, favorites: self.settings.favorites().clone(), favorites_ready: self.favorites_ready(), bindings: self.bindings(), context_menus: self.settings.context_menus().clone(), hide_notices_at_startup: self.settings.hide_notices_at_startup(), skip_quit_confirmation: self.settings.skip_quit_confirmation(), visibility: self.settings.visibility(), notices_startup_ready: self.settings_status != SettingsStatus::Loading, settings_interaction_available: self.settings_interaction_available, notices: Arc::clone(&self.notices) }
     }
     /// The save to flush before the application exits, if loaded settings
     /// have changed since the last confirmed save.

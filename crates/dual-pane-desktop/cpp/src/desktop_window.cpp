@@ -310,6 +310,23 @@ auto style_sheet() -> QString {
       QScrollArea#settingsShortcutScroll QScrollBar { background:%2; border:0; }
       QScrollArea#settingsShortcutScroll QScrollBar::handle { background:%4; border-radius:4px; min-height:24px; }
       QScrollArea#settingsShortcutScroll QScrollBar::add-line, QScrollArea#settingsShortcutScroll QScrollBar::sub-line { width:0; height:0; }
+      QWidget#settingsContextMenuPage { background:%2; color:%3; }
+      QWidget#settingsContextMenuPage QLabel, QWidget#settingsContextMenuPage QCheckBox, QWidget#settingsContextMenuPage QPushButton { color:%3; font-size:10px; }
+      QWidget#contextMenuTableHeader { background:%1; border-bottom:1px solid %4; }
+      QLabel#contextMenuColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
+      QWidget#settingsContextMenuList, QScrollArea#settingsContextMenuScroll QWidget#qt_scrollarea_viewport { background:%2; color:%3; }
+      QFrame#contextMenuGroup { background:%2; border:1px solid %4; border-radius:4px; }
+      QLabel#contextMenuGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:7px 10px; font-size:11px; font-weight:600; }
+      QWidget#contextMenuRow { background:%2; border-bottom:1px solid %4; }
+      QWidget#contextMenuRow[alternate="true"] { background:#272B31; }
+      QWidget#contextMenuRow:hover { background:%11; }
+      QWidget#contextMenuRow QWidget, QWidget#contextMenuRow QLabel, QWidget#contextMenuRow QCheckBox { background:transparent; border:0; color:%3; }
+      QLabel#contextMenuShortcutNone { color:#9CA5AF; }
+      QLabel#contextMenuFeedback { background:%2; color:%8; font-size:10px; padding:4px 8px; }
+      QScrollArea#settingsContextMenuScroll { background:%2; border:0; }
+      QScrollArea#settingsContextMenuScroll QScrollBar { background:%2; border:0; }
+      QScrollArea#settingsContextMenuScroll QScrollBar::handle { background:%4; border-radius:4px; min-height:24px; }
+      QScrollArea#settingsContextMenuScroll QScrollBar::add-line, QScrollArea#settingsContextMenuScroll QScrollBar::sub-line { width:0; height:0; }
       QDialog#settingsWindow QCheckBox, QDialog#settingsWindow QPushButton { color:%3; }
       QDialog#settingsWindow QPushButton { background:%2; border:1px solid %4; border-radius:4px; padding:6px 12px; }
       QDialog#settingsWindow QPushButton:hover:enabled { background:%11; }
@@ -742,6 +759,8 @@ class FolderItemsList final : public QTreeView {
                 const auto cursor = model_->index(row, 0, QModelIndex());
                 if (cursor.isValid())
                     at = viewport()->mapToGlobal(visualRect(cursor).center());
+                else
+                    row = -1;
             }
             if (row < 0)
                 at = viewport()->mapToGlobal(QPoint(fontMetrics().height(), fontMetrics().height()));
@@ -1921,9 +1940,120 @@ class PreviewPane final : public QWidget {
     bool target_change_queued_ = false;
 };
 
+/// Owns one native Folder Items menu from popup until its queued completion.
+/// Both signal orders are safe: an action is only submitted after the menu has
+/// reported closure, and every exit path consumes or dismisses the snapshot at
+/// most once.
+class FolderItemsMenuSession final : public QObject {
+  public:
+    struct Row {
+        QString label;
+        QString shortcut;
+        bool starts_section = false;
+    };
+
+    FolderItemsMenuSession(const QString &accessible_name, const std::vector<Row> &rows, std::function<void(std::optional<int>)> complete, QWidget *parent) : QObject(parent), complete_(std::move(complete)), menu_(new QMenu(parent)) {
+        menu_->setObjectName(QStringLiteral("folderItemsContextMenu"));
+        menu_->setAccessibleName(accessible_name);
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            const auto &row = rows.at(index);
+            if (row.starts_section)
+                menu_->addSeparator();
+            auto *action = menu_->addAction(row.label);
+            action->setData(static_cast<int>(index));
+            const auto shortcut = QKeySequence::fromString(row.shortcut, QKeySequence::PortableText).toString(QKeySequence::NativeText);
+            if (!shortcut.isEmpty())
+                action->setText(action->text() + QStringLiteral("\t") + shortcut);
+        }
+        QObject::connect(menu_, &QMenu::triggered, this, [this](QAction *action) {
+            if (!finished_ && action != nullptr)
+                chosen_ = action->data().toInt();
+            queue_finish();
+        });
+        QObject::connect(menu_, &QMenu::aboutToHide, this, [this] {
+            closed_ = true;
+            queue_finish();
+        });
+    }
+
+    void popup(const QPoint &at) { menu_->popup(at); }
+    [[nodiscard]] auto menu() const -> QMenu * { return menu_; }
+
+    /// A newer request globally retires the older menu before obtaining its
+    /// own application snapshot.
+    void dismiss_and_close() {
+        if (finished_)
+            return;
+        finished_ = true;
+        complete_(std::nullopt);
+        if (menu_ != nullptr) {
+            menu_->close();
+            menu_->deleteLater();
+        }
+        deleteLater();
+    }
+
+  private:
+    void queue_finish() {
+        if (finished_ || finish_queued_)
+            return;
+        finish_queued_ = true;
+        QTimer::singleShot(0, this, [this] {
+            finish_queued_ = false;
+            if (finished_ || !closed_)
+                return;
+            finished_ = true;
+            complete_(chosen_);
+            if (menu_ != nullptr)
+                menu_->deleteLater();
+            deleteLater();
+        });
+    }
+
+    std::function<void(std::optional<int>)> complete_;
+    QPointer<QMenu> menu_;
+    std::optional<int> chosen_;
+    bool closed_ = false;
+    bool finish_queued_ = false;
+    bool finished_ = false;
+};
+
+/// Enforces the workspace-wide single live Folder Items menu contract across
+/// the two Browser widgets.
+class FolderItemsMenuCoordinator final : public QObject {
+  public:
+    explicit FolderItemsMenuCoordinator(QWidget *parent) : QObject(parent) {}
+
+    void dismiss() {
+        if (current_ != nullptr)
+            current_->dismiss_and_close();
+        current_.clear();
+    }
+
+    void show(FolderItemsListModel *model, const QPoint &at, int row, bool comprehensive) {
+        dismiss();
+        if (!model->requestContextMenu(comprehensive ? 1 : 0, row))
+            return;
+        std::vector<FolderItemsMenuSession::Row> rows;
+        rows.reserve(static_cast<std::size_t>(model->contextMenuActionCount()));
+        for (int index = 0; index < model->contextMenuActionCount(); ++index)
+            rows.push_back({model->contextMenuActionLabel(index), model->contextMenuActionShortcut(index), model->contextMenuActionStartsSection(index)});
+        const auto accessible_name = model->contextMenuKind() == 1 ? QStringLiteral("Comprehensive Folder Items Context Menu") : QStringLiteral("Normal Folder Items Context Menu");
+        current_ = new FolderItemsMenuSession(accessible_name, rows, [model](std::optional<int> chosen) {
+            if (chosen.has_value())
+                model->invokeContextMenuAction(*chosen);
+            else
+                model->dismissContextMenu(); }, qobject_cast<QWidget *>(parent()));
+        current_->popup(at);
+    }
+
+  private:
+    QPointer<FolderItemsMenuSession> current_;
+};
+
 class Browser final : public QWidget {
   public:
-    Browser(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QWidget(parent), model_(model), folder_(new FolderPane(model, icons, this)), preview_splitter_(new ThinSplitter(SplitterKind::Preview, this)), preview_(new PreviewPane(preview_splitter_)), overlay_(new QLabel(QStringLiteral("Expand"), this)), missing_(new QLabel(QStringLiteral("Command+R to Refresh"), this)), editors_(new NameEditController(model, folder_->view(), folder_->new_folder_row())), preview_settle_(this) {
+    Browser(FolderItemsListModel *model, IconLoader *icons, FolderItemsMenuCoordinator *menus, QWidget *parent) : QWidget(parent), model_(model), folder_(new FolderPane(model, icons, this)), preview_splitter_(new ThinSplitter(SplitterKind::Preview, this)), preview_(new PreviewPane(preview_splitter_)), overlay_(new QLabel(QStringLiteral("Expand"), this)), missing_(new QLabel(QStringLiteral("Command+R to Refresh"), this)), editors_(new NameEditController(model, folder_->view(), folder_->new_folder_row())), preview_settle_(this) {
         editors_->setParent(this);
         setObjectName(QStringLiteral("browser"));
         auto *layout = new QVBoxLayout(this);
@@ -1991,7 +2121,7 @@ class Browser final : public QWidget {
             const int token = model->getStatusToken();
             QTimer::singleShot(status_reason_milliseconds, model, [model, token] { model->expireStatus(token); });
         });
-        folder_->view()->setMenuHandler([this](const QPoint &at, int row, bool comprehensive) { show_menu(at, row, comprehensive); });
+        folder_->view()->setMenuHandler([menus, model](const QPoint &at, int row, bool comprehensive) { menus->show(model, at, row, comprehensive); });
     }
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return folder_->view(); }
@@ -2057,32 +2187,6 @@ class Browser final : public QWidget {
         if (missing && !narrow)
             missing_->raise();
     }
-    /// The application supplies exactly the currently allowed actions and a
-    /// one-use token. Qt only renders and returns the chosen row.
-    void show_menu(const QPoint &at, int row, bool comprehensive) {
-        if (!model_->requestContextMenu(comprehensive ? 1 : 0, row))
-            return;
-        QMenu menu(this);
-        menu.setObjectName(QStringLiteral("folderItemsContextMenu"));
-        menu.setAccessibleName(model_->contextMenuKind() == 1 ? QStringLiteral("Comprehensive Folder Items Context Menu") : QStringLiteral("Normal Folder Items Context Menu"));
-        std::vector<QAction *> actions;
-        for (int index = 0; index < model_->contextMenuActionCount(); ++index) {
-            if (model_->contextMenuActionStartsSection(index))
-                menu.addSeparator();
-            auto *action = menu.addAction(model_->contextMenuActionLabel(index));
-            const auto shortcut = QKeySequence::fromString(model_->contextMenuActionShortcut(index), QKeySequence::PortableText).toString(QKeySequence::NativeText);
-            if (!shortcut.isEmpty())
-                action->setText(action->text() + QStringLiteral("\t") + shortcut);
-            actions.push_back(action);
-        }
-        QAction *chosen = menu.exec(at);
-        const auto found = std::find(actions.cbegin(), actions.cend(), chosen);
-        if (found == actions.cend())
-            model_->dismissContextMenu();
-        else
-            model_->invokeContextMenuAction(static_cast<int>(std::distance(actions.cbegin(), found)));
-    }
-
     FolderItemsListModel *model_;
     FolderPane *folder_;
     ThinSplitter *preview_splitter_;
@@ -3449,12 +3553,17 @@ class SettingsWindow final : public QDialog {
         categories_->setMinimumWidth(320);
         categories_->addItem(QStringLiteral("General Settings"));
         categories_->addItem(QStringLiteral("Keyboard Shortcuts Settings"));
+        categories_->addItem(QStringLiteral("Context Menus Settings"));
         categories_->setCurrentRow(0);
         sidebar_layout->addWidget(categories_, 1);
         pages_->setObjectName(QStringLiteral("settingsPages"));
         pages_->addWidget(general_page());
         pages_->addWidget(shortcut_page());
-        QObject::connect(categories_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
+        pages_->addWidget(context_menu_page());
+        QObject::connect(categories_, &QListWidget::currentRowChanged, this, [this](int index) {
+            pages_->setCurrentIndex(index);
+            clear_context_menu_feedback();
+        });
         auto *content = new QWidget(this);
         content->setObjectName(QStringLiteral("settingsContent"));
         auto *content_layout = new QVBoxLayout(content);
@@ -3467,8 +3576,11 @@ class SettingsWindow final : public QDialog {
         setMinimumSize(1400, 900);
         resize(1400, 900);
         categories_->setFocus();
-        if (bridge_)
+        if (bridge_) {
             QObject::connect(bridge_, &WorkspaceBridge::bindingsRevisionChanged, this, [this] { QTimer::singleShot(0, this, [this] { rebuild_shortcuts(); }); });
+            QObject::connect(bridge_, &WorkspaceBridge::contextMenusRevisionChanged, this, [this] { sync_context_menus(); });
+            QObject::connect(bridge_, &WorkspaceBridge::contextMenuRejectionRevisionChanged, this, [this] { QTimer::singleShot(0, this, [this] { show_context_menu_feedback(bridge_->contextMenuRejectionText()); }); });
+        }
     }
 
   private:
@@ -3879,6 +3991,231 @@ class SettingsWindow final : public QDialog {
                 shortcut_scroll_->ensureWidgetVisible(widget, 0, 16);
         });
     }
+    static auto context_menu_table_header(QWidget *parent) -> QWidget * {
+        auto *header = new QWidget(parent);
+        header->setObjectName(QStringLiteral("contextMenuTableHeader"));
+        header->setFixedHeight(36);
+        auto *head = new QHBoxLayout(header);
+        head->setContentsMargins(8, 0, 8, 0);
+        head->setSpacing(8);
+        const std::array<std::pair<QString, int>, 4> columns = {{{QStringLiteral("Action"), 260}, {QStringLiteral("Normal"), 120}, {QStringLiteral("Comprehensive"), 160}, {QStringLiteral("Shortcut"), 220}}};
+        for (const auto &[name, width] : columns) {
+            auto *label = new QLabel(name, header);
+            label->setObjectName(QStringLiteral("contextMenuColumnHeading"));
+            label->setFixedWidth(width);
+            head->addWidget(label);
+        }
+        head->addStretch();
+        return header;
+    }
+    auto context_menu_page() -> QWidget * {
+        auto *page = new QWidget(pages_);
+        page->setObjectName(QStringLiteral("settingsContextMenuPage"));
+        page->setAccessibleName(QStringLiteral("Context Menus Settings"));
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(16, 16, 16, 16);
+        layout->setSpacing(10);
+        context_menu_scroll_ = new QScrollArea(page);
+        context_menu_scroll_->setWidgetResizable(true);
+        context_menu_scroll_->setObjectName(QStringLiteral("settingsContextMenuScroll"));
+        context_menu_list_ = new QWidget(context_menu_scroll_);
+        context_menu_list_->setObjectName(QStringLiteral("settingsContextMenuList"));
+        context_menu_layout_ = new QVBoxLayout(context_menu_list_);
+        context_menu_layout_->setContentsMargins(0, 0, 0, 0);
+        context_menu_layout_->setSpacing(10);
+        context_menu_scroll_->setWidget(context_menu_list_);
+        layout->addWidget(context_menu_scroll_, 1);
+        context_menu_feedback_ = new QLabel(page);
+        context_menu_feedback_->setObjectName(QStringLiteral("contextMenuFeedback"));
+        context_menu_feedback_->setAccessibleName(QStringLiteral("Context Menu settings feedback"));
+        context_menu_feedback_->setWordWrap(true);
+        context_menu_feedback_->hide();
+        layout->addWidget(context_menu_feedback_);
+        auto *resets = new QHBoxLayout();
+        auto *normal = new QPushButton(QStringLiteral("Reset Normal…"), page);
+        normal->setObjectName(QStringLiteral("contextMenuResetNormal"));
+        normal->setAccessibleName(QStringLiteral("Reset Normal Context Menu"));
+        auto *comprehensive = new QPushButton(QStringLiteral("Reset Comprehensive…"), page);
+        comprehensive->setObjectName(QStringLiteral("contextMenuResetComprehensive"));
+        comprehensive->setAccessibleName(QStringLiteral("Reset Comprehensive Context Menu"));
+        auto *both = new QPushButton(QStringLiteral("Reset Both…"), page);
+        both->setObjectName(QStringLiteral("contextMenuResetBoth"));
+        both->setAccessibleName(QStringLiteral("Reset Both Context Menus"));
+        QObject::connect(normal, &QPushButton::clicked, this, [this] { confirm_context_menu_reset(0); });
+        QObject::connect(comprehensive, &QPushButton::clicked, this, [this] { confirm_context_menu_reset(1); });
+        QObject::connect(both, &QPushButton::clicked, this, [this] { confirm_context_menu_reset(2); });
+        resets->addWidget(normal);
+        resets->addWidget(comprehensive);
+        resets->addWidget(both);
+        resets->addStretch();
+        layout->addLayout(resets);
+        rebuild_context_menus();
+        return page;
+    }
+    void rebuild_context_menus() {
+        if (!context_menu_layout_)
+            return;
+        context_menu_normal_checks_.clear();
+        context_menu_comprehensive_checks_.clear();
+        context_menu_shortcuts_.clear();
+        while (auto *item = context_menu_layout_->takeAt(0)) {
+            if (auto *widget = item->widget()) {
+                widget->hide();
+                widget->deleteLater();
+            }
+            delete item;
+        }
+        if (!bridge_) {
+            context_menu_layout_->addWidget(new QLabel(QStringLiteral("Context Menu settings are unavailable."), context_menu_list_));
+            return;
+        }
+        QString previous_group;
+        QVBoxLayout *group_layout = nullptr;
+        int group_rows = 0;
+        for (int index = 0; index < bridge_->contextMenuActionCount(); ++index) {
+            const QString group_name = bridge_->contextMenuGroupLabel(index);
+            if (!group_layout || group_name != previous_group) {
+                auto *group = new QFrame(context_menu_list_);
+                group->setObjectName(QStringLiteral("contextMenuGroup"));
+                group->setAccessibleName(group_name + QStringLiteral(" Context Menu actions"));
+                group_layout = new QVBoxLayout(group);
+                group_layout->setContentsMargins(0, 0, 0, 0);
+                group_layout->setSpacing(0);
+                auto *heading = new QLabel(group_name, group);
+                heading->setObjectName(QStringLiteral("contextMenuGroupHeading"));
+                group_layout->addWidget(heading);
+                group_layout->addWidget(context_menu_table_header(group));
+                context_menu_layout_->addWidget(group, 0, Qt::AlignLeft);
+                previous_group = group_name;
+                group_rows = 0;
+            }
+            auto *row = new QWidget(context_menu_list_);
+            row->setObjectName(QStringLiteral("contextMenuRow"));
+            row->setProperty("alternate", group_rows % 2 != 0);
+            ++group_rows;
+            const QString action = bridge_->contextMenuActionLabel(index);
+            row->setAccessibleName(action + QStringLiteral(" Context Menu settings"));
+            auto *cells = new QHBoxLayout(row);
+            cells->setContentsMargins(8, 3, 8, 3);
+            cells->setSpacing(8);
+            auto *action_label = new QLabel(action, row);
+            action_label->setFixedWidth(260);
+            cells->addWidget(action_label);
+            auto add_checkbox = [this, row, cells, action, index](int kind, int width, bool checked) -> QCheckBox * {
+                auto *cell = new QWidget(row);
+                cell->setFixedWidth(width);
+                auto *cell_layout = new QHBoxLayout(cell);
+                cell_layout->setContentsMargins(0, 0, 0, 0);
+                auto *check = new QCheckBox(cell);
+                check->setObjectName(kind == 0 ? QStringLiteral("contextMenuNormalCheck") : QStringLiteral("contextMenuComprehensiveCheck"));
+                const QString variant = kind == 0 ? QStringLiteral("Normal") : QStringLiteral("Comprehensive");
+                check->setAccessibleName(QStringLiteral("Show ") + action + QStringLiteral(" in ") + variant + QStringLiteral(" Context Menu"));
+                check->setChecked(checked);
+                QObject::connect(check, &QCheckBox::toggled, this, [this, check, index, kind](bool visible) {
+                    const QString error = bridge_->changeContextMenuVisibility(index, kind, visible);
+                    if (!error.isEmpty()) {
+                        QSignalBlocker block(check);
+                        check->setChecked(kind == 0 ? bridge_->contextMenuNormalVisible(index) : bridge_->contextMenuComprehensiveVisible(index));
+                        show_context_menu_feedback(error);
+                    } else {
+                        clear_context_menu_feedback();
+                    }
+                });
+                cell_layout->addWidget(check, 0, Qt::AlignCenter);
+                cells->addWidget(cell);
+                return check;
+            };
+            context_menu_normal_checks_.emplace_back(add_checkbox(0, 120, bridge_->contextMenuNormalVisible(index)));
+            context_menu_comprehensive_checks_.emplace_back(add_checkbox(1, 160, bridge_->contextMenuComprehensiveVisible(index)));
+            const QString portable = bridge_->contextMenuShortcut(index);
+            const QString shortcut = QKeySequence::fromString(portable, QKeySequence::PortableText).toString(QKeySequence::NativeText);
+            auto *shortcut_label = new QLabel(shortcut.isEmpty() ? QStringLiteral("None") : shortcut, row);
+            shortcut_label->setObjectName(shortcut.isEmpty() ? QStringLiteral("contextMenuShortcutNone") : QStringLiteral("contextMenuShortcut"));
+            shortcut_label->setAccessibleName(QStringLiteral("Shortcut for ") + action + QStringLiteral(": ") + (shortcut.isEmpty() ? QStringLiteral("None") : shortcut));
+            shortcut_label->setFixedWidth(220);
+            cells->addWidget(shortcut_label);
+            context_menu_shortcuts_.emplace_back(shortcut_label);
+            cells->addStretch();
+            group_layout->addWidget(row);
+        }
+        context_menu_layout_->addStretch();
+    }
+    void sync_context_menus() {
+        if (!bridge_)
+            return;
+        const auto count = static_cast<std::size_t>(bridge_->contextMenuActionCount());
+        if (context_menu_normal_checks_.size() != count || context_menu_comprehensive_checks_.size() != count || context_menu_shortcuts_.size() != count) {
+            rebuild_context_menus();
+            return;
+        }
+        for (std::size_t index = 0; index < count; ++index) {
+            auto *normal = context_menu_normal_checks_.at(index).data();
+            auto *comprehensive = context_menu_comprehensive_checks_.at(index).data();
+            auto *shortcut_label = context_menu_shortcuts_.at(index).data();
+            if (normal == nullptr || comprehensive == nullptr || shortcut_label == nullptr) {
+                rebuild_context_menus();
+                return;
+            }
+            const int row = static_cast<int>(index);
+            const QSignalBlocker normal_block(normal);
+            const QSignalBlocker comprehensive_block(comprehensive);
+            normal->setChecked(bridge_->contextMenuNormalVisible(row));
+            comprehensive->setChecked(bridge_->contextMenuComprehensiveVisible(row));
+            const QString portable = bridge_->contextMenuShortcut(row);
+            const QString shortcut = QKeySequence::fromString(portable, QKeySequence::PortableText).toString(QKeySequence::NativeText);
+            const QString display = shortcut.isEmpty() ? QStringLiteral("None") : shortcut;
+            shortcut_label->setText(display);
+            const QString style_name = shortcut.isEmpty() ? QStringLiteral("contextMenuShortcutNone") : QStringLiteral("contextMenuShortcut");
+            if (shortcut_label->objectName() != style_name) {
+                shortcut_label->setObjectName(style_name);
+                shortcut_label->style()->unpolish(shortcut_label);
+                shortcut_label->style()->polish(shortcut_label);
+            }
+            shortcut_label->setAccessibleName(QStringLiteral("Shortcut for ") + bridge_->contextMenuActionLabel(row) + QStringLiteral(": ") + display);
+        }
+    }
+    void show_context_menu_feedback(const QString &text) {
+        if (!context_menu_feedback_)
+            return;
+        context_menu_feedback_->setText(text);
+        context_menu_feedback_->setVisible(!text.isEmpty());
+        if (!text.isEmpty() && context_menu_scroll_)
+            context_menu_scroll_->ensureWidgetVisible(context_menu_feedback_, 0, 16);
+    }
+    void clear_context_menu_feedback() { show_context_menu_feedback(QString()); }
+    void confirm_context_menu_reset(int scope) {
+        QString scope_name;
+        QString object_name;
+        if (scope == 0) {
+            scope_name = QStringLiteral("Normal Context Menu");
+            object_name = QStringLiteral("contextMenuResetNormalConfirmation");
+        } else if (scope == 1) {
+            scope_name = QStringLiteral("Comprehensive Context Menu");
+            object_name = QStringLiteral("contextMenuResetComprehensiveConfirmation");
+        } else {
+            scope_name = QStringLiteral("Both Context Menus");
+            object_name = QStringLiteral("contextMenuResetBothConfirmation");
+        }
+        const QString question = scope == 2 ? QStringLiteral("Reset Both Context Menus to their factory configurations?") : QStringLiteral("Reset ") + scope_name + QStringLiteral(" to its factory configuration?");
+        auto *box = new QMessageBox(QMessageBox::Question, QStringLiteral("Reset ") + scope_name, question, QMessageBox::NoButton, this);
+        box->setObjectName(object_name);
+        auto *confirm = box->addButton(QStringLiteral("Reset"), QMessageBox::AcceptRole);
+        auto *cancel = box->addButton(QMessageBox::Cancel);
+        box->setDefaultButton(cancel);
+        box->setEscapeButton(cancel);
+        box->setWindowModality(Qt::WindowModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QObject::connect(box, &QMessageBox::finished, this, [this, box, confirm, scope] {
+            if (box->clickedButton() != confirm || !bridge_)
+                return;
+            if (scope == 2)
+                bridge_->resetContextMenus();
+            else
+                bridge_->resetContextMenu(scope);
+            clear_context_menu_feedback();
+        });
+        box->open();
+    }
     WorkspaceBridge *bridge_;
     std::function<void(bool)> capture_;
     QListWidget *categories_;
@@ -3887,6 +4224,13 @@ class SettingsWindow final : public QDialog {
     QScrollArea *shortcut_scroll_ = nullptr;
     QVBoxLayout *shortcut_layout_ = nullptr;
     QHash<int, QPointer<QLabel>> feedback_by_action_;
+    QWidget *context_menu_list_ = nullptr;
+    QScrollArea *context_menu_scroll_ = nullptr;
+    QVBoxLayout *context_menu_layout_ = nullptr;
+    QLabel *context_menu_feedback_ = nullptr;
+    std::vector<QPointer<QCheckBox>> context_menu_normal_checks_;
+    std::vector<QPointer<QCheckBox>> context_menu_comprehensive_checks_;
+    std::vector<QPointer<QLabel>> context_menu_shortcuts_;
 };
 
 class SettingsWindowController final : public QObject {
@@ -3928,6 +4272,113 @@ class SettingsWindowController final : public QObject {
     std::function<void(bool)> capture_handler_;
     bool available_ = false;
 };
+
+/// Exercises the owned non-blocking native menu lifecycle without starting a
+/// workspace or observing the global clipboard.
+auto run_folder_items_context_menu_checks(QApplication &app) -> int {
+    (void)app;
+    QWidget owner;
+    owner.resize(320, 200);
+    owner.show();
+    bool failed = false;
+    int completions = 0;
+    std::optional<int> last_choice;
+    int observed_state = 0;
+    const auto check = [&failed](bool condition, const char *name) {
+        if (!condition) {
+            std::cerr << "Folder Items Context Menu check failed: " << name << '\n';
+            failed = true;
+        }
+    };
+    FolderItemsListModel left_model, right_model;
+    right_model.setRightBrowser();
+    IconLoader icons;
+    FolderItemsList left(&left_model, &icons), right(&right_model, &icons);
+    left.setParent(&owner);
+    right.setParent(&owner);
+    std::vector<std::pair<int, bool>> invocations;
+    left.setMenuHandler([&invocations](const QPoint &, int row, bool comprehensive) { invocations.emplace_back(row, comprehensive); });
+    right.setMenuHandler([&invocations](const QPoint &, int row, bool comprehensive) { invocations.emplace_back(row, comprehensive); });
+    const QPoint local(4, 4);
+    QContextMenuEvent exact_shift(QContextMenuEvent::Mouse, local, left.viewport()->mapToGlobal(local), Qt::ShiftModifier);
+    QApplication::sendEvent(left.viewport(), &exact_shift);
+    QContextMenuEvent extra_modifier(QContextMenuEvent::Mouse, local, left.viewport()->mapToGlobal(local), Qt::ShiftModifier | Qt::ControlModifier);
+    QApplication::sendEvent(left.viewport(), &extra_modifier);
+    QContextMenuEvent keyboard(QContextMenuEvent::Keyboard, local, right.viewport()->mapToGlobal(local), Qt::NoModifier);
+    QApplication::sendEvent(right.viewport(), &keyboard);
+    QContextMenuEvent accessibility(QContextMenuEvent::Other, local, right.viewport()->mapToGlobal(local), Qt::ShiftModifier);
+    QApplication::sendEvent(right.viewport(), &accessibility);
+    check(invocations == std::vector<std::pair<int, bool>>({{-1, true}, {-1, false}, {-1, false}, {-1, true}}), "exact modifier, empty-space, keyboard, accessibility, and both-Browser routing");
+    const auto check_context_rows = [&owner, &check](const std::vector<FolderItemsMenuSession::Row> &context_rows, const QStringList &expected, const char *name) {
+        int completion_count = 0;
+        auto *session = new FolderItemsMenuSession(QStringLiteral("Comprehensive Folder Items Context Menu"), context_rows, [&completion_count](std::optional<int>) { ++completion_count; }, &owner);
+        session->popup(owner.mapToGlobal(QPoint(10, 10)));
+        QStringList labels;
+        for (const auto *action : session->menu()->actions())
+            if (!action->isSeparator())
+                labels.push_back(action->text().section('\t', 0, 0));
+        check(labels == expected, name);
+        session->dismiss_and_close();
+        check(completion_count == 1, "context-shape dismissal");
+    };
+    check_context_rows({{QStringLiteral("Rename Item"), {}, false}, {QStringLiteral("New Folder"), {}, false}, {QStringLiteral("Open Item"), {}, true}, {QStringLiteral("Show Package Contents"), {}, false}, {QStringLiteral("Copy Items"), {}, true}}, {QStringLiteral("Rename Item"), QStringLiteral("New Folder"), QStringLiteral("Open Item"), QStringLiteral("Show Package Contents"), QStringLiteral("Copy Items")}, "package rows and section collapse");
+    check_context_rows({{QStringLiteral("Rename Item"), {}, false}, {QStringLiteral("Open Item"), {}, true}, {QStringLiteral("Copy Items"), {}, true}}, {QStringLiteral("Rename Item"), QStringLiteral("Open Item"), QStringLiteral("Copy Items")}, "link rows exclude package-only action");
+    check_context_rows({{QStringLiteral("Copy Items"), {}, false}, {QStringLiteral("Cut Items"), {}, false}, {QStringLiteral("Move to Trash"), {}, true}}, {QStringLiteral("Copy Items"), QStringLiteral("Cut Items"), QStringLiteral("Move to Trash")}, "multiple-selection rows exclude single-item actions");
+    check_context_rows({{QStringLiteral("New Folder"), {}, false}}, {QStringLiteral("New Folder")}, "empty-space destination rows");
+    const std::vector<FolderItemsMenuSession::Row> rows = {{QStringLiteral("Open Item"), QStringLiteral("Ctrl+Down"), false}, {QStringLiteral("Copy Items"), QStringLiteral("Ctrl+C"), true}, {QStringLiteral("Move to Trash"), QStringLiteral("Alt+Delete"), true}};
+    const auto complete = [&completions, &last_choice, &observed_state](std::optional<int> choice) {
+        ++completions;
+        last_choice = choice;
+        observed_state = 42;
+    };
+
+    auto *trigger_first = new FolderItemsMenuSession(QStringLiteral("Normal Folder Items Context Menu"), rows, complete, &owner);
+    trigger_first->popup(owner.mapToGlobal(QPoint(20, 20)));
+    auto *normal = trigger_first->menu();
+    check(normal != nullptr && normal->isVisible(), "popup returns while Normal remains open");
+    check(normal != nullptr && normal->accessibleName() == QStringLiteral("Normal Folder Items Context Menu"), "Normal accessible name");
+    if (normal != nullptr) {
+        const auto actions = normal->actions();
+        check(actions.size() == 5 && actions.at(1)->isSeparator() && actions.at(3)->isSeparator(), "flat sections and collapsed separators");
+        check(actions.at(0)->text().startsWith(QStringLiteral("Open Item\t")) && actions.at(2)->text().startsWith(QStringLiteral("Copy Items\t")), "native shortcut annotations");
+    }
+    QTimer::singleShot(0, &owner, [&, trigger_first] {
+        auto *menu = trigger_first->menu();
+        check(menu != nullptr && menu->isVisible() && completions == 0, "event loop resumes before menu completion");
+        observed_state = 7;
+        if (menu != nullptr) {
+            menu->actions().at(2)->trigger();
+            menu->close();
+        }
+        QTimer::singleShot(0, &owner, [&, trigger_first] {
+            check(completions == 1 && last_choice == 1 && observed_state == 42, "trigger-before-hide dispatches once after closure and observes later state");
+            trigger_first->dismiss_and_close();
+            check(completions == 1, "completed session is idempotent");
+
+            auto *hide_first = new FolderItemsMenuSession(QStringLiteral("Comprehensive Folder Items Context Menu"), rows, complete, &owner);
+            hide_first->popup(owner.mapToGlobal(QPoint(30, 30)));
+            auto *comprehensive = hide_first->menu();
+            check(comprehensive != nullptr && comprehensive->accessibleName() == QStringLiteral("Comprehensive Folder Items Context Menu"), "Comprehensive accessible name");
+            if (comprehensive != nullptr) {
+                comprehensive->close();
+                comprehensive->actions().at(4)->trigger();
+            }
+            QTimer::singleShot(0, &owner, [&, hide_first] {
+                check(completions == 2 && last_choice == 2, "hide-before-trigger dispatches once on the queued finalizer");
+                hide_first->dismiss_and_close();
+                check(completions == 2, "second completed session is idempotent");
+
+                auto *dismissed = new FolderItemsMenuSession(QStringLiteral("Normal Folder Items Context Menu"), rows, complete, &owner);
+                dismissed->popup(owner.mapToGlobal(QPoint(40, 40)));
+                dismissed->dismiss_and_close();
+                dismissed->dismiss_and_close();
+                check(completions == 3 && !last_choice.has_value(), "explicit dismissal completes exactly once");
+                QApplication::exit(failed ? 1 : 0);
+            });
+        });
+    });
+    return QApplication::exec();
+}
 
 /// Exercises real Qt widgets without a display. The repository check script
 /// launches this path with Qt's offscreen platform plugin.
@@ -3978,7 +4429,7 @@ auto run_settings_window_checks(QApplication &app) -> int {
         auto *visibility_help = dialog->findChild<QLabel *>(QStringLiteral("settingsVisibilityHelp"));
         auto *reset = dialog->findChild<QPushButton *>(QStringLiteral("settingsReset"));
         check(categories && dialog->focusWidget() == categories && categories->currentRow() == 0, "initial category focus");
-        check(pages && pages->count() == 2, "placeholder pages");
+        check(categories && categories->count() == 3 && pages && pages->count() == 3, "three Settings categories and pages");
         check(title_row && heading && heading->text() == QStringLiteral("Settings") && heading->parentWidget() == title_row && notices && reset, "General controls and title row");
         check(macos_items && macos_items->accessibleName() == QStringLiteral("Show macOS metadata and service items") && macos_items->focusPolicy() != Qt::NoFocus, "accessible macOS items control");
         check(dotfiles && dotfiles->accessibleName() == QStringLiteral("Show dotfiles") && dotfiles->focusPolicy() != Qt::NoFocus, "accessible dotfiles control");
@@ -4005,6 +4456,15 @@ auto run_settings_window_checks(QApplication &app) -> int {
         for (auto *group : shortcut_groups)
             check(!group->findChildren<QWidget *>(QStringLiteral("shortcutRow")).isEmpty(), "group contains action rows");
         check(dialog->findChildren<QToolButton *>().size() >= bridge.actionCount() + 3, "item information controls");
+        const auto context_rows = dialog->findChildren<QWidget *>(QStringLiteral("contextMenuRow"));
+        const auto context_groups = dialog->findChildren<QFrame *>(QStringLiteral("contextMenuGroup"));
+        const auto normal_checks = dialog->findChildren<QCheckBox *>(QStringLiteral("contextMenuNormalCheck"));
+        const auto comprehensive_checks = dialog->findChildren<QCheckBox *>(QStringLiteral("contextMenuComprehensiveCheck"));
+        check(context_rows.size() == 11 && context_groups.size() == 5, "all categorized Context Menu rows");
+        check(normal_checks.size() == 11 && comprehensive_checks.size() == 11, "independent Context Menu columns");
+        check(std::count_if(normal_checks.cbegin(), normal_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }) == 7, "Normal factory configuration");
+        check(std::all_of(comprehensive_checks.cbegin(), comprehensive_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }), "Comprehensive factory configuration");
+        check(!normal_checks.isEmpty() && normal_checks.first()->accessibleName().contains(QStringLiteral("Normal Context Menu")), "accessible Context Menu checkbox");
         for (auto *button : dialog->findChildren<QToolButton *>()) {
             if (button->accessibleName() != QStringLiteral("Startup notices information"))
                 continue;
@@ -4022,6 +4482,33 @@ auto run_settings_window_checks(QApplication &app) -> int {
         if (categories && pages) {
             categories->setCurrentRow(1);
             check(pages->currentIndex() == 1, "category switching");
+            categories->setCurrentRow(2);
+            check(pages->currentIndex() == 2 && pages->currentWidget()->accessibleName() == QStringLiteral("Context Menus Settings"), "Context Menus category switching");
+        }
+        if (!normal_checks.isEmpty()) {
+            auto *focused_check = normal_checks.first();
+            focused_check->setFocus();
+            check(QMetaObject::invokeMethod(&bridge, "contextMenusRevisionChanged", Qt::DirectConnection), "Context Menu revision notification");
+            QApplication::processEvents();
+            check(dialog->focusWidget() == focused_check && dialog->findChildren<QCheckBox *>(QStringLiteral("contextMenuNormalCheck")).first() == focused_check, "Context Menu updates preserve checkbox focus and identity");
+        }
+        const std::array<std::pair<QString, QString>, 3> reset_checks = {{{QStringLiteral("contextMenuResetNormal"), QStringLiteral("contextMenuResetNormalConfirmation")}, {QStringLiteral("contextMenuResetComprehensive"), QStringLiteral("contextMenuResetComprehensiveConfirmation")}, {QStringLiteral("contextMenuResetBoth"), QStringLiteral("contextMenuResetBothConfirmation")}}};
+        for (const auto &[button_name, confirmation_name] : reset_checks) {
+            auto *button = dialog->findChild<QPushButton *>(button_name);
+            check(button && button->focusPolicy() != Qt::NoFocus, "accessible Context Menu reset button");
+            if (!button)
+                continue;
+            button->click();
+            auto *confirmation = dialog->findChild<QMessageBox *>(confirmation_name);
+            check(confirmation && confirmation->isVisible() && confirmation->windowModality() == Qt::WindowModal && confirmation->text().contains(QStringLiteral("Context Menu")), "scope-specific Context Menu reset confirmation");
+            if (confirmation) {
+                auto *cancel = confirmation->button(QMessageBox::Cancel);
+                check(cancel && confirmation->defaultButton() == cancel && confirmation->escapeButton() == cancel, "Context Menu reset Cancel default and Escape");
+                if (cancel) {
+                    cancel->click();
+                    QApplication::processEvents();
+                }
+            }
         }
         controller.present();
         check(controller.dialog() == dialog && owner.findChildren<QDialog *>().size() == 1, "one-window raising");
@@ -4840,6 +5327,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     char name[] = "dual-pane";
     char *argv[] = {name, nullptr};
     QApplication app(argc, argv);
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FOLDER_ITEMS_CONTEXT_MENU_CHECK"))
+        return run_folder_items_context_menu_checks(app);
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_SETTINGS_WINDOW_CHECK"))
         return run_settings_window_checks(app);
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_TEXT_EDITOR_FOCUS_CHECK"))
@@ -4864,8 +5353,9 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
 
     ThinSplitter standard_layout(SplitterKind::Sidebar);
     auto *split = new ThinSplitter(SplitterKind::Browser);
-    auto *left_browser = new Browser(&left_model, &icons, split);
-    auto *right_browser = new Browser(&right_model, &icons, split);
+    auto *folder_items_menus = new FolderItemsMenuCoordinator(&window);
+    auto *left_browser = new Browser(&left_model, &icons, folder_items_menus, split);
+    auto *right_browser = new Browser(&right_model, &icons, folder_items_menus, split);
     const std::array<Browser *, 2> browsers = {left_browser, right_browser};
     const std::array<FolderItemsListModel *, 2> models = {&left_model, &right_model};
     const auto focus_active_list = [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->view()->focusList(); };
@@ -5201,6 +5691,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     }));
     volume_reader->start(QThread::LowPriority);
     const auto result = QApplication::exec();
+    folder_items_menus->dismiss();
     settings_controller->set_available(false);
     settings_controller->set_capture_handler({});
     // The lambdas above capture stack objects that are destroyed in reverse

@@ -1,6 +1,7 @@
 //! SQLite-backed settings driver. This module owns paths, SQLite, and worker
 //! scheduling; it does not know about Qt objects or widgets.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -129,9 +130,13 @@ impl SettingsDatabase {
             return Err(SettingsStorageError::InvalidData("context menu row count"));
         }
         let mut context_entries = CONTEXT_MENU_ACTIONS.into_iter().map(|action| ContextMenuPreference { action, normal: false, comprehensive: false }).collect::<Vec<_>>();
+        let mut seen_context_rows = HashSet::new();
         for (kind, action, visible) in stored_context_menus {
             let kind = ContextMenuKind::parse(&kind).ok_or(SettingsStorageError::InvalidData("context menu kind"))?;
             let action = ActionId::parse(&action).filter(|action| CONTEXT_MENU_ACTIONS.contains(action)).ok_or(SettingsStorageError::InvalidData("context menu action"))?;
+            if !seen_context_rows.insert((kind, action)) {
+                return Err(SettingsStorageError::InvalidData("duplicate context menu row"));
+            }
             if !matches!(visible, 0 | 1) {
                 return Err(SettingsStorageError::InvalidData("context menu visibility"));
             }
@@ -798,6 +803,16 @@ mod tests {
         assert!(matches!(database.load(), Err(SettingsStorageError::InvalidData("context menu row count"))));
     }
     #[test]
+    fn context_menu_loading_rejects_unknown_duplicate_invalid_and_empty_configurations() {
+        let cases = [("UPDATE context_menu_action SET action = 'UnknownAction' WHERE menu_kind = 'Normal' AND action = 'CopyItems'", "context menu action"), ("PRAGMA ignore_check_constraints = ON; UPDATE context_menu_action SET menu_kind = 'Unknown' WHERE menu_kind = 'Normal' AND action = 'CopyItems'", "context menu kind"), ("PRAGMA ignore_check_constraints = ON; UPDATE context_menu_action SET visible = 2 WHERE menu_kind = 'Normal' AND action = 'CopyItems'", "context menu visibility"), ("UPDATE context_menu_action SET visible = 0 WHERE menu_kind = 'Normal'", "context menu configuration"), ("ALTER TABLE context_menu_action RENAME TO old_context_menu_action; CREATE TABLE context_menu_action(menu_kind TEXT NOT NULL, action TEXT NOT NULL, visible INTEGER NOT NULL); INSERT INTO context_menu_action SELECT * FROM old_context_menu_action; INSERT INTO context_menu_action SELECT * FROM old_context_menu_action WHERE menu_kind = 'Normal' AND action = 'CopyItems'; DELETE FROM context_menu_action WHERE rowid IN (SELECT rowid FROM context_menu_action WHERE menu_kind = 'Comprehensive' AND action = 'DeletePermanently' LIMIT 1); DROP TABLE old_context_menu_action", "duplicate context menu row")];
+        for (sql, reason) in cases {
+            let (_directory, path) = temp_database();
+            let database = SettingsDatabase::open(&path).unwrap();
+            database.connection.execute_batch(sql).unwrap();
+            assert!(matches!(database.load(), Err(SettingsStorageError::InvalidData(found)) if found == reason), "{reason}");
+        }
+    }
+    #[test]
     fn version_ten_migration_seeds_context_menu_defaults() {
         let (_directory, path) = temp_database();
         let database = SettingsDatabase::open(&path).unwrap();
@@ -806,6 +821,25 @@ mod tests {
         drop(database);
         let database = SettingsDatabase::open(&path).unwrap();
         assert_eq!(database.load().unwrap().context_menus, ContextMenuPreferences::default());
+    }
+    #[test]
+    fn every_supported_older_schema_seeds_context_menu_defaults() {
+        for version in 1..=2 {
+            let (_directory, path) = legacy_database(version, "");
+            assert_eq!(SettingsDatabase::open(&path).unwrap().load().unwrap().context_menus, ContextMenuPreferences::default(), "version {version}");
+        }
+        for version in 3..=10 {
+            let (_directory, path) = temp_database();
+            drop(SettingsDatabase::open(&path).unwrap());
+            let connection = Connection::open(&path).unwrap();
+            remove_newer_schema(&connection, version);
+            if version < 8 {
+                drop_preview_height_columns(&connection);
+            }
+            connection.pragma_update(None, "user_version", version).unwrap();
+            drop(connection);
+            assert_eq!(SettingsDatabase::open(&path).unwrap().load().unwrap().context_menus, ContextMenuPreferences::default(), "version {version}");
+        }
     }
     #[test]
     fn session_round_trips_tab_order_active_tabs_and_each_window_state() {

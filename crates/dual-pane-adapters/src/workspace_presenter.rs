@@ -1,4 +1,4 @@
-use dual_pane_application::{ActionBinding, FavoriteEdit, FavoriteRejection, Notice, NoticeKind, Output, SettingsFailure, VisibilityPolicy, WorkspaceChrome};
+use dual_pane_application::{ActionBinding, ActionId, CONTEXT_MENU_ACTIONS, ContextMenuGroup, ContextMenuKind, ContextMenuPreferenceRejection, ContextMenuPreferences, FavoriteEdit, FavoriteRejection, Notice, NoticeKind, Output, SettingsFailure, Shortcut, VisibilityPolicy, WorkspaceChrome, context_menu_group};
 use dual_pane_domain::BrowserSide;
 
 use crate::format::location_text;
@@ -14,6 +14,10 @@ pub struct WorkspaceViewModel {
     favorites_revision: u64,
     bindings: Vec<ActionBinding>,
     bindings_revision: u64,
+    context_menu_rows: Vec<ContextMenuSettingsRowViewModel>,
+    context_menus_revision: u64,
+    context_menu_rejection_revision: u64,
+    last_context_menu_rejection: Option<ContextMenuKind>,
     notices: Vec<NoticeViewModel>,
     notices_revision: u64,
     open_requests: u64,
@@ -27,7 +31,7 @@ pub struct WorkspaceViewModel {
 
 impl Default for WorkspaceViewModel {
     fn default() -> Self {
-        Self { active_browser: BrowserSide::Left, groups: Vec::new(), favorites_ready: false, favorites_revision: 0, bindings: Vec::new(), bindings_revision: 0, notices: Vec::new(), notices_revision: 0, open_requests: 0, hide_notices_at_startup: false, skip_quit_confirmation: false, visibility: VisibilityPolicy::default(), notices_startup_ready: false, settings_interaction_available: false, last_rejection: None }
+        Self { active_browser: BrowserSide::Left, groups: Vec::new(), favorites_ready: false, favorites_revision: 0, bindings: Vec::new(), bindings_revision: 0, context_menu_rows: context_menu_rows(&[], &ContextMenuPreferences::default()), context_menus_revision: 0, context_menu_rejection_revision: 0, last_context_menu_rejection: None, notices: Vec::new(), notices_revision: 0, open_requests: 0, hide_notices_at_startup: false, skip_quit_confirmation: false, visibility: VisibilityPolicy::default(), notices_startup_ready: false, settings_interaction_available: false, last_rejection: None }
     }
 }
 
@@ -56,6 +60,17 @@ pub struct NoticeViewModel {
     pub offers_journal_retry: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenuSettingsRowViewModel {
+    pub action: ActionId,
+    pub label: String,
+    pub group: ContextMenuGroup,
+    pub group_label: &'static str,
+    pub normal: bool,
+    pub comprehensive: bool,
+    pub shortcut: Option<Shortcut>,
+}
+
 impl WorkspaceViewModel {
     pub fn active_browser(&self) -> BrowserSide {
         self.active_browser
@@ -78,6 +93,18 @@ impl WorkspaceViewModel {
     /// Changes whenever an effective shortcut changes.
     pub fn bindings_revision(&self) -> u64 {
         self.bindings_revision
+    }
+    pub fn context_menu_rows(&self) -> &[ContextMenuSettingsRowViewModel] {
+        &self.context_menu_rows
+    }
+    pub fn context_menus_revision(&self) -> u64 {
+        self.context_menus_revision
+    }
+    pub fn context_menu_rejection_revision(&self) -> u64 {
+        self.context_menu_rejection_revision
+    }
+    pub fn last_context_menu_rejection(&self) -> Option<ContextMenuKind> {
+        self.last_context_menu_rejection
     }
     pub fn notices(&self) -> &[NoticeViewModel] {
         &self.notices
@@ -139,6 +166,10 @@ impl WorkspacePresenter {
             Output::NoticeAdded { open: true, .. } | Output::OpenNotices => self.view.open_requests = self.view.open_requests.wrapping_add(1),
             Output::FavoriteEditRejected { edit, reason } => self.view.last_rejection = Some((*edit, *reason)),
             Output::FavoritesChanged { .. } => self.view.last_rejection = None,
+            Output::ContextMenuPreferenceRejected { reason: ContextMenuPreferenceRejection::LastVisibleAction(kind) } => {
+                self.view.last_context_menu_rejection = Some(*kind);
+                self.view.context_menu_rejection_revision = self.view.context_menu_rejection_revision.wrapping_add(1);
+            }
             _ => {}
         }
     }
@@ -164,6 +195,14 @@ impl WorkspacePresenter {
             self.view.bindings.clone_from(&chrome.bindings);
             self.view.bindings_revision = self.view.bindings_revision.wrapping_add(1);
         }
+        if previous.is_none_or(|previous| previous.bindings != chrome.bindings || previous.context_menus != chrome.context_menus) {
+            self.view.context_menu_rows = context_menu_rows(&chrome.bindings, &chrome.context_menus);
+            self.view.context_menus_revision = self.view.context_menus_revision.wrapping_add(1);
+            if previous.is_some_and(|previous| previous.context_menus != chrome.context_menus) {
+                self.view.last_context_menu_rejection = None;
+                self.view.context_menu_rejection_revision = self.view.context_menu_rejection_revision.wrapping_add(1);
+            }
+        }
         self.view.hide_notices_at_startup = chrome.hide_notices_at_startup;
         self.view.skip_quit_confirmation = chrome.skip_quit_confirmation;
         self.view.visibility = chrome.visibility;
@@ -174,6 +213,44 @@ impl WorkspacePresenter {
             self.view.notices_revision = self.view.notices_revision.wrapping_add(1);
         }
         self.chrome = Some(chrome.clone());
+    }
+}
+
+fn context_menu_rows(bindings: &[ActionBinding], preferences: &ContextMenuPreferences) -> Vec<ContextMenuSettingsRowViewModel> {
+    CONTEXT_MENU_ACTIONS
+        .into_iter()
+        .map(|action| {
+            let group = context_menu_group(action).unwrap_or_else(|| unreachable!());
+            ContextMenuSettingsRowViewModel { action, label: action_label(action), group, group_label: context_menu_group_label(group), normal: preferences.visible(ContextMenuKind::Normal, action), comprehensive: preferences.visible(ContextMenuKind::Comprehensive, action), shortcut: bindings.iter().find(|binding| binding.action == action).and_then(|binding| binding.shortcut) }
+        })
+        .collect()
+}
+
+pub fn action_label(action: ActionId) -> String {
+    let mut label = String::new();
+    for character in action.as_str().chars() {
+        if character.is_ascii_uppercase() && !label.is_empty() {
+            label.push(' ');
+        }
+        label.push(character);
+    }
+    label.replace(" To ", " to ").replace(" By ", " by ")
+}
+
+pub const fn context_menu_group_label(group: ContextMenuGroup) -> &'static str {
+    match group {
+        ContextMenuGroup::RenameAndCreate => "Rename and Create",
+        ContextMenuGroup::Open => "Open",
+        ContextMenuGroup::Clipboard => "Clipboard",
+        ContextMenuGroup::OtherBrowser => "Other Browser",
+        ContextMenuGroup::Delete => "Delete",
+    }
+}
+
+pub const fn context_menu_rejection_text(kind: ContextMenuKind) -> &'static str {
+    match kind {
+        ContextMenuKind::Normal => "Normal Context Menu must keep at least one action.",
+        ContextMenuKind::Comprehensive => "Comprehensive Context Menu must keep at least one action.",
     }
 }
 
@@ -236,14 +313,14 @@ mod tests {
     fn texts(kinds: Vec<NoticeKind>) -> Vec<NoticeViewModel> {
         let notices = kinds.into_iter().enumerate().map(|(id, kind)| Notice { id: id as u64, kind, offers_reset: false }).collect::<Arc<[_]>>();
         let mut presenter = WorkspacePresenter::new();
-        presenter.apply_chrome(&WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![], hide_notices_at_startup: false, skip_quit_confirmation: false, visibility: Default::default(), notices_startup_ready: true, settings_interaction_available: true, notices });
+        presenter.apply_chrome(&WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![], context_menus: Default::default(), hide_notices_at_startup: false, skip_quit_confirmation: false, visibility: Default::default(), notices_startup_ready: true, settings_interaction_available: true, notices });
         presenter.view().notices().to_vec()
     }
 
     #[test]
     fn settings_interaction_availability_is_projected_without_a_binding_change() {
         let notices = Arc::from([]);
-        let mut chrome = WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: false, bindings: vec![], hide_notices_at_startup: false, skip_quit_confirmation: false, visibility: Default::default(), notices_startup_ready: false, settings_interaction_available: false, notices };
+        let mut chrome = WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: false, bindings: vec![], context_menus: Default::default(), hide_notices_at_startup: false, skip_quit_confirmation: false, visibility: Default::default(), notices_startup_ready: false, settings_interaction_available: false, notices };
         let mut presenter = WorkspacePresenter::new();
         presenter.apply_chrome(&chrome);
         assert!(!presenter.view().settings_interaction_available());
@@ -253,6 +330,33 @@ mod tests {
         presenter.apply_chrome(&chrome);
         assert!(presenter.view().settings_interaction_available());
         assert_eq!(presenter.view().bindings_revision(), 1, "availability does not rebind workspace actions");
+    }
+
+    #[test]
+    fn context_menu_settings_project_catalogue_preferences_shortcuts_and_rejections() {
+        let notices = Arc::from([]);
+        let shortcut = Shortcut::new(true, false, false, false, dual_pane_application::Key::Character('O'));
+        let mut chrome = WorkspaceChrome { active_browser: BrowserSide::Left, favorites: Default::default(), favorites_ready: true, bindings: vec![ActionBinding { action: ActionId::OpenItem, shortcut: Some(shortcut) }], context_menus: Default::default(), hide_notices_at_startup: false, skip_quit_confirmation: false, visibility: Default::default(), notices_startup_ready: true, settings_interaction_available: true, notices };
+        let mut presenter = WorkspacePresenter::new();
+        presenter.apply_chrome(&chrome);
+        let view = presenter.view();
+        assert_eq!(view.context_menu_rows().len(), CONTEXT_MENU_ACTIONS.len());
+        assert_eq!(view.context_menu_rows().iter().filter(|row| row.normal).count(), 7);
+        assert!(view.context_menu_rows().iter().all(|row| row.comprehensive));
+        assert_eq!(view.context_menu_rows().iter().find(|row| row.action == ActionId::OpenItem).and_then(|row| row.shortcut), Some(shortcut));
+        assert_eq!(view.context_menu_rows().first().map(|row| (row.label.as_str(), row.group_label)), Some(("Rename Item", "Rename and Create")));
+        assert_eq!(view.context_menus_revision(), 1);
+
+        presenter.apply(&Output::ContextMenuPreferenceRejected { reason: ContextMenuPreferenceRejection::LastVisibleAction(ContextMenuKind::Normal) });
+        assert_eq!(presenter.view().last_context_menu_rejection(), Some(ContextMenuKind::Normal));
+        assert_eq!(presenter.view().context_menu_rejection_revision(), 1);
+
+        chrome.context_menus.set_visible(ContextMenuKind::Normal, ActionId::RenameItem, true).unwrap();
+        presenter.apply_chrome(&chrome);
+        assert!(presenter.view().context_menu_rows().iter().find(|row| row.action == ActionId::RenameItem).is_some_and(|row| row.normal));
+        assert_eq!(presenter.view().context_menus_revision(), 2);
+        assert_eq!(presenter.view().last_context_menu_rejection(), None);
+        assert_eq!(presenter.view().context_menu_rejection_revision(), 2);
     }
 
     #[test]

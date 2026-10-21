@@ -5,8 +5,8 @@ use std::pin::Pin;
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QList, QModelIndex, QString, QVariant};
-use dual_pane_adapters::{BrowserViewModel, EditorOutcome, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent};
-use dual_pane_application::{ActionId, ClipboardAction, ContextMenuKind, FolderItemsMenuAction, FolderItemsMenuSnapshot, PreviewView};
+use dual_pane_adapters::{BrowserViewModel, EditorOutcome, FolderItemsColumn, FolderItemsUpdate, SelectionMovement, UiEvent, action_label};
+use dual_pane_application::{ClipboardAction, ContextMenuKind, FolderItemsMenuAction, FolderItemsMenuSnapshot, PreviewView};
 use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection, SortField, SortSpec, TabId};
 
 use crate::workspace_bridge::{key_sequence, revision, with_session};
@@ -280,23 +280,6 @@ fn command_code(command: OperationCommand) -> i32 {
 fn context_menu_action(menu: Option<&FolderItemsMenuSnapshot>, index: i32) -> Option<&FolderItemsMenuAction> {
     let index = usize::try_from(index).ok()?;
     menu?.sections.iter().flat_map(|section| section.actions.iter()).nth(index)
-}
-
-fn action_label(action: ActionId) -> &'static str {
-    match action {
-        ActionId::RenameItem => "Rename Item",
-        ActionId::NewFolder => "New Folder",
-        ActionId::OpenItem => "Open Item",
-        ActionId::ShowPackageContents => "Show Package Contents",
-        ActionId::CopyItems => "Copy Items",
-        ActionId::CutItems => "Cut Items",
-        ActionId::PasteItems => "Paste Items",
-        ActionId::CopyToOtherBrowser => "Copy to Other Browser",
-        ActionId::MoveToOtherBrowser => "Move to Other Browser",
-        ActionId::MoveToTrash => "Move to Trash",
-        ActionId::DeletePermanently => "Delete Permanently",
-        _ => "",
-    }
 }
 
 /// The job a Qt `i64` names, or `None` for a negative value.
@@ -612,7 +595,7 @@ impl ffi::FolderItemsListModel {
         context_menu_action(self.rust().context_menu.as_ref(), index).map_or(-1, |action| action.action as i32)
     }
     fn context_menu_action_label(&self, index: i32) -> QString {
-        context_menu_action(self.rust().context_menu.as_ref(), index).map_or_else(QString::default, |action| QString::from(action_label(action.action)))
+        context_menu_action(self.rust().context_menu.as_ref(), index).map_or_else(QString::default, |action| QString::from(action_label(action.action).as_str()))
     }
     fn context_menu_action_shortcut(&self, index: i32) -> QString {
         context_menu_action(self.rust().context_menu.as_ref(), index).and_then(|action| action.shortcut).map(key_sequence).map_or_else(QString::default, |sequence| QString::from(sequence.as_str()))

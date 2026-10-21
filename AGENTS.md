@@ -60,6 +60,7 @@ make check                                   # full formatter, linter, and test 
 scripts/check-settings-window.sh            # offscreen Qt Settings Window lifecycle check
 scripts/check-text-editor-focus.sh           # offscreen Qt check that text fields keep their clipboard keys and commit composed text once
 scripts/check-application-title-row.sh       # offscreen Qt check of the Sidebar title row and its close button
+scripts/check-folder-items-context-menu.sh   # offscreen Qt check of the asynchronous Folder Items menu lifecycle
 scripts/check-single-instance.sh             # offscreen process check for forwarding, isolation, races, and socket cleanup
 scripts/clipboard-acceptance.sh              # opt-in guided Finder clipboard check; replaces the global clipboard, not in make check
 ```
