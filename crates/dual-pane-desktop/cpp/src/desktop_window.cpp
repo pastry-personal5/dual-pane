@@ -295,13 +295,14 @@ auto style_sheet() -> QString {
       QLabel#shortcutColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
       QWidget#settingsShortcutList, QScrollArea#settingsShortcutScroll QWidget#qt_scrollarea_viewport { background:%2; color:%3; }
       QFrame#shortcutGroup { background:%2; border:1px solid %4; border-radius:4px; }
-      QLabel#shortcutGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:7px 10px; font-size:11px; font-weight:600; }
+      QLabel#shortcutGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:10px 8px; font-size:15px; font-weight:600; }
+      QLabel#shortcutColumnHeadingWide { background:transparent; color:#B7C0CA; font-size:13px; font-weight:600; }
       QWidget#shortcutRow { background:%2; border-bottom:1px solid %4; }
       QWidget#shortcutRow[alternate="true"] { background:#272B31; }
       QWidget#shortcutRow:hover { background:%11; }
       QWidget#shortcutRow QWidget, QWidget#shortcutRow QLabel { background:transparent; border:0; color:%3; }
       QLabel#shortcutScope, QLabel#shortcutEmpty { color:#B7C0CA; }
-      QWidget#shortcutRow QLabel#shortcutOriginal { color:#9CA5AF; font-size:9px; }
+      QWidget#shortcutRow QLabel#shortcutOriginal { color:#9CA5AF; font-size:11px; }
       QWidget#shortcutRow QToolButton { background:transparent; color:#9CA5AF; border:0; padding:0; }
       QWidget#shortcutRow QToolButton:hover:enabled, QWidget#shortcutRow QToolButton:focus { background:transparent; color:#A9D8FA; border:0; }
       QLabel#shortcutFeedback { background:%2; color:%8; font-size:10px; padding:2px 8px 4px; }
@@ -316,7 +317,7 @@ auto style_sheet() -> QString {
       QLabel#contextMenuColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
       QWidget#settingsContextMenuList, QScrollArea#settingsContextMenuScroll QWidget#qt_scrollarea_viewport { background:%2; color:%3; }
       QFrame#contextMenuGroup { background:%2; border:1px solid %4; border-radius:4px; }
-      QLabel#contextMenuGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:7px 10px; font-size:11px; font-weight:600; }
+      QLabel#contextMenuGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:10px 8px; font-size:15px; font-weight:600; }
       QWidget#contextMenuRow { background:%2; border-bottom:1px solid %4; }
       QWidget#contextMenuRow[alternate="true"] { background:#272B31; }
       QWidget#contextMenuRow:hover { background:%11; }
@@ -3605,7 +3606,7 @@ class SettingsWindow final : public QDialog {
             return 0;
         if (id == QStringLiteral("NewTab") || id == QStringLiteral("CloseTab") || id == QStringLiteral("CloseWindow") || id == QStringLiteral("QuitApplication"))
             return 1;
-        if (id == QStringLiteral("NewFolder") || id == QStringLiteral("CopyToOtherBrowser") || id == QStringLiteral("MoveToOtherBrowser") || id == QStringLiteral("RenameItem") || id == QStringLiteral("MoveToTrash") || id == QStringLiteral("DeletePermanently") || id == QStringLiteral("ShowPackageContents") || id == QStringLiteral("OpenItem") || id == QStringLiteral("CopyItems") || id == QStringLiteral("CutItems") || id == QStringLiteral("PasteItems"))
+        if (id == QStringLiteral("NewFolder") || id == QStringLiteral("CopyToOtherBrowser") || id == QStringLiteral("MoveToOtherBrowser") || id == QStringLiteral("RenameItem") || id == QStringLiteral("MoveToTrash") || id == QStringLiteral("DeletePermanently") || id == QStringLiteral("ShowPackageContents") || id == QStringLiteral("OpenItem") || id == QStringLiteral("OpenInFinder") || id == QStringLiteral("CopyItems") || id == QStringLiteral("CutItems") || id == QStringLiteral("PasteItems"))
             return 2;
         if (id.startsWith(QStringLiteral("SortBy")))
             return 3;
@@ -3643,8 +3644,8 @@ class SettingsWindow final : public QDialog {
             label->setWordWrap(true);
             label->setMinimumWidth(300);
             label->setMaximumWidth(400);
-            label->setContentsMargins(12, 12, 12, 12);
-            label->setStyleSheet(QStringLiteral("QLabel#settingsInfoText { background-color:#2B323B; color:#F4F6F8; border:1px solid #56616E; border-radius:5px; padding:12px; font-size:13px; }"));
+            label->setContentsMargins(6, 6, 6, 6);
+            label->setStyleSheet(QStringLiteral("QLabel#settingsInfoText { background-color:#2B323B; color:#F4F6F8; border:1px solid #56616E; border-radius:5px; padding:6px; font-size:13px; }"));
             auto *action = new QWidgetAction(menu);
             action->setDefaultWidget(label);
             menu->addAction(action);
@@ -3751,9 +3752,16 @@ class SettingsWindow final : public QDialog {
             QObject::connect(bridge_, &WorkspaceBridge::showDotfilesChanged, page, synchronize_visibility);
             QObject::connect(bridge_, &WorkspaceBridge::showMacosInvisibleChanged, page, synchronize_visibility);
         }
-        visibility_card->addWidget(macos_items);
-        visibility_card->addWidget(dotfiles);
-        visibility_card->addWidget(macos_invisible);
+        auto add_visibility_row = [visibility_card, page, this](QCheckBox *control, const QString &subject, const QString &description) {
+            auto *row = new QHBoxLayout();
+            row->addWidget(control);
+            row->addWidget(info_button(page, subject, description));
+            row->addStretch();
+            visibility_card->addLayout(row);
+        };
+        add_visibility_row(macos_items, QStringLiteral("macOS metadata and service items"), QStringLiteral("Shows items such as .DS_Store, Spotlight indexes, and other files macOS and its services maintain."));
+        add_visibility_row(dotfiles, QStringLiteral("Dotfiles"), QStringLiteral("Shows files and folders whose names start with a dot, the Unix convention for hidden items."));
+        add_visibility_row(macos_invisible, QStringLiteral("Items marked invisible by macOS"), QStringLiteral("Shows items macOS has explicitly flagged as invisible, separate from dotfiles and metadata items."));
         auto *reset_card = make_card(QStringLiteral("Reset Settings"), QStringLiteral("Reset Settings"), QStringLiteral("Restore defaults for settings, Favorites, open tabs, and workspace layout."));
         auto *reset_row = new QHBoxLayout();
         auto *reset = new QPushButton(QStringLiteral("Reset Settings"), page);
@@ -3789,14 +3797,14 @@ class SettingsWindow final : public QDialog {
         head->setSpacing(8);
         for (const auto &name : {QStringLiteral("Action"), QStringLiteral("Shortcuts"), QStringLiteral("Original Shortcuts"), QStringLiteral("Scope"), QStringLiteral("Add")}) {
             auto *label = new QLabel(name, header);
-            label->setObjectName(QStringLiteral("shortcutColumnHeading"));
+            label->setObjectName(name == QStringLiteral("Original Shortcuts") ? QStringLiteral("shortcutColumnHeadingWide") : QStringLiteral("shortcutColumnHeading"));
             int width = 36;
             if (name == QStringLiteral("Action"))
                 width = 170;
             else if (name == QStringLiteral("Shortcuts"))
                 width = shortcut_column_width();
             else if (name == QStringLiteral("Original Shortcuts"))
-                width = 160;
+                width = original_shortcut_column_width();
             else if (name == QStringLiteral("Scope"))
                 width = 120;
             label->setFixedWidth(width);
@@ -3812,16 +3820,16 @@ class SettingsWindow final : public QDialog {
         const auto longest_supported_shortcut = QStringLiteral("Control+Option+Shift+Command+Forward Delete");
         return metrics.horizontalAdvance(longest_supported_shortcut) + 6 + 18;
     }
+    static auto original_shortcut_column_width() -> int { return 200; }
     static auto shortcut_table_width() -> int {
         constexpr int action_width = 170;
-        constexpr int original_width = 160;
         constexpr int scope_width = 120;
         constexpr int add_width = 36;
         constexpr int column_gap = 8;
         constexpr int horizontal_padding = 8;
         constexpr int card_border = 2;
         constexpr int column_count = 5;
-        return action_width + shortcut_column_width() + original_width + scope_width + add_width + ((column_count - 1) * column_gap) + (2 * horizontal_padding) + card_border;
+        return action_width + shortcut_column_width() + original_shortcut_column_width() + scope_width + add_width + ((column_count - 1) * column_gap) + (2 * horizontal_padding) + card_border;
     }
     auto shortcut_page() -> QWidget * {
         auto *page = new QWidget(pages_);
@@ -3945,7 +3953,7 @@ class SettingsWindow final : public QDialog {
                 cells->addWidget(shortcuts_cell);
                 const QString original_shortcut = bridge_->actionDefaultShortcutLabel(index);
                 auto *original_cell = new QWidget(row);
-                original_cell->setFixedWidth(160);
+                original_cell->setFixedWidth(original_shortcut_column_width());
                 auto *original_layout = new QHBoxLayout(original_cell);
                 original_layout->setContentsMargins(0, 0, 0, 0);
                 auto *original_label = new QLabel(original_shortcut.isEmpty() ? QStringLiteral("None") : original_shortcut, original_cell);
@@ -3966,7 +3974,7 @@ class SettingsWindow final : public QDialog {
                 add_cell->setFixedWidth(36);
                 auto *add_layout = new QHBoxLayout(add_cell);
                 add_layout->setContentsMargins(0, 0, 0, 0);
-                add_layout->addWidget(capture, 0, Qt::AlignCenter);
+                add_layout->addWidget(capture, 0, Qt::AlignLeft);
                 cells->addWidget(add_cell);
                 cells->addStretch();
                 group_layout->addWidget(row);
@@ -4038,12 +4046,15 @@ class SettingsWindow final : public QDialog {
         auto *normal = new QPushButton(QStringLiteral("Reset Normal…"), page);
         normal->setObjectName(QStringLiteral("contextMenuResetNormal"));
         normal->setAccessibleName(QStringLiteral("Reset Normal Context Menu"));
+        normal->setToolTip(QStringLiteral("Restore the Normal Context Menu to its factory configuration."));
         auto *comprehensive = new QPushButton(QStringLiteral("Reset Comprehensive…"), page);
         comprehensive->setObjectName(QStringLiteral("contextMenuResetComprehensive"));
         comprehensive->setAccessibleName(QStringLiteral("Reset Comprehensive Context Menu"));
+        comprehensive->setToolTip(QStringLiteral("Restore the Comprehensive Context Menu to its factory configuration."));
         auto *both = new QPushButton(QStringLiteral("Reset Both…"), page);
         both->setObjectName(QStringLiteral("contextMenuResetBoth"));
         both->setAccessibleName(QStringLiteral("Reset Both Context Menus"));
+        both->setToolTip(QStringLiteral("Restore both Context Menus to their factory configurations."));
         QObject::connect(normal, &QPushButton::clicked, this, [this] { confirm_context_menu_reset(0); });
         QObject::connect(comprehensive, &QPushButton::clicked, this, [this] { confirm_context_menu_reset(1); });
         QObject::connect(both, &QPushButton::clicked, this, [this] { confirm_context_menu_reset(2); });
@@ -4101,9 +4112,15 @@ class SettingsWindow final : public QDialog {
             auto *cells = new QHBoxLayout(row);
             cells->setContentsMargins(8, 3, 8, 3);
             cells->setSpacing(8);
-            auto *action_label = new QLabel(action, row);
-            action_label->setFixedWidth(260);
-            cells->addWidget(action_label);
+            auto *action_cell = new QWidget(row);
+            action_cell->setFixedWidth(260);
+            auto *action_cell_layout = new QHBoxLayout(action_cell);
+            action_cell_layout->setContentsMargins(0, 0, 0, 0);
+            auto *action_label = new QLabel(action, action_cell);
+            action_cell_layout->addWidget(action_label);
+            action_cell_layout->addStretch();
+            action_cell_layout->addWidget(info_button(action_cell, action, action + QStringLiteral(" in the Folder Items context menu. Use Normal and Comprehensive to choose which menu variant shows this action.")));
+            cells->addWidget(action_cell);
             auto add_checkbox = [this, row, cells, action, index](int kind, int width, bool checked) -> QCheckBox * {
                 auto *cell = new QWidget(row);
                 cell->setFixedWidth(width);
@@ -4124,7 +4141,7 @@ class SettingsWindow final : public QDialog {
                         clear_context_menu_feedback();
                     }
                 });
-                cell_layout->addWidget(check, 0, Qt::AlignCenter);
+                cell_layout->addWidget(check, 0, Qt::AlignLeft);
                 cells->addWidget(cell);
                 return check;
             };
