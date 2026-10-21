@@ -227,6 +227,9 @@ auto style_sheet() -> QString {
       QTreeView::item:hover:!selected { background:%11; }
       QToolButton { background:%2; color:%3; border:1px solid %4; padding:4px; }
       QToolButton:disabled { color:%7; }
+      QToolButton#shortcutGlyphButton { background:transparent; border:0; border-radius:9px; padding:0; }
+      QToolButton#shortcutGlyphButton:hover:enabled { background:%11; }
+      QToolButton#shortcutGlyphButton:focus { border:1px solid %5; }
       QToolButton#backButton:hover:enabled, QToolButton#forwardButton:hover:enabled, QToolButton#upButton:hover:enabled, QToolButton#settings:hover:enabled, QToolButton#noticesButton:hover:enabled { background:%5; }
       QToolButton#favoriteGroupMenuButton, QToolButton#addFavoriteItemButton { color:#A7ADB5; background:#24282E; }
       QToolButton#favoriteGroupMenuButton:hover:enabled, QToolButton#addFavoriteItemButton:hover:enabled { color:#FFFFFF; background:#2F6D9A; }
@@ -3332,6 +3335,57 @@ auto shortcut_glyph_bitmap(ShortcutGlyph glyph, const QColor &foreground) -> QPi
     return bitmap;
 }
 
+/// A macOS-style on/off switch, painted in place of the native QCheckBox
+/// indicator. It stays a QCheckBox so the usual checked state, `toggled`
+/// signal, keyboard activation, and `findChild<QCheckBox *>` lookups in
+/// tests keep working unchanged.
+class ToggleSwitch final : public QCheckBox {
+  public:
+    using QCheckBox::QCheckBox;
+
+  protected:
+    [[nodiscard]] auto sizeHint() const -> QSize override {
+        const QFontMetrics metrics(font());
+        const int label_width = text().isEmpty() ? 0 : label_gap + metrics.horizontalAdvance(text());
+        return {track_width + label_width, std::max(track_height, metrics.height())};
+    }
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const qreal y = (height() - track_height) / 2.0;
+        const QRectF track(0, y, track_width, track_height);
+        const QColor on(QString::fromLatin1(active_color));
+        const QColor off(QStringLiteral("#53585F"));
+        painter.setPen(Qt::NoPen);
+        QColor track_color = off;
+        if (isEnabled())
+            track_color = isChecked() ? on : off;
+        else
+            track_color = off.darker(130);
+        painter.setBrush(track_color);
+        painter.drawRoundedRect(track, track_height / 2.0, track_height / 2.0);
+        constexpr qreal knob_margin = 2.0;
+        const qreal knob_diameter = track_height - (2 * knob_margin);
+        const qreal knob_x = isChecked() ? track.right() - knob_diameter - knob_margin : track.left() + knob_margin;
+        painter.setBrush(QColor(QStringLiteral("#F4F6F8")));
+        painter.drawEllipse(QRectF(knob_x, y + knob_margin, knob_diameter, knob_diameter));
+        if (hasFocus()) {
+            painter.setPen(QPen(on, 2));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRoundedRect(track.adjusted(-2, -2, 2, 2), (track_height / 2.0) + 2, (track_height / 2.0) + 2);
+        }
+        if (!text().isEmpty()) {
+            painter.setPen(QColor(QString::fromLatin1(isEnabled() ? text_color : inactive_text_color)));
+            painter.drawText(QRectF(track_width + label_gap, 0, width() - track_width - label_gap, height()), Qt::AlignVCenter | Qt::AlignLeft, text());
+        }
+    }
+
+  private:
+    static constexpr int track_width = 34;
+    static constexpr int track_height = 20;
+    static constexpr int label_gap = 8;
+};
+
 class ShortcutGlyphButton : public QToolButton {
   public:
     ShortcutGlyphButton(QWidget *parent, ShortcutGlyph glyph)
@@ -3612,22 +3666,8 @@ class SettingsWindow final : public QDialog {
             return 3;
         return 4;
     }
-    auto info_button(QWidget *parent, const QString &subject, const QString &description, bool shortcut_style = false) -> QToolButton * {
-        QToolButton *button = shortcut_style ? static_cast<QToolButton *>(new ShortcutGlyphButton(parent, ShortcutGlyph::Info)) : new QToolButton(parent);
-        if (!shortcut_style) {
-            QPixmap bitmap(18, 18);
-            bitmap.fill(Qt::transparent);
-            QPainter painter(&bitmap);
-            painter.setRenderHint(QPainter::Antialiasing);
-            painter.setPen(QPen(QColor(145, 185, 230), 1.5));
-            painter.drawEllipse(QRectF(1.5, 1.5, 15, 15));
-            painter.setFont(QFont(QStringLiteral("Helvetica"), 11, QFont::Bold));
-            painter.drawText(bitmap.rect(), Qt::AlignCenter, QStringLiteral("i"));
-            painter.end();
-            button->setIcon(QIcon(bitmap));
-            button->setIconSize(QSize(18, 18));
-            button->setFixedSize(24, 24);
-        }
+    auto info_button(QWidget *parent, const QString &subject, const QString &description) -> QToolButton * {
+        auto *button = new ShortcutGlyphButton(parent, ShortcutGlyph::Info);
         button->setToolTip(subject + QStringLiteral(" information"));
         button->setAccessibleName(subject + QStringLiteral(" information"));
         button->setFocusPolicy(Qt::StrongFocus);
@@ -3685,7 +3725,7 @@ class SettingsWindow final : public QDialog {
         };
         auto *startup_card = make_card(QStringLiteral("Startup Notices"), QStringLiteral("Startup Notices"), QStringLiteral("Choose which notices open automatically when the app starts."));
         auto *notices = new QHBoxLayout();
-        auto *check = new QCheckBox(QStringLiteral("Don’t show notices at startup"), page);
+        auto *check = new ToggleSwitch(QStringLiteral("Don’t show notices at startup"), page);
         check->setObjectName(QStringLiteral("settingsHideNotices"));
         check->setAccessibleName(QStringLiteral("Don’t show notices at startup"));
         check->setChecked(bridge_ && bridge_->getHideNoticesAtStartup());
@@ -3700,7 +3740,7 @@ class SettingsWindow final : public QDialog {
         startup_card->addLayout(notices);
         auto *quit_card = make_card(QStringLiteral("Quitting"), QStringLiteral("Quitting"), QStringLiteral("Choose whether the Sidebar close button asks before it quits."));
         auto *quit_row = new QHBoxLayout();
-        auto *ask_quit = new QCheckBox(QStringLiteral("Ask before quitting from the close button"), page);
+        auto *ask_quit = new ToggleSwitch(QStringLiteral("Ask before quitting from the close button"), page);
         ask_quit->setObjectName(QStringLiteral("settingsAskBeforeQuit"));
         ask_quit->setAccessibleName(QStringLiteral("Ask before quitting from the close button"));
         ask_quit->setChecked(!bridge_ || !bridge_->getSkipQuitConfirmation());
@@ -3719,9 +3759,9 @@ class SettingsWindow final : public QDialog {
         visibility_help->setAccessibleName(QStringLiteral("Visibility settings help"));
         visibility_help->setWordWrap(true);
         visibility_card->addWidget(visibility_help);
-        auto *macos_items = new QCheckBox(QStringLiteral("Show macOS metadata and service items"), page);
-        auto *dotfiles = new QCheckBox(QStringLiteral("Show dotfiles"), page);
-        auto *macos_invisible = new QCheckBox(QStringLiteral("Show items marked invisible by macOS"), page);
+        auto *macos_items = new ToggleSwitch(QStringLiteral("Show macOS metadata and service items"), page);
+        auto *dotfiles = new ToggleSwitch(QStringLiteral("Show dotfiles"), page);
+        auto *macos_invisible = new ToggleSwitch(QStringLiteral("Show items marked invisible by macOS"), page);
         macos_items->setObjectName(QStringLiteral("settingsShowMacosItems"));
         dotfiles->setObjectName(QStringLiteral("settingsShowDotfiles"));
         macos_invisible->setObjectName(QStringLiteral("settingsShowMacosInvisible"));
@@ -3907,7 +3947,7 @@ class SettingsWindow final : public QDialog {
                     scope = QStringLiteral("Application");
                 const QString help = name + QStringLiteral(". This action is available in the ") + scope + QStringLiteral(". Add one or more shortcuts, remove individual entries, or restore its compiled default.");
                 row->setAccessibleDescription(help);
-                action_layout->addWidget(info_button(action_cell, name, help, true));
+                action_layout->addWidget(info_button(action_cell, name, help));
                 cells->addWidget(action_cell);
                 auto *shortcuts_cell = new QWidget(row);
                 shortcuts_cell->setFixedWidth(shortcut_column_width());
@@ -4126,7 +4166,7 @@ class SettingsWindow final : public QDialog {
                 cell->setFixedWidth(width);
                 auto *cell_layout = new QHBoxLayout(cell);
                 cell_layout->setContentsMargins(0, 0, 0, 0);
-                auto *check = new QCheckBox(cell);
+                auto *check = new ToggleSwitch(cell);
                 check->setObjectName(kind == 0 ? QStringLiteral("contextMenuNormalCheck") : QStringLiteral("contextMenuComprehensiveCheck"));
                 const QString variant = kind == 0 ? QStringLiteral("Normal") : QStringLiteral("Comprehensive");
                 check->setAccessibleName(QStringLiteral("Show ") + action + QStringLiteral(" in ") + variant + QStringLiteral(" Context Menu"));
@@ -4484,8 +4524,8 @@ auto run_settings_window_checks(QApplication &app) -> int {
         const auto context_groups = dialog->findChildren<QFrame *>(QStringLiteral("contextMenuGroup"));
         const auto normal_checks = dialog->findChildren<QCheckBox *>(QStringLiteral("contextMenuNormalCheck"));
         const auto comprehensive_checks = dialog->findChildren<QCheckBox *>(QStringLiteral("contextMenuComprehensiveCheck"));
-        check(context_rows.size() == 11 && context_groups.size() == 5, "all categorized Context Menu rows");
-        check(normal_checks.size() == 11 && comprehensive_checks.size() == 11, "independent Context Menu columns");
+        check(context_rows.size() == 12 && context_groups.size() == 5, "all categorized Context Menu rows");
+        check(normal_checks.size() == 12 && comprehensive_checks.size() == 12, "independent Context Menu columns");
         check(std::count_if(normal_checks.cbegin(), normal_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }) == 7, "Normal factory configuration");
         check(std::all_of(comprehensive_checks.cbegin(), comprehensive_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }), "Comprehensive factory configuration");
         check(!normal_checks.isEmpty() && normal_checks.first()->accessibleName().contains(QStringLiteral("Normal Context Menu")), "accessible Context Menu checkbox");
