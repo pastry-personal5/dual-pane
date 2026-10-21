@@ -33,14 +33,25 @@ pub fn is_macos_invisible(path: &Path) -> io::Result<bool> {
     // buffer, and `XATTR_NOFOLLOW` asks macOS to inspect the link itself.
     let length = unsafe { libc::getxattr(path.as_ptr(), FINDER_INFO.as_ptr().cast(), info.as_mut_ptr().cast(), info.len(), 0, libc::XATTR_NOFOLLOW) };
     if length < 0 {
-        let error = io::Error::last_os_error();
-        return match error.raw_os_error() {
-            Some(libc::ENOATTR) => Ok(false),
-            _ => Err(error),
-        };
+        return finder_info_unreadable_result(io::Error::last_os_error());
     }
     let length = usize::try_from(length).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
     finder_info_invisible(&info[..length])
+}
+
+/// Maps a failed `getxattr` into "no readable Finder flag" rather than an
+/// error when the failure means there is none to read: no such attribute
+/// (`ENOATTR`), no extended-attribute support (`ENOTSUP`/`EOPNOTSUPP`, as on
+/// FAT32 and many network shares), or macOS refusing this process the read
+/// (`EPERM`/`EACCES`, as for `~/.Trash`, volume-root service folders, and
+/// other privacy-protected items that `lstat` still reports). Any other
+/// failure stays an error, so a real I/O fault is not mistaken for a visible
+/// item.
+fn finder_info_unreadable_result(error: io::Error) -> io::Result<bool> {
+    match error.raw_os_error() {
+        Some(libc::ENOATTR | libc::ENOTSUP | libc::EOPNOTSUPP | libc::EPERM | libc::EACCES) => Ok(false),
+        _ => Err(error),
+    }
 }
 
 fn finder_info_invisible(info: &[u8]) -> io::Result<bool> {
@@ -240,6 +251,16 @@ mod tests {
         let link = directory.path().join("link");
         symlink(&hidden, &link).unwrap();
         assert!(!is_macos_invisible(&link).unwrap());
+    }
+
+    #[test]
+    fn missing_unsupported_or_protected_finder_information_is_not_an_error() {
+        for code in [libc::ENOATTR, libc::ENOTSUP, libc::EOPNOTSUPP, libc::EPERM, libc::EACCES] {
+            assert!(!finder_info_unreadable_result(io::Error::from_raw_os_error(code)).unwrap());
+        }
+        for code in [libc::EIO, libc::ENOMEM, libc::EINVAL] {
+            assert!(finder_info_unreadable_result(io::Error::from_raw_os_error(code)).is_err());
+        }
     }
 
     #[test]
