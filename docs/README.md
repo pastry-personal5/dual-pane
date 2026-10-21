@@ -10,6 +10,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [architecture.md](architecture.md) | Active Clean Architecture with MVVM presentation and command-based input, technical stack, crate boundaries, threading, file-operation safety, and testing. |
 | [product-behavior.md](product-behavior.md) | Active product scope, Favorites identity, file-operation safeguards, session recovery, Notices startup policy, and exclusions. |
 | [hidden-files-research.md](research/hidden-files-research.md) | Evidence for macOS metadata/service names, dotfiles, platform invisibility, and P3-M15 visibility settings. |
+| [file-type-default-app-research.md](research/file-type-default-app-research.md) | How macOS maps a file to its opening application through content types and Launch Services, where the default is stored, and how it is read and set. |
 | [ux-terms.md](ux-terms.md) | Canonical component and action names, code mappings, and naming exemptions. |
 | [ux-information-architecture.md](ux-information-architecture.md) | Standard Layout, Phase 3 containment, and the delivered P3-M14 Settings Window hierarchy. |
 | [ux-gui.md](ux-gui.md) | Interaction rules, delivered Phase 3 GUI behavior, and accepted Phase 4 planning decisions. |
