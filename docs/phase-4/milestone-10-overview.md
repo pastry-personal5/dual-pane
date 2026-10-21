@@ -121,6 +121,7 @@ Implementation and hardening evidence on 2026-10-21:
 Review fixes on 2026-10-21:
 
 - Context Menus Settings now synchronizes existing controls in place when preferences or first shortcuts change, preserving keyboard focus and scroll position. The offscreen Settings check verifies that a revision retains the focused checkbox and its widget identity.
+- The Settings sidebar now shows General, Keyboard Shortcuts, and Context Menus in 16px text. The offscreen Settings check verifies all three labels and the font size.
 - The desktop explicitly dismisses a live Folder Items menu before its models are torn down. Non-pointer requests with an invalid cursor row now use the empty-space target and viewport anchor.
 - Direct Cargo checks, both isolated offscreen scripts, and `make check` pass after these fixes.
 

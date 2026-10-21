@@ -50,7 +50,7 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
 - Settings Window
   - Settings Title Row with Close Button at the far left, followed by the Settings heading
   - Settings Category List
-    - General Settings
+    - General (General Settings page)
       - Startup Notices card
         - Don’t show notices at startup
       - Item Visibility card
@@ -60,7 +60,7 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
         - Visibility rules help
       - Reset Settings card
         - Reset Settings Button
-    - Keyboard Shortcuts Settings
+    - Keyboard Shortcuts (Keyboard Shortcuts Settings page)
       - Scrollable list of left-aligned category cards sized to the table columns, ending just beyond Add with a small right inset: Navigation, Tabs and Windows, File Actions, Sorting, and Other Actions
         - Category heading
         - Repeated Shortcut Table Header: Action, Shortcuts, Original Shortcuts, Scope, Add
@@ -71,7 +71,7 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
           - Shortcut scope
           - Add Shortcut Button in its own column
           - Inline capture or rejection feedback when needed
-    - Context Menus Settings
+    - Context Menus (Context Menus Settings page)
       - Scrollable Folder Items menu action matrix grouped, in order, as Rename and Create, Open, Clipboard, Other Browser, and Delete
         - Repeated header: Action, Normal, Comprehensive, Shortcut
         - Action rows with independent Normal and Comprehensive visibility checkboxes and a read-only first effective shortcut

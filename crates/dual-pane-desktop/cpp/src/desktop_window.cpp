@@ -3550,10 +3550,13 @@ class SettingsWindow final : public QDialog {
         sidebar_layout->setSpacing(0);
         categories_->setObjectName(QStringLiteral("settingsCategoryList"));
         categories_->setAccessibleName(QStringLiteral("Settings Category List"));
+        QFont category_font = categories_->font();
+        category_font.setPixelSize(16);
+        categories_->setFont(category_font);
         categories_->setMinimumWidth(320);
-        categories_->addItem(QStringLiteral("General Settings"));
-        categories_->addItem(QStringLiteral("Keyboard Shortcuts Settings"));
-        categories_->addItem(QStringLiteral("Context Menus Settings"));
+        categories_->addItem(QStringLiteral("General"));
+        categories_->addItem(QStringLiteral("Keyboard Shortcuts"));
+        categories_->addItem(QStringLiteral("Context Menus"));
         categories_->setCurrentRow(0);
         sidebar_layout->addWidget(categories_, 1);
         pages_->setObjectName(QStringLiteral("settingsPages"));
@@ -4430,6 +4433,10 @@ auto run_settings_window_checks(QApplication &app) -> int {
         auto *reset = dialog->findChild<QPushButton *>(QStringLiteral("settingsReset"));
         check(categories && dialog->focusWidget() == categories && categories->currentRow() == 0, "initial category focus");
         check(categories && categories->count() == 3 && pages && pages->count() == 3, "three Settings categories and pages");
+        if (categories && categories->count() == 3) {
+            check(categories->item(0)->text() == QStringLiteral("General") && categories->item(1)->text() == QStringLiteral("Keyboard Shortcuts") && categories->item(2)->text() == QStringLiteral("Context Menus"), "concise Settings sidebar labels");
+            check(categories->font().pixelSize() == 16, "larger Settings sidebar font");
+        }
         check(title_row && heading && heading->text() == QStringLiteral("Settings") && heading->parentWidget() == title_row && notices && reset, "General controls and title row");
         check(macos_items && macos_items->accessibleName() == QStringLiteral("Show macOS metadata and service items") && macos_items->focusPolicy() != Qt::NoFocus, "accessible macOS items control");
         check(dotfiles && dotfiles->accessibleName() == QStringLiteral("Show dotfiles") && dotfiles->focusPolicy() != Qt::NoFocus, "accessible dotfiles control");
