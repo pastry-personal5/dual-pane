@@ -85,6 +85,10 @@ namespace dual_pane_desktop {
 constexpr unsigned short space_key_code = 49;
 constexpr NSTimeInterval quick_look_reveal_seconds = 0.16;
 
+auto physical_space_release(unsigned short key_code, bool auto_repeat) -> bool {
+    return key_code == space_key_code && !auto_repeat;
+}
+
 auto usable_frame(NSScreen *screen) -> NSRect {
     if (screen == nil)
         return NSZeroRect;
@@ -244,7 +248,7 @@ class QuickLookPreviewController::Implementation final {
         controller_.releaseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyUp
                                                                            handler:^NSEvent *(NSEvent *event) {
                                                                              DualPaneQuickLookController *controller = weak;
-                                                                             if (controller != nil && controller.held && event.keyCode == space_key_code) {
+                                                                             if (controller != nil && controller.held && physical_space_release(event.keyCode, event.isARepeat)) {
                                                                                  controller.held = NO;
                                                                                  if (controller.released != nil)
                                                                                      controller.released();
@@ -318,8 +322,15 @@ void QuickLookPreviewController::dismiss() { implementation_->dismiss(); }
 QuickLookGesture::QuickLookGesture(QuickLookPreviewService *service, std::function<void()> failure, std::function<void(Release)> released, std::function<void()> interrupted) : service_(service), failure_(std::move(failure)), released_(std::move(released)), interrupted_(std::move(interrupted)) {}
 
 auto QuickLookGesture::press(const QuickLookItem &item, bool plain_space, bool auto_repeat) -> bool {
-    if (!plain_space || auto_repeat || item.path.isEmpty() || active_)
+    if (!plain_space || auto_repeat || item.path.isEmpty() || held_)
         return false;
+    // A normal panel can be ordered out without a controller handoff. In that
+    // case no interruption callback arrives, so a later Space must clear the
+    // retained gesture before it can capture the new cursor item.
+    if (active_) {
+        service_->dismiss();
+        active_ = false;
+    }
     const auto next = generation_ + 1;
     active_ = true;
     held_ = true;
@@ -335,8 +346,10 @@ auto QuickLookGesture::hold_elapsed(std::uint64_t generation) -> bool {
     hold_elapsed_ = true;
     if (service_->present(item_, true, [this, generation] {
                               const auto result = released(generation);
-                              if (released_)
+                              if (result != Release::Ignored && released_)
                                   released_(result); }, [this, generation] {
+                              if (generation != generation_ || !active_)
+                                  return;
                               interrupted(generation);
                               if (interrupted_)
                                   interrupted_(); }))
@@ -353,6 +366,8 @@ auto QuickLookGesture::released(std::uint64_t generation, bool auto_repeat) -> R
     held_ = false;
     if (!hold_elapsed_) {
         if (!service_->present(item_, false, {}, [this, generation] {
+                                  if (generation != generation_ || !active_)
+                                      return;
                                   interrupted(generation);
                                   if (interrupted_)
                                       interrupted_(); })) {
@@ -402,12 +417,16 @@ class FakeQuickLookPreview final : public QuickLookPreviewService {
 } // namespace
 
 auto quick_look_seam_tests() -> bool { // NOLINT(readability-function-cognitive-complexity)
+    if (!physical_space_release(space_key_code, false) || physical_space_release(space_key_code, true) || physical_space_release(0, false))
+        return false;
     FakeQuickLookPreview preview;
     int failures = 0;
     int retained = 0;
     int dismissed = 0;
     int interruptions = 0;
+    int release_notifications = 0;
     QuickLookGesture gesture(&preview, [&failures] { ++failures; }, [&](QuickLookGesture::Release release) {
+        ++release_notifications;
         if (release == QuickLookGesture::Release::Retained) {
             ++retained;
         } else if (release == QuickLookGesture::Release::Dismiss) {
@@ -429,20 +448,29 @@ auto quick_look_seam_tests() -> bool { // NOLINT(readability-function-cognitive-
     if (gesture.released(first) != QuickLookGesture::Release::Retained || preview.present_calls != 1 || preview.last_item.path != exact_path || preview.last_item.directory || preview.last_enlarged || !gesture.active() || gesture.held())
         return false;
     const auto stale_interrupt = preview.interrupt;
-    preview.interrupt();
-    if (gesture.active() || interruptions != 1)
-        return false;
-    if (!gesture.press({QByteArray("/tmp/folder"), true}, true, false))
+    // Closing a normal panel need not end its controller handoff. A second
+    // Space replaces that retained panel and starts a fresh gesture.
+    if (!gesture.press({QByteArray("/tmp/folder"), true}, true, false) || preview.dismiss_calls != 1)
         return false;
     const auto second = gesture.generation();
     stale_interrupt();
-    if (!gesture.held() || dismissed != 0 || !gesture.hold_elapsed(second) || preview.present_calls != 2 || !preview.last_item.directory || !preview.last_enlarged || gesture.hold_elapsed(second))
+    if (!gesture.held() || interruptions != 0 || dismissed != 0 || !gesture.hold_elapsed(second) || preview.present_calls != 2 || !preview.last_item.directory || !preview.last_enlarged || gesture.hold_elapsed(second))
         return false;
+    const auto stale_release = preview.release;
     preview.release();
-    if (dismissed != 1 || preview.dismiss_calls != 1 || gesture.active())
+    if (dismissed != 1 || release_notifications != 1 || preview.dismiss_calls != 2 || gesture.active())
+        return false;
+    if (!gesture.press({QByteArray("/tmp/next"), false}, true, false))
+        return false;
+    const auto third = gesture.generation();
+    stale_release();
+    if (!gesture.held() || dismissed != 1 || release_notifications != 1 || !gesture.hold_elapsed(third) || preview.present_calls != 3)
+        return false;
+    preview.interrupt();
+    if (gesture.active() || interruptions != 1)
         return false;
     preview.presentation_succeeds = false;
-    if (!gesture.press({QByteArray("/tmp/failure"), false}, true, false) || gesture.hold_elapsed(gesture.generation()) || failures != 1 || preview.present_calls != 3 || gesture.active())
+    if (!gesture.press({QByteArray("/tmp/failure"), false}, true, false) || gesture.hold_elapsed(gesture.generation()) || failures != 1 || preview.present_calls != 4 || gesture.active())
         return false;
     return gesture.released(first) == QuickLookGesture::Release::Ignored && retained == 0;
 }
