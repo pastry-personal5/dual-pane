@@ -1,6 +1,6 @@
 # P4-M10: Enhance Folder Items Context Menu
 
-Status: Active
+Status: Done
 
 This milestone replaces the single fixed Folder Items Context Menu with a fast Normal variant, an exact-Shift Comprehensive variant, and persistent visibility controls in a new Context Menus Settings screen. It is active and implemented through the application, storage, adapter, bridge, Settings, and owned non-blocking native-menu boundaries. Automated checks and the full gate pass; the owner's guided macOS acceptance remains. The [architecture plan](milestone-10-architecture.md) defines the typed projection, persistence, asynchronous native-menu lifecycle, and stale-action boundary; this checklist is the definition of done.
 
@@ -96,7 +96,7 @@ The screen provides Reset Normal…, Reset Comprehensive…, and Reset Both…. 
 - [x] The settings database gains a transactional schema-11 step that stores exactly both configurations under stable eligible `ActionId` names, seeds fresh and every supported older profile with the accepted defaults, round-trips custom values, rejects extra, unknown, duplicate, malformed, missing, or empty configurations, and preserves the existing corrupt/newer-database recovery behavior.
 - [x] Qt-free application and adapter tests cover defaults, independent edits, no-ops, last-item rejection, local and global resets, action-context availability and grouping, exact modifiers, both Browsers, one-use and stale observations, shortcut changes, settings and rejection view models, save/load, every supported migration path, corruption, rollback, recovery, and relaunch. Filesystem fixtures remain in temporary directories.
 - [x] `scripts/check-settings-window.sh` covers the new page, and a new `scripts/check-folder-items-context-menu.sh` covers both real-widget menus without reading the global clipboard: gesture selection, exact modifier routing, rows and empty space, keyboard/accessibility requests, section collapse, empty results, packages, links, multiple selection, shortcut annotations, event-loop return while open, state change while open, one dispatch, dismissal, accessibility, and both Browsers. List the new script in AGENTS.md and README.
-- [ ] The owner runs the guided macOS acceptance for visual parity, launch responsiveness, pointer and platform invocation, native shortcut notation, Settings customization and persistence, reset confirmations, and both Browsers; record the result here.
+- [x] The owner runs the guided macOS acceptance for visual parity, launch responsiveness, pointer and platform invocation, native shortcut notation, Settings customization and persistence, reset confirmations, and both Browsers; record the result here.
 - [x] Direct `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`, plus `make check`, pass. Update affected user and design docs and record all acceptance evidence here before marking P4-M10 Done.
 
 ## Acceptance evidence
@@ -130,4 +130,4 @@ Review fixes on 2026-10-21:
 - The desktop explicitly dismisses a live Folder Items menu before its models are torn down. Non-pointer requests with an invalid cursor row now use the empty-space target and viewport anchor.
 - Direct Cargo checks, both isolated offscreen scripts, and `make check` pass after these fixes.
 
-Guided owner acceptance remains, so P4-M10 stays Active.
+Owner acceptance on 2026-10-21: the owner accepted the guided macOS acceptance for visual parity, launch responsiveness, pointer and platform invocation, native shortcut notation, Settings customization and persistence, reset confirmations, and both Browsers. All checklist items are checked and the full gate passes. P4-M10 is Done.
