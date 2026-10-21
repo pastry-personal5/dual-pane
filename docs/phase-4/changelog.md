@@ -4,6 +4,8 @@ Status: Active
 
 Chronological record of planning, owner decisions, and design changes for Phase 4. Newest entry first.
 
+- 2026-10-21 — P4-M11 done — The desktop GUI code is split into feature-area modules: `desktop_window.cpp` into ten headers and six sources under `cpp/`, and six large Rust files into child modules with their tests in `tests.rs`. Implementation found the desktop side already read the action catalogue generically after P4-M10, so the owner chose a full action table in the application crate (`actions.rs`) over a narrower fix. `make check` and the five native scripts pass. See [milestone-11-overview.md](milestone-11-overview.md).
+- 2026-10-21 — P4-M10 owner acceptance — The owner accepted the guided macOS acceptance for visual parity, launch responsiveness, pointer and platform invocation, native shortcut notation, Settings customization and persistence, reset confirmations, and both Browsers. All checklist items are checked and P4-M10 is Done.
 - 2026-10-21 — Owner direction — Added P4-M11 to split the oversized `desktop_window.cpp` (about thirty classes in one 5,771-line file) and the large Rust bridge/model files it talks to into feature-area modules, and to add one registration seam for folder-item actions so a future action needs fewer than the five file touches the P4-M10 commits required. It runs right after P4-M10, ahead of P4-M6 through P4-M8, like P4-M9 did. No behavior changes; the existing full gate and native scripts are the acceptance bar.
 
 ## Entries

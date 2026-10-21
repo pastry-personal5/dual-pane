@@ -50,14 +50,14 @@ This tree shows the current crate boundaries and representative future homes. En
 │       ├── build.rs                    # created with the CXX-Qt bridge
 │       ├── src/
 │       │   ├── main.rs                 # composition root and executable entry point
-│       │   ├── folder_items_list_model.rs # CXX-Qt bridge: per-Browser Folder Items table model, tabs, and toolbar state
-│       │   ├── workspace_bridge.rs     # CXX-Qt bridge: shared session, Favorites, Notices, shortcuts, and run_desktop
-│       │   ├── browser_session.rs      # Qt-free: workspace, presenters, settings routing, bounded drain
-│       │   ├── runtime.rs              # Qt-free: Browser-local read, sort, and diff workers, probe lane, cancellation, GUI wake
+│       │   ├── folder_items_list_model.rs # CXX-Qt bridge: per-Browser Folder Items table model, tabs, and toolbar state (feature modules in folder_items_list_model/)
+│       │   ├── workspace_bridge.rs     # CXX-Qt bridge: shared session, Favorites, Notices, shortcuts, and run_desktop (feature modules in workspace_bridge/)
+│       │   ├── browser_session.rs      # Qt-free: workspace, presenters, settings routing, bounded drain (feature modules in browser_session/)
+│       │   ├── runtime.rs              # Qt-free: Browser-local read, sort, and diff workers, probe lane, cancellation, GUI wake (modules in runtime/)
 │       │   ├── folder_items.rs         # Qt-free: native directory reader and error mapping
 │       │   ├── location_probe.rs       # Qt-free: native folder check for Favorites probes
 │       │   ├── native_location.rs      # Qt-free: byte-exact Path and Location conversion
-│       │   └── settings_storage.rs     # Qt-free: SQLite settings driver and its serialized worker
+│       │   └── settings_storage.rs     # Qt-free: SQLite settings driver and its serialized worker (modules in settings_storage/)
 │       ├── cpp/                        # created with C++ Qt shim source
 │       │   ├── include/dual_pane_desktop/
 │       │   └── src/

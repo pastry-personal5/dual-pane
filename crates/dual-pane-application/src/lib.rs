@@ -4,6 +4,7 @@
 //! the workspace, and returns application outputs and work requests. It never
 //! performs I/O, starts threads, sorts or diffs listings, or waits.
 
+mod actions;
 mod clipboard;
 mod context_menu;
 mod filter;
@@ -16,6 +17,7 @@ mod settings;
 mod work_request;
 mod workspace;
 
+pub use actions::{ActionSpec, FOLDER_ITEM_ACTION_COUNT, FolderItemSpec, MenuAvailability, MenuInvocation, MenuOperation, MenuTarget, ShortcutCategory, folder_item_spec, spec as action_spec};
 pub use clipboard::{ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, TransferId};
 pub use context_menu::{FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken};
 pub use filter::{FilterFailure, FilterRequest, FilterResult, FilterStatus, project_filter};

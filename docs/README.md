@@ -36,8 +36,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-4/milestone-09-architecture.md](phase-4/milestone-09-architecture.md) | P4-M9 journal safety, socket rendezvous, protocol, Browser search, and window activation. |
 | [phase-4/milestone-10-overview.md](phase-4/milestone-10-overview.md) | P4-M10 owner decisions and checklist for configurable Normal and Comprehensive Folder Items Context Menus. |
 | [phase-4/milestone-10-architecture.md](phase-4/milestone-10-architecture.md) | P4-M10 settings model, schema migration, typed menu projection, observed dispatch, and native verification approach. |
-| [phase-4/milestone-11-overview.md](phase-4/milestone-11-overview.md) | P4-M11 scope, evidence, owner decisions, and checklist for splitting the desktop GUI code into smaller modules. |
-| [phase-4/milestone-11-architecture.md](phase-4/milestone-11-architecture.md) | P4-M11 target module layout for the C++ and Rust desktop code and the folder-item action registration seam. |
+| [phase-4/milestone-11-overview.md](phase-4/milestone-11-overview.md) | P4-M11 scope, evidence, owner decisions, checklist, and acceptance evidence for splitting the desktop GUI code into smaller modules. |
+| [phase-4/milestone-11-architecture.md](phase-4/milestone-11-architecture.md) | P4-M11 C++ and Rust desktop module layout and the folder-item action catalogue table. |
 | [phase-4/changelog.md](phase-4/changelog.md) | Phase 4 planning and later owner or design decisions. |
 | [archive/phases/phase-3/phase-3.md](archive/phases/phase-3/phase-3.md) | Completed Phase 3 goal, exit criteria, and milestone sequence. |
 | [archive/phases/phase-3/milestone-01-overview.md](archive/phases/phase-3/milestone-01-overview.md) | P3-M1 scope and executable completion checklist. |

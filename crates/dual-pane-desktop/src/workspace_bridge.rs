@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, action_label, context_menu_rejection_text, favorite_rejection_text, reader_start_failure_status};
-use dual_pane_application::{ActionId, Command, ContextMenuKind, ContextMenuPreferenceRejection, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, default_shortcuts};
+use dual_pane_application::{ActionId, Command, ContextMenuKind, ContextMenuPreferenceRejection, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, action_spec, default_shortcuts};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
@@ -21,6 +21,20 @@ use crate::operation_lane::{STEP_BUDGET, Services};
 use crate::operation_step::NativeFileSystem;
 use crate::runtime::Runtime;
 use crate::settings_storage::SettingsWorker;
+
+mod context_menus;
+mod desktop_session;
+mod favorites;
+mod notices;
+mod settings;
+mod shortcuts;
+#[cfg(test)]
+mod tests;
+
+use context_menus::*;
+pub(crate) use desktop_session::with_session;
+use desktop_session::*;
+pub(crate) use shortcuts::key_sequence;
 
 #[cxx_qt::bridge(namespace = "dual_pane_desktop")]
 pub mod ffi {
@@ -196,6 +210,8 @@ pub mod ffi {
         fn action_id(self: &WorkspaceBridge, index: i32) -> QString;
         #[cxx_name = "actionScope"]
         fn action_scope(self: &WorkspaceBridge, index: i32) -> i32;
+        #[cxx_name = "actionCategory"]
+        fn action_category(self: &WorkspaceBridge, index: i32) -> i32;
         #[cxx_name = "actionShortcutCount"]
         fn action_shortcut_count(self: &WorkspaceBridge, index: i32) -> i32;
         #[cxx_name = "actionShortcutLabel"]
@@ -233,62 +249,6 @@ pub mod ffi {
         #[cxx_name = "contextMenuRejectionText"]
         fn context_menu_rejection_text(self: &WorkspaceBridge) -> QString;
     }
-}
-
-/// The one session both Browser models and the workspace binder share. Only
-/// the GUI thread uses it, so the mutex is a holder rather than
-/// synchronization; its order comes from the GUI thread's event loop. Each
-/// caller releases it before notifying Qt, which may call back into a binder.
-static SESSION: OnceLock<Mutex<Option<WorkspaceSession>>> = OnceLock::new();
-static INSTANCE_REQUESTS: OnceLock<Mutex<VecDeque<PendingRequest>>> = OnceLock::new();
-static INSTANCE_SERVER: OnceLock<Mutex<Option<Server>>> = OnceLock::new();
-static INSTANCE_STOPPING: AtomicBool = AtomicBool::new(false);
-const INSTANCE_QUEUE_CAPACITY: usize = 16;
-
-/// Runs `action` on the session, if it has started.
-pub(crate) fn with_session<T>(action: impl FnOnce(&mut WorkspaceSession) -> T) -> Option<T> {
-    SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_mut().map(action)
-}
-
-/// Ends the session after the Qt event loop has exited: unsaved settings get
-/// a bounded flush, and outstanding reads are cancelled.
-fn shutdown_desktop() {
-    INSTANCE_STOPPING.store(true, Ordering::Release);
-    let pending = INSTANCE_REQUESTS.get_or_init(|| Mutex::new(VecDeque::new())).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).drain(..).collect::<Vec<_>>();
-    for pending in pending {
-        let _ = pending.reply.send(Reply::ShuttingDown);
-    }
-    if let Some(server) = INSTANCE_SERVER.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
-        server.shutdown();
-    }
-    let session = SESSION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
-    if let Some(session) = session {
-        session.shutdown(SHUTDOWN_TIMEOUT);
-    }
-}
-
-fn drain_instance_requests() -> bool {
-    let requests = {
-        let mut queue = INSTANCE_REQUESTS.get_or_init(|| Mutex::new(VecDeque::new())).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let count = queue.len().min(INSTANCE_QUEUE_CAPACITY);
-        let requests = queue.drain(..count).collect::<Vec<_>>();
-        (requests, !queue.is_empty())
-    };
-    for pending in requests.0 {
-        let reply = with_session(|session| {
-            if session.is_quitting() {
-                return Reply::ShuttingDown;
-            }
-            match pending.request {
-                Request::Raise => session.submit(Command::RaiseWindow),
-                Request::Open(LaunchTarget { folder, select }) => session.submit(Command::OpenLaunchTarget { folder, select }),
-            }
-            Reply::Accepted
-        })
-        .unwrap_or(Reply::Refused);
-        let _ = pending.reply.send(reply);
-    }
-    requests.1
 }
 
 /// Converts a revision counter to a Qt `int` that changes whenever it does.
@@ -453,111 +413,6 @@ impl ffi::WorkspaceBridge {
         self.as_mut().session_changed();
     }
 
-    fn group_count(&self) -> i32 {
-        count(self.rust().shown.groups().len())
-    }
-    fn group_id(&self, group: i32) -> i64 {
-        self.group(group).map_or(-1, |group| group.id)
-    }
-    fn group_name(&self, group: i32) -> QString {
-        self.group(group).map_or_else(QString::default, |group| QString::from(group.name.as_str()))
-    }
-    fn item_count(&self, group: i32) -> i32 {
-        self.group(group).map_or(0, |group| count(group.items.len()))
-    }
-    fn item_id(&self, group: i32, item: i32) -> i64 {
-        self.item(group, item).map_or(-1, |item| item.id)
-    }
-    fn item_alias(&self, group: i32, item: i32) -> QString {
-        self.item(group, item).map_or_else(QString::default, |item| QString::from(item.alias.as_str()))
-    }
-    fn item_path(&self, group: i32, item: i32) -> QString {
-        self.item(group, item).map_or_else(QString::default, |item| QString::from(item.path.as_str()))
-    }
-    fn group(&self, group: i32) -> Option<&dual_pane_adapters::FavoriteGroupViewModel> {
-        usize::try_from(group).ok().and_then(|group| self.rust().shown.groups().get(group))
-    }
-    fn item(&self, group: i32, item: i32) -> Option<&dual_pane_adapters::FavoriteItemViewModel> {
-        let item = usize::try_from(item).ok()?;
-        self.group(group)?.items.get(item)
-    }
-
-    fn create_group(self: Pin<&mut Self>, name: &QString) -> QString {
-        self.favorites(FavoritesEvent::CreateGroup { name: name.to_string() })
-    }
-    fn rename_group(self: Pin<&mut Self>, id: i64, name: &QString) -> QString {
-        self.favorites(FavoritesEvent::RenameGroup { id, name: name.to_string() })
-    }
-    fn move_group(self: Pin<&mut Self>, id: i64, motion: i32) {
-        let motion = match motion {
-            0 => GroupMotion::Up,
-            1 => GroupMotion::Down,
-            2 => GroupMotion::Top,
-            _ => GroupMotion::Bottom,
-        };
-        self.favorites(FavoritesEvent::MoveGroup { id, motion });
-    }
-    fn delete_group(self: Pin<&mut Self>, id: i64) {
-        self.favorites(FavoritesEvent::DeleteGroup { id });
-    }
-    fn add_item(self: Pin<&mut Self>, group: i64) -> QString {
-        self.favorites(FavoritesEvent::AddItem { group_id: group })
-    }
-    fn rename_item(self: Pin<&mut Self>, id: i64, name: &QString) -> QString {
-        self.favorites(FavoritesEvent::RenameItem { id, name: name.to_string() })
-    }
-    fn remove_item(self: Pin<&mut Self>, id: i64) {
-        self.favorites(FavoritesEvent::RemoveItem { id });
-    }
-    fn drop_item(self: Pin<&mut Self>, id: i64, group: i64, slot: i32) -> QString {
-        let Ok(slot) = usize::try_from(slot) else { return QString::default() };
-        self.favorites(FavoritesEvent::DropItem { id, group_id: group, slot })
-    }
-    fn open_item(self: Pin<&mut Self>, id: i64) {
-        self.favorites(FavoritesEvent::OpenItem { id });
-    }
-    /// Submits a Sidebar gesture and returns its inline feedback.
-    fn favorites(mut self: Pin<&mut Self>, event: FavoritesEvent) -> QString {
-        let rejection = with_session(|session| session.submit_favorites(event)).flatten();
-        self.as_mut().session_changed();
-        rejection.and_then(|(edit, reason)| favorite_rejection_text(edit, reason)).map_or_else(QString::default, QString::from)
-    }
-
-    fn notice_count(&self) -> i32 {
-        count(self.rust().shown.notices().len())
-    }
-    fn notice_text(&self, notice: i32) -> QString {
-        self.notice(notice).map_or_else(QString::default, |notice| QString::from(notice.text.as_str()))
-    }
-    fn notice_offers_reset(&self, notice: i32) -> bool {
-        self.notice(notice).is_some_and(|notice| notice.offers_reset)
-    }
-    fn notice_offers_journal_retry(&self, notice: i32) -> bool {
-        self.notice(notice).is_some_and(|notice| notice.offers_journal_retry)
-    }
-    fn retry_journal(mut self: Pin<&mut Self>) {
-        with_session(|session| session.submit(dual_pane_application::Command::RetryJournal));
-        self.as_mut().session_changed();
-    }
-    fn notice(&self, notice: i32) -> Option<&dual_pane_adapters::NoticeViewModel> {
-        usize::try_from(notice).ok().and_then(|notice| self.rust().shown.notices().get(notice))
-    }
-    fn reset_settings(mut self: Pin<&mut Self>) {
-        with_session(|session| session.submit(dual_pane_application::Command::ResetSettings));
-        self.as_mut().session_changed();
-    }
-    fn change_hide_notices_at_startup(mut self: Pin<&mut Self>, hide: bool) {
-        with_session(|session| session.submit(dual_pane_application::Command::SetHideNoticesAtStartup { hide }));
-        self.as_mut().session_changed();
-    }
-    fn change_skip_quit_confirmation(mut self: Pin<&mut Self>, skip: bool) {
-        with_session(|session| session.submit(dual_pane_application::Command::SetSkipQuitConfirmation { skip }));
-        self.as_mut().session_changed();
-    }
-    fn change_visibility(mut self: Pin<&mut Self>, show_macos_items: bool, show_dotfiles: bool, show_macos_invisible: bool) {
-        with_session(|session| session.submit(dual_pane_application::Command::SetVisibilityPolicy { visibility: dual_pane_application::VisibilityPolicy { show_macos_items, show_dotfiles, show_macos_invisible } }));
-        self.as_mut().session_changed();
-    }
     fn startup_period_elapsed(mut self: Pin<&mut Self>) {
         with_session(|session| session.submit(dual_pane_application::Event::StartupPeriodElapsed));
         self.as_mut().session_changed();
@@ -587,115 +442,6 @@ impl ffi::WorkspaceBridge {
         self.as_mut().session_changed();
     }
 
-    fn binding_count(&self) -> i32 {
-        count(self.rust().shown.bindings().len())
-    }
-    fn binding_action(&self, binding: i32) -> QString {
-        usize::try_from(binding).ok().and_then(|binding| self.rust().shown.bindings().get(binding)).map_or_else(QString::default, |binding| QString::from(binding.action.as_str()))
-    }
-    fn binding_sequence(&self, binding: i32) -> QString {
-        usize::try_from(binding).ok().and_then(|binding| self.rust().shown.bindings().get(binding)).and_then(|binding| binding.shortcut).map_or_else(QString::default, |shortcut| QString::from(key_sequence(shortcut).as_str()))
-    }
-    fn binding_scope(&self, binding: i32) -> i32 {
-        usize::try_from(binding).ok().and_then(|binding| self.rust().shown.bindings().get(binding)).map_or(-1, |binding| scope_code(binding.action.scope()))
-    }
-    fn action_count(&self) -> i32 {
-        count(ActionId::ALL.len())
-    }
-    fn action_id(&self, index: i32) -> QString {
-        action_at(index).map_or_else(QString::default, |action| QString::from(action.as_str()))
-    }
-    fn action_scope(&self, index: i32) -> i32 {
-        action_at(index).map_or(-1, |action| scope_code(action.scope()))
-    }
-    fn action_shortcut_count(&self, index: i32) -> i32 {
-        action_at(index).map_or(0, |action| count(self.rust().shown.bindings().iter().filter(|binding| binding.action == action && binding.shortcut.is_some()).count()))
-    }
-    fn action_shortcut_label(&self, index: i32, position: i32) -> QString {
-        let Some(action) = action_at(index) else { return QString::default() };
-        usize::try_from(position).ok().and_then(|position| self.rust().shown.bindings().iter().filter(|binding| binding.action == action).filter_map(|binding| binding.shortcut).nth(position)).map_or_else(QString::default, |shortcut| QString::from(shortcut_label(shortcut).as_str()))
-    }
-    fn action_default_shortcut_label(&self, index: i32) -> QString {
-        action_at(index).map(default_shortcuts).map(|shortcuts| shortcuts.into_iter().map(shortcut_label).collect::<Vec<_>>().join("\n")).map_or_else(QString::default, |label| QString::from(label.as_str()))
-    }
-    fn add_action_shortcut(mut self: Pin<&mut Self>, index: i32, key: i32, modifiers: i32) -> QString {
-        let Some(action) = action_at(index) else { return QString::from("Unknown action") };
-        let shortcut = captured_shortcut(key, modifiers);
-        let result = with_session(|session| {
-            let mut shortcuts = session.shortcuts(action);
-            shortcuts.push(shortcut);
-            session.submit_shortcuts(action, shortcuts)
-        })
-        .flatten();
-        self.as_mut().session_changed();
-        rejection_text(result)
-    }
-    fn remove_action_shortcut(mut self: Pin<&mut Self>, index: i32, position: i32) -> QString {
-        let Some(action) = action_at(index) else { return QString::from("Unknown action") };
-        let result = with_session(|session| {
-            let mut shortcuts = session.shortcuts(action);
-            if let Ok(position) = usize::try_from(position)
-                && position < shortcuts.len()
-            {
-                shortcuts.remove(position);
-            }
-            session.submit_shortcuts(action, shortcuts)
-        })
-        .flatten();
-        self.as_mut().session_changed();
-        rejection_text(result)
-    }
-    fn restore_action_shortcuts(mut self: Pin<&mut Self>, index: i32) -> QString {
-        let Some(action) = action_at(index) else { return QString::from("Unknown action") };
-        let result = with_session(|session| session.restore_shortcuts(action)).flatten();
-        self.as_mut().session_changed();
-        rejection_text(result)
-    }
-
-    fn context_menu_action_count(&self) -> i32 {
-        count(self.rust().shown.context_menu_rows().len())
-    }
-    fn context_menu_action_label(&self, index: i32) -> QString {
-        self.context_menu_row(index).map_or_else(QString::default, |row| QString::from(row.label.as_str()))
-    }
-    fn context_menu_group_label(&self, index: i32) -> QString {
-        self.context_menu_row(index).map_or_else(QString::default, |row| QString::from(row.group_label))
-    }
-    fn context_menu_normal_visible(&self, index: i32) -> bool {
-        self.context_menu_row(index).is_some_and(|row| row.normal)
-    }
-    fn context_menu_comprehensive_visible(&self, index: i32) -> bool {
-        self.context_menu_row(index).is_some_and(|row| row.comprehensive)
-    }
-    fn context_menu_shortcut(&self, index: i32) -> QString {
-        self.context_menu_row(index).and_then(|row| row.shortcut).map(key_sequence).map_or_else(QString::default, |shortcut| QString::from(shortcut.as_str()))
-    }
-    fn context_menu_row(&self, index: i32) -> Option<&dual_pane_adapters::ContextMenuSettingsRowViewModel> {
-        usize::try_from(index).ok().and_then(|index| self.rust().shown.context_menu_rows().get(index))
-    }
-    fn change_context_menu_visibility(mut self: Pin<&mut Self>, index: i32, kind: i32, visible: bool) -> QString {
-        let Some(action) = self.context_menu_row(index).map(|row| row.action) else { return QString::default() };
-        let kind = context_menu_kind(kind);
-        let rejection = with_session(|session| session.set_context_menu_visibility(kind, action, visible)).flatten();
-        self.as_mut().session_changed();
-        match rejection {
-            Some(ContextMenuPreferenceRejection::LastVisibleAction(kind)) => QString::from(context_menu_rejection_text(kind)),
-            Some(ContextMenuPreferenceRejection::IneligibleAction | ContextMenuPreferenceRejection::Malformed) => QString::from("Context Menu settings could not be changed."),
-            None => QString::default(),
-        }
-    }
-    fn reset_context_menu(mut self: Pin<&mut Self>, kind: i32) {
-        with_session(|session| session.reset_context_menu(context_menu_kind(kind)));
-        self.as_mut().session_changed();
-    }
-    fn reset_context_menus(mut self: Pin<&mut Self>) {
-        with_session(WorkspaceSession::reset_context_menus);
-        self.as_mut().session_changed();
-    }
-    fn context_menu_rejection_text(&self) -> QString {
-        self.rust().shown.last_context_menu_rejection().map(context_menu_rejection_text).map_or_else(QString::default, QString::from)
-    }
-
     fn set_active_browser(mut self: Pin<&mut Self>, value: i32) {
         if self.rust().active_browser != value {
             self.as_mut().rust_mut().get_mut().active_browser = value;
@@ -707,90 +453,6 @@ impl ffi::WorkspaceBridge {
         self.as_mut().rust_mut().get_mut().layout_revision = next;
         self.layout_revision_changed();
     }
-    fn set_favorites_ready(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().favorites_ready != value {
-            self.as_mut().rust_mut().get_mut().favorites_ready = value;
-            self.favorites_ready_changed();
-        }
-    }
-    fn set_favorites_revision(mut self: Pin<&mut Self>, value: i32) {
-        if self.rust().favorites_revision != value {
-            self.as_mut().rust_mut().get_mut().favorites_revision = value;
-            self.favorites_revision_changed();
-        }
-    }
-    fn set_notices_revision(mut self: Pin<&mut Self>, value: i32) {
-        if self.rust().notices_revision != value {
-            self.as_mut().rust_mut().get_mut().notices_revision = value;
-            self.notices_revision_changed();
-        }
-    }
-    fn set_notices_open_requests(mut self: Pin<&mut Self>, value: i32) {
-        if self.rust().notices_open_requests != value {
-            self.as_mut().rust_mut().get_mut().notices_open_requests = value;
-            self.notices_open_requests_changed();
-        }
-    }
-    fn set_hide_notices_at_startup(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().hide_notices_at_startup != value {
-            self.as_mut().rust_mut().get_mut().hide_notices_at_startup = value;
-            self.hide_notices_at_startup_changed();
-        }
-    }
-    fn set_skip_quit_confirmation(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().skip_quit_confirmation != value {
-            self.as_mut().rust_mut().get_mut().skip_quit_confirmation = value;
-            self.skip_quit_confirmation_changed();
-        }
-    }
-    fn set_show_macos_items(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().show_macos_items != value {
-            self.as_mut().rust_mut().get_mut().show_macos_items = value;
-            self.show_macos_items_changed();
-        }
-    }
-    fn set_show_dotfiles(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().show_dotfiles != value {
-            self.as_mut().rust_mut().get_mut().show_dotfiles = value;
-            self.show_dotfiles_changed();
-        }
-    }
-    fn set_show_macos_invisible(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().show_macos_invisible != value {
-            self.as_mut().rust_mut().get_mut().show_macos_invisible = value;
-            self.show_macos_invisible_changed();
-        }
-    }
-    fn set_notices_startup_ready(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().notices_startup_ready != value {
-            self.as_mut().rust_mut().get_mut().notices_startup_ready = value;
-            self.notices_startup_ready_changed();
-        }
-    }
-    fn set_settings_interaction_available(mut self: Pin<&mut Self>, value: bool) {
-        if self.rust().settings_interaction_available != value {
-            self.as_mut().rust_mut().get_mut().settings_interaction_available = value;
-            self.settings_interaction_available_changed();
-        }
-    }
-    fn set_bindings_revision(mut self: Pin<&mut Self>, value: i32) {
-        if self.rust().bindings_revision != value {
-            self.as_mut().rust_mut().get_mut().bindings_revision = value;
-            self.bindings_revision_changed();
-        }
-    }
-    fn set_context_menus_revision(mut self: Pin<&mut Self>, value: i32) {
-        if self.rust().context_menus_revision != value {
-            self.as_mut().rust_mut().get_mut().context_menus_revision = value;
-            self.context_menus_revision_changed();
-        }
-    }
-    fn set_context_menu_rejection_revision(mut self: Pin<&mut Self>, value: i32) {
-        if self.rust().context_menu_rejection_revision != value {
-            self.as_mut().rust_mut().get_mut().context_menu_rejection_revision = value;
-            self.context_menu_rejection_revision_changed();
-        }
-    }
     fn set_startup_failure(mut self: Pin<&mut Self>, value: QString) {
         if self.rust().startup_failure != value {
             self.as_mut().rust_mut().get_mut().startup_failure = value;
@@ -801,188 +463,4 @@ impl ffi::WorkspaceBridge {
 
 fn count(length: usize) -> i32 {
     i32::try_from(length).unwrap_or(i32::MAX)
-}
-
-/// The Qt code for `scope`, matching the `scope_*` constants in
-/// `desktop_window.cpp`.
-fn scope_code(scope: ShortcutScope) -> i32 {
-    match scope {
-        ShortcutScope::FolderItemsList => 0,
-        ShortcutScope::Window => 1,
-        ShortcutScope::Application => 2,
-    }
-}
-
-fn action_at(index: i32) -> Option<ActionId> {
-    usize::try_from(index).ok().and_then(|index| ActionId::ALL.get(index).copied())
-}
-
-/// The shortcut a capture recorded. Its flags name Qt modifiers: 1 Meta, 2
-/// Control, 4 Alt, 8 Shift. On macOS Qt's Control is Command and its Meta is
-/// Control, the same swap [`key_sequence`] applies in reverse.
-fn captured_shortcut(key: i32, modifiers: i32) -> Shortcut {
-    Shortcut::new(modifiers & 2 != 0, modifiers & 8 != 0, modifiers & 4 != 0, modifiers & 1 != 0, capture_key(key))
-}
-
-fn capture_key(key: i32) -> Key {
-    match key {
-        0x01000000 => Key::Escape,
-        0x01000001 | 0x01000002 => Key::Tab,
-        0x01000003 => Key::Delete,
-        0x01000004 | 0x01000005 => Key::Return,
-        0x01000007 => Key::ForwardDelete,
-        0x01000012 => Key::Left,
-        0x01000013 => Key::Up,
-        0x01000014 => Key::Right,
-        0x01000015 => Key::Down,
-        0x20 => Key::Space,
-        0x01000030..=0x01000047 => Key::Function((key - 0x01000030 + 1) as u8),
-        _ => {
-            let character = char::from_u32(key as u32).unwrap_or('\0');
-            let unshifted = match character {
-                '!' => '1',
-                '@' => '2',
-                '#' => '3',
-                '$' => '4',
-                '%' => '5',
-                '^' => '6',
-                '&' => '7',
-                '*' => '8',
-                '(' => '9',
-                ')' => '0',
-                '_' => '-',
-                '+' => '=',
-                '{' => '[',
-                '}' => ']',
-                '|' => '\\',
-                ':' => ';',
-                '"' => '\'',
-                '<' => ',',
-                '>' => '.',
-                '?' => '/',
-                '~' => '`',
-                other => other,
-            };
-            Key::Character(unshifted.to_ascii_uppercase())
-        }
-    }
-}
-
-fn shortcut_label(shortcut: Shortcut) -> String {
-    let mut result = String::new();
-    for (held, label) in [(shortcut.control, "Control+"), (shortcut.option, "Option+"), (shortcut.shift, "Shift+"), (shortcut.command, "Command+")] {
-        if held {
-            result.push_str(label);
-        }
-    }
-    let key_label = match shortcut.key {
-        Key::Delete => "Backspace".to_owned(),
-        Key::ForwardDelete => "Forward Delete".to_owned(),
-        key => key.as_text(),
-    };
-    result.push_str(&key_label);
-    result
-}
-
-fn rejection_text(rejection: Option<ShortcutRejection>) -> QString {
-    match rejection {
-        None => QString::default(),
-        Some(ShortcutRejection::Invalid) => QString::from("Use a supported key with Command, Control, or Option; function keys may stand alone. Return for Rename Item and Shift+Backspace or Shift+Forward Delete for Move to Trash are supported exceptions."),
-        Some(ShortcutRejection::Reserved) => QString::from("This shortcut is reserved for Settings or macOS."),
-        Some(ShortcutRejection::Duplicate) => QString::from("This action already has that shortcut."),
-        Some(ShortcutRejection::Conflict(action)) => QString::from(format!("Already assigned to {}.", action_label(action)).as_str()),
-    }
-}
-fn context_menu_kind(kind: i32) -> ContextMenuKind {
-    if kind == 1 { ContextMenuKind::Comprehensive } else { ContextMenuKind::Normal }
-}
-
-/// Qt portable key-sequence text for `shortcut`. Qt swaps the keys on macOS:
-/// `ControlModifier` (`Ctrl+`) is Command and `MetaModifier` (`Meta+`) is Control.
-pub(crate) fn key_sequence(shortcut: Shortcut) -> String {
-    let mut text = String::new();
-    for (held, name) in [(shortcut.command, "Ctrl+"), (shortcut.option, "Alt+"), (shortcut.shift, "Shift+"), (shortcut.control, "Meta+")] {
-        if held {
-            text.push_str(name);
-        }
-    }
-    match shortcut.key {
-        Key::Character(key) => text.push(key),
-        Key::Up => text.push_str("Up"),
-        Key::Down => text.push_str("Down"),
-        Key::Left => text.push_str("Left"),
-        Key::Right => text.push_str("Right"),
-        Key::Return => text.push_str("Return"),
-        Key::Delete => text.push_str("Backspace"),
-        Key::ForwardDelete => text.push_str("Delete"),
-        Key::Space => text.push_str("Space"),
-        Key::Tab => text.push_str("Tab"),
-        Key::Escape => text.push_str("Esc"),
-        Key::Function(number) => text.push_str(&format!("F{number}")),
-    }
-    text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dual_pane_application::{ActionId, default_shortcut};
-
-    #[test]
-    fn captured_qt_modifiers_become_the_keys_a_person_held() {
-        let key_c = i32::from(b'C');
-        assert_eq!(captured_shortcut(key_c, 2), Shortcut::new(true, false, false, false, Key::Character('C')), "Qt Control is Command");
-        assert_eq!(captured_shortcut(key_c, 1), Shortcut::new(false, false, false, true, Key::Character('C')), "Qt Meta is Control");
-        assert_eq!(captured_shortcut(key_c, 4 | 8), Shortcut::new(false, true, true, false, Key::Character('C')));
-        for shortcut in [captured_shortcut(key_c, 2), captured_shortcut(key_c, 1 | 2 | 4 | 8)] {
-            assert_eq!(captured_shortcut(key_c, qt_flags(&key_sequence(shortcut))), shortcut, "capture and key sequence agree on {}", key_sequence(shortcut));
-        }
-    }
-
-    /// The capture flags Qt reports for the modifiers in a portable sequence.
-    fn qt_flags(sequence: &str) -> i32 {
-        [("Meta+", 1), ("Ctrl+", 2), ("Alt+", 4), ("Shift+", 8)].iter().filter(|(name, _)| sequence.contains(name)).map(|(_, flag)| flag).sum()
-    }
-
-    #[test]
-    fn delivered_shortcuts_map_to_qt_key_sequences() {
-        let sequence = |action| default_shortcut(action).map(key_sequence);
-        assert_eq!(sequence(ActionId::NewTab).as_deref(), Some("Ctrl+T"));
-        assert_eq!(sequence(ActionId::CloseTab).as_deref(), Some("Ctrl+W"));
-        assert_eq!(sequence(ActionId::NavigateBack).as_deref(), Some("Alt+Left"));
-        assert_eq!(sequence(ActionId::NavigateForward).as_deref(), Some("Alt+Right"));
-        assert_eq!(sequence(ActionId::RefreshFolder).as_deref(), Some("Ctrl+R"));
-        assert_eq!(sequence(ActionId::FocusOtherBrowser).as_deref(), Some("Alt+F"));
-        assert_eq!(sequence(ActionId::NavigateParent).as_deref(), Some("Ctrl+Up"));
-        assert_eq!(sequence(ActionId::OpenItem).as_deref(), Some("Ctrl+Down"));
-        assert_eq!(sequence(ActionId::QuitApplication).as_deref(), Some("Ctrl+Q"));
-        assert_eq!(sequence(ActionId::NewFolder).as_deref(), Some("Ctrl+Shift+N"));
-        assert_eq!(sequence(ActionId::CopyItems).as_deref(), Some("Ctrl+C"));
-        assert_eq!(sequence(ActionId::CutItems).as_deref(), Some("Ctrl+X"));
-        assert_eq!(sequence(ActionId::PasteItems).as_deref(), Some("Ctrl+V"));
-        assert_eq!(sequence(ActionId::CloseWindow), None);
-        assert_eq!(default_shortcuts(ActionId::MoveToTrash).into_iter().map(key_sequence).collect::<Vec<_>>(), ["Ctrl+Backspace", "Ctrl+Delete", "Shift+Backspace", "Shift+Delete"], "Qt's Delete is Forward Delete");
-        assert_eq!(key_sequence(Shortcut::new(true, false, true, true, Key::Delete)), "Ctrl+Alt+Meta+Backspace");
-        assert_eq!(key_sequence(Shortcut::new(false, false, false, false, Key::Function(2))), "F2");
-    }
-    #[test]
-    fn capture_normalizes_shifted_keys_and_writes_full_modifier_names() {
-        assert_eq!(capture_key('!' as i32), Key::Character('1'));
-        assert_eq!(capture_key('?' as i32), Key::Character('/'));
-        assert_eq!(capture_key(0x01000047), Key::Function(24));
-        let shortcut = Shortcut::new(true, true, true, true, Key::ForwardDelete);
-        assert_eq!(shortcut_label(shortcut), "Control+Option+Shift+Command+Forward Delete");
-    }
-
-    #[test]
-    fn scope_codes_match_the_qt_constants() {
-        assert_eq!(scope_code(ActionId::MoveToTrash.scope()), 0, "scope_folder_items_list");
-        assert_eq!(scope_code(ActionId::NewFolder.scope()), 1, "scope_window");
-        assert_eq!(scope_code(ActionId::QuitApplication.scope()), 2, "scope_application");
-    }
-
-    #[test]
-    fn quick_look_gesture_seam_covers_native_panel_boundaries() {
-        assert!(ffi::quick_look_seam_tests());
-    }
 }

@@ -86,16 +86,12 @@ impl ContextMenuGroup {
 
 /// The only actions eligible for Folder Items Context Menus, in fixed group
 /// and row order.
-pub const CONTEXT_MENU_ACTIONS: [ActionId; 12] = [ActionId::RenameItem, ActionId::NewFolder, ActionId::OpenItem, ActionId::ShowPackageContents, ActionId::OpenInFinder, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::MoveToTrash, ActionId::DeletePermanently];
+pub const CONTEXT_MENU_ACTIONS: [ActionId; crate::actions::FOLDER_ITEM_ACTION_COUNT] = crate::actions::FOLDER_ITEM_ACTIONS;
 
 pub const fn context_menu_group(action: ActionId) -> Option<ContextMenuGroup> {
-    match action {
-        ActionId::RenameItem | ActionId::NewFolder => Some(ContextMenuGroup::RenameAndCreate),
-        ActionId::OpenItem | ActionId::ShowPackageContents | ActionId::OpenInFinder => Some(ContextMenuGroup::Open),
-        ActionId::CopyItems | ActionId::CutItems | ActionId::PasteItems => Some(ContextMenuGroup::Clipboard),
-        ActionId::CopyToOtherBrowser | ActionId::MoveToOtherBrowser => Some(ContextMenuGroup::OtherBrowser),
-        ActionId::MoveToTrash | ActionId::DeletePermanently => Some(ContextMenuGroup::Delete),
-        _ => None,
+    match crate::actions::folder_item_spec(action) {
+        Some(item) => Some(item.group),
+        None => None,
     }
 }
 
@@ -120,8 +116,7 @@ pub enum ContextMenuPreferenceRejection {
 
 impl Default for ContextMenuPreferences {
     fn default() -> Self {
-        let normal = [ActionId::OpenItem, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::MoveToTrash];
-        Self { entries: CONTEXT_MENU_ACTIONS.into_iter().map(|action| ContextMenuPreference { action, normal: normal.contains(&action), comprehensive: true }).collect() }
+        Self { entries: CONTEXT_MENU_ACTIONS.into_iter().map(|action| ContextMenuPreference { action, normal: crate::actions::folder_item_spec(action).is_some_and(|item| item.normal_default), comprehensive: true }).collect() }
     }
 }
 
@@ -179,41 +174,10 @@ impl ContextMenuPreferences {
 impl ActionId {
     /// Every catalogued action. Later IDs are appended, so a shortcut held by
     /// an earlier action keeps it when bindings are validated in this order.
-    pub const ALL: [Self; 30] = [Self::FocusOtherBrowser, Self::NavigateParent, Self::CloseWindow, Self::QuitApplication, Self::NewFolder, Self::SortByNameAscending, Self::SortByNameDescending, Self::SortByTypeAscending, Self::SortByTypeDescending, Self::SortByDateAscending, Self::SortByDateDescending, Self::SortBySizeAscending, Self::SortBySizeDescending, Self::NewTab, Self::CloseTab, Self::NavigateBack, Self::NavigateForward, Self::RefreshFolder, Self::CopyToOtherBrowser, Self::MoveToOtherBrowser, Self::RenameItem, Self::MoveToTrash, Self::DeletePermanently, Self::ShowPackageContents, Self::OpenItem, Self::OpenInFinder, Self::FocusFolderItemsFilter, Self::CopyItems, Self::CutItems, Self::PasteItems];
+    pub const ALL: [Self; crate::actions::ACTION_COUNT] = crate::actions::ALL_ACTIONS;
 
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::FocusOtherBrowser => "FocusOtherBrowser",
-            Self::NavigateParent => "NavigateParent",
-            Self::CloseWindow => "CloseWindow",
-            Self::QuitApplication => "QuitApplication",
-            Self::NewFolder => "NewFolder",
-            Self::SortByNameAscending => "SortByNameAscending",
-            Self::SortByNameDescending => "SortByNameDescending",
-            Self::SortByTypeAscending => "SortByTypeAscending",
-            Self::SortByTypeDescending => "SortByTypeDescending",
-            Self::SortByDateAscending => "SortByDateAscending",
-            Self::SortByDateDescending => "SortByDateDescending",
-            Self::SortBySizeAscending => "SortBySizeAscending",
-            Self::SortBySizeDescending => "SortBySizeDescending",
-            Self::NewTab => "NewTab",
-            Self::CloseTab => "CloseTab",
-            Self::NavigateBack => "NavigateBack",
-            Self::NavigateForward => "NavigateForward",
-            Self::RefreshFolder => "RefreshFolder",
-            Self::CopyToOtherBrowser => "CopyToOtherBrowser",
-            Self::MoveToOtherBrowser => "MoveToOtherBrowser",
-            Self::RenameItem => "RenameItem",
-            Self::MoveToTrash => "MoveToTrash",
-            Self::DeletePermanently => "DeletePermanently",
-            Self::ShowPackageContents => "ShowPackageContents",
-            Self::OpenItem => "OpenItem",
-            Self::OpenInFinder => "OpenInFinder",
-            Self::FocusFolderItemsFilter => "FocusFolderItemsFilter",
-            Self::CopyItems => "CopyItems",
-            Self::CutItems => "CutItems",
-            Self::PasteItems => "PasteItems",
-        }
+        crate::actions::spec(self).name
     }
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -222,11 +186,7 @@ impl ActionId {
 
     /// Where this action's shortcut acts.
     pub const fn scope(self) -> ShortcutScope {
-        match self {
-            Self::CopyToOtherBrowser | Self::MoveToOtherBrowser | Self::RenameItem | Self::MoveToTrash | Self::DeletePermanently | Self::ShowPackageContents | Self::OpenItem | Self::OpenInFinder | Self::CopyItems | Self::CutItems | Self::PasteItems => ShortcutScope::FolderItemsList,
-            Self::QuitApplication => ShortcutScope::Application,
-            Self::FocusOtherBrowser | Self::FocusFolderItemsFilter | Self::NavigateParent | Self::CloseWindow | Self::NewFolder | Self::SortByNameAscending | Self::SortByNameDescending | Self::SortByTypeAscending | Self::SortByTypeDescending | Self::SortByDateAscending | Self::SortByDateDescending | Self::SortBySizeAscending | Self::SortBySizeDescending | Self::NewTab | Self::CloseTab | Self::NavigateBack | Self::NavigateForward | Self::RefreshFolder => ShortcutScope::Window,
-        }
+        crate::actions::spec(self).scope
     }
 }
 
@@ -335,38 +295,14 @@ pub enum ShortcutRejection {
 }
 
 pub const fn default_shortcut(action: ActionId) -> Option<Shortcut> {
-    match action {
-        ActionId::FocusOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('F'))),
-        ActionId::FocusFolderItemsFilter => Some(Shortcut::new(true, false, false, false, Key::Character('F'))),
-        ActionId::NavigateParent => Some(Shortcut::new(true, false, false, false, Key::Up)),
-        ActionId::QuitApplication => Some(Shortcut::new(true, false, false, false, Key::Character('Q'))),
-        ActionId::NewFolder => Some(Shortcut::new(true, true, false, false, Key::Character('N'))),
-        ActionId::NewTab => Some(Shortcut::new(true, false, false, false, Key::Character('T'))),
-        ActionId::CloseTab => Some(Shortcut::new(true, false, false, false, Key::Character('W'))),
-        ActionId::NavigateBack => Some(Shortcut::new(false, false, true, false, Key::Left)),
-        ActionId::NavigateForward => Some(Shortcut::new(false, false, true, false, Key::Right)),
-        ActionId::RefreshFolder => Some(Shortcut::new(true, false, false, false, Key::Character('R'))),
-        ActionId::CopyToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('C'))),
-        ActionId::MoveToOtherBrowser => Some(Shortcut::new(false, false, true, false, Key::Character('M'))),
-        ActionId::RenameItem => Some(Shortcut::new(false, false, false, false, Key::Function(2))),
-        ActionId::MoveToTrash => Some(Shortcut::new(true, false, false, false, Key::Delete)),
-        ActionId::DeletePermanently => Some(Shortcut::new(true, false, true, false, Key::Delete)),
-        ActionId::OpenItem => Some(Shortcut::new(true, false, false, false, Key::Down)),
-        ActionId::CopyItems => Some(Shortcut::new(true, false, false, false, Key::Character('C'))),
-        ActionId::CutItems => Some(Shortcut::new(true, false, false, false, Key::Character('X'))),
-        ActionId::PasteItems => Some(Shortcut::new(true, false, false, false, Key::Character('V'))),
-        // Command+W closes a tab; Close Window keeps its meaning but has no
-        // default shortcut. Show Package Contents is a Context Menu command.
-        ActionId::CloseWindow | ActionId::ShowPackageContents | ActionId::OpenInFinder | ActionId::SortByNameAscending | ActionId::SortByNameDescending | ActionId::SortByTypeAscending | ActionId::SortByTypeDescending | ActionId::SortByDateAscending | ActionId::SortByDateDescending | ActionId::SortBySizeAscending | ActionId::SortBySizeDescending => None,
+    match crate::actions::spec(action).shortcuts {
+        [primary, ..] => Some(*primary),
+        [] => None,
     }
 }
 
 pub fn default_shortcuts(action: ActionId) -> Vec<Shortcut> {
-    match action {
-        ActionId::RenameItem => vec![Shortcut::new(false, false, false, false, Key::Function(2)), Shortcut::new(false, false, false, false, Key::Return)],
-        ActionId::MoveToTrash => vec![Shortcut::new(true, false, false, false, Key::Delete), Shortcut::new(true, false, false, false, Key::ForwardDelete), Shortcut::new(false, true, false, false, Key::Delete), Shortcut::new(false, true, false, false, Key::ForwardDelete)],
-        _ => default_shortcut(action).into_iter().collect(),
-    }
+    crate::actions::spec(action).shortcuts.to_vec()
 }
 
 pub fn default_shortcut_lists() -> Vec<ActionShortcuts> {

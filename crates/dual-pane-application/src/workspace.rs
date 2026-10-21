@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::clipboard::CapturedTransfer;
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, fresh_profile_favorites, fresh_profile_screenshots};
+use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MenuAvailability, MenuInvocation, MenuTarget, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, folder_item_spec, fresh_profile_favorites, fresh_profile_screenshots};
 use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationRoot, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
@@ -486,7 +486,7 @@ impl Workspace {
         }
         self.next_menu_token = self.next_menu_token.wrapping_add(1).max(1);
         let token = FolderItemsMenuToken(self.next_menu_token);
-        let other = if actions.iter().any(|action| matches!(action, ActionId::CopyToOtherBrowser | ActionId::MoveToOtherBrowser)) {
+        let other = if actions.iter().any(|action| folder_item_spec(*action).is_some_and(|item| item.needs_other_browser)) {
             let side = match browser {
                 BrowserSide::Left => BrowserSide::Right,
                 BrowserSide::Right => BrowserSide::Left,
@@ -501,22 +501,17 @@ impl Workspace {
         transition
     }
     fn context_menu_action_available(&self, browser: BrowserSide, tab: TabId, action: ActionId, row_invocation: bool) -> bool {
-        if !row_invocation && !matches!(action, ActionId::NewFolder | ActionId::PasteItems) {
+        let Some(item) = folder_item_spec(action) else { return false };
+        if !row_invocation && item.target == MenuTarget::Item {
             return false;
         }
-        match action {
-            ActionId::RenameItem => self.command_availability(browser, tab, OperationCommand::Rename).is_ok(),
-            ActionId::NewFolder => self.command_availability(browser, tab, OperationCommand::NewFolder).is_ok(),
-            ActionId::OpenItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.activation() != Activation::None),
-            ActionId::ShowPackageContents => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.is_package()),
-            ActionId::OpenInFinder => self.single_selected_entry(browser, tab).is_some(),
-            ActionId::CopyItems | ActionId::CutItems => self.clipboard_capture_availability(browser, tab).is_ok(),
-            ActionId::PasteItems => self.paste_availability(browser, tab).is_ok(),
-            ActionId::CopyToOtherBrowser => self.command_availability(browser, tab, OperationCommand::Copy).is_ok(),
-            ActionId::MoveToOtherBrowser => self.command_availability(browser, tab, OperationCommand::Move).is_ok(),
-            ActionId::MoveToTrash => self.command_availability(browser, tab, OperationCommand::MoveToTrash).is_ok(),
-            ActionId::DeletePermanently => self.command_availability(browser, tab, OperationCommand::DeletePermanently).is_ok(),
-            _ => false,
+        match item.availability {
+            MenuAvailability::Command(command) => self.command_availability(browser, tab, command).is_ok(),
+            MenuAvailability::ClipboardCapture => self.clipboard_capture_availability(browser, tab).is_ok(),
+            MenuAvailability::ClipboardPaste => self.paste_availability(browser, tab).is_ok(),
+            MenuAvailability::OpenableItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.activation() != Activation::None),
+            MenuAvailability::PackageItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.is_package()),
+            MenuAvailability::SingleItem => self.single_selected_entry(browser, tab).is_some(),
         }
     }
     fn single_selected_entry(&self, browser: BrowserSide, tab: TabId) -> Option<(usize, &Entry)> {
@@ -539,42 +534,35 @@ impl Workspace {
         if state.pending.is_some() || state.error.is_some() || state.filter_status != FilterStatus::Ready || state.visible_revision != menu.visible_revision || state.folder_items.as_ref().map(|items| &items.location) != Some(&menu.source) {
             return Transition::default();
         }
-        let source_action = !matches!(action, ActionId::NewFolder | ActionId::PasteItems);
-        if source_action {
+        let Some(item) = folder_item_spec(action) else { return Transition::default() };
+        if item.target == MenuTarget::Item {
             let selection = state.history.current().map(|visit| visit.state().selection().entries()).unwrap_or(&[]);
             if selection != menu.selection {
                 return Transition::default();
             }
         }
-        if matches!(action, ActionId::CopyToOtherBrowser | ActionId::MoveToOtherBrowser) {
+        if item.needs_other_browser {
             let Some((side, tab, location, visible_revision)) = menu.destination else { return Transition::default() };
             let Some(state) = self.tab(side, tab) else { return Transition::default() };
             if self.active_tab(side) != tab || state.pending.is_some() || state.error.is_some() || state.visible_revision != visible_revision || state.folder_items.as_ref().map(|items| &items.location) != Some(&location) {
                 return Transition::default();
             }
         }
-        match action {
-            ActionId::RenameItem => self.command(Command::RequestNameEditor { browser: menu.browser, tab: menu.tab, command: OperationCommand::Rename }),
-            ActionId::NewFolder => self.command(Command::RequestNameEditor { browser: menu.browser, tab: menu.tab, command: OperationCommand::NewFolder }),
-            ActionId::OpenItem | ActionId::ShowPackageContents => {
-                let Some((row, entry)) = self.single_selected_entry(menu.browser, menu.tab) else { return Transition::default() };
-                let name = entry.name().clone();
-                if action == ActionId::OpenItem { self.command(Command::OpenEntry { browser: menu.browser, tab: menu.tab, row, name }) } else { self.command(Command::ShowPackageContents { browser: menu.browser, tab: menu.tab, row, name }) }
-            }
-            ActionId::OpenInFinder => {
-                let Some((row, entry)) = self.single_selected_entry(menu.browser, menu.tab) else { return Transition::default() };
-                let name = entry.name().clone();
-                self.command(Command::RevealEntryInFinder { browser: menu.browser, tab: menu.tab, row, name })
-            }
-            ActionId::CopyItems => self.command(Command::CaptureClipboard { browser: menu.browser, tab: menu.tab, action: ClipboardAction::Copy }),
-            ActionId::CutItems => self.command(Command::CaptureClipboard { browser: menu.browser, tab: menu.tab, action: ClipboardAction::Cut }),
-            ActionId::PasteItems => self.command(Command::PasteClipboard { browser: menu.browser, tab: menu.tab }),
-            ActionId::CopyToOtherBrowser => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::Copy }),
-            ActionId::MoveToOtherBrowser => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::Move }),
-            ActionId::MoveToTrash => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::MoveToTrash }),
-            ActionId::DeletePermanently => self.command(Command::StartOperation { browser: menu.browser, tab: menu.tab, kind: OperationKind::DeletePermanently }),
-            _ => Transition::default(),
+        let (browser, tab) = (menu.browser, menu.tab);
+        match item.invocation {
+            MenuInvocation::NameEditor(command) => self.command(Command::RequestNameEditor { browser, tab, command }),
+            MenuInvocation::Operation(operation) => self.command(Command::StartOperation { browser, tab, kind: operation.kind() }),
+            MenuInvocation::ClipboardCapture(action) => self.command(Command::CaptureClipboard { browser, tab, action }),
+            MenuInvocation::ClipboardPaste => self.command(Command::PasteClipboard { browser, tab }),
+            MenuInvocation::OpenItem => self.command_for_single_item(browser, tab, |row, name| Command::OpenEntry { browser, tab, row, name }),
+            MenuInvocation::ShowPackageContents => self.command_for_single_item(browser, tab, |row, name| Command::ShowPackageContents { browser, tab, row, name }),
+            MenuInvocation::RevealInFinder => self.command_for_single_item(browser, tab, |row, name| Command::RevealEntryInFinder { browser, tab, row, name }),
         }
+    }
+    fn command_for_single_item(&mut self, browser: BrowserSide, tab: TabId, build: impl FnOnce(usize, EntryName) -> Command) -> Transition {
+        let Some((row, entry)) = self.single_selected_entry(browser, tab) else { return Transition::default() };
+        let name = entry.name().clone();
+        self.command(build(row, name))
     }
     fn clipboard_roots(&self, browser: BrowserSide, tab: TabId) -> Result<Arc<[OperationRoot]>, ClipboardRejection> {
         if self.active_tab(browser) != tab {

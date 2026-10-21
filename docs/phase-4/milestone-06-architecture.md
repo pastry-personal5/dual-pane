@@ -6,7 +6,7 @@ Path entry becomes a submission addressed to one tab: the application parses it 
 
 ## Current state
 
-- **The control.** The Path Edit Control is a read-only `QLineEdit` built in `Browser` in `crates/dual-pane-desktop/cpp/src/desktop_window.cpp`. It has `Qt::NoFocus` and ignores mouse events. Every `pathTextChanged` signal calls `setText`, which would overwrite a draft.
+- **The control.** The Path Edit Control is a read-only `QLineEdit` built in `Browser` in `crates/dual-pane-desktop/cpp/include/dual_pane_desktop/folder_pane.hpp`. It has `Qt::NoFocus` and ignores mouse events. Every `pathTextChanged` signal calls `setText`, which would overwrite a draft.
 - **Displayed text.** `format::location_text` renders a `Location` lossily: undecodable bytes appear as U+FFFD, so the text cannot round-trip.
 - **Navigation.** `Command::Navigate { browser, location }` always targets the Browser's active tab. `start_read` clears the tab's error and records the requested location. A failed read sets `TabState::error`, and checks for that error disable clipboard capture, Paste, and operation commands until a read succeeds.
 - **Read lanes.** Listing reads run on each Browser's supervised directory-read lanes. These lanes provide bounded admission, which reports `Busy`, and token cancellation, as described in [architecture 5.2](../architecture.md#52-planned-desktop-execution-model).
@@ -27,7 +27,7 @@ Path entry becomes a submission addressed to one tab: the application parses it 
 | `crates/dual-pane-desktop/src/runtime.rs` | Run resolve jobs on the submitting Browser's read lanes, with admission, cancellation, and supervision. |
 | `crates/dual-pane-desktop/src/folder_items_list_model.rs` and `browser_session.rs` | Path-editor properties and a dedicated submit method, not a copyable `UiEvent` payload. Submissions from a tab that is no longer shown are rejected. |
 | `crates/dual-pane-desktop/src/settings_storage.rs` and `workspace_bridge.rs` | Persist and present `EditPath`. |
-| `crates/dual-pane-desktop/cpp/src/desktop_window.cpp` | Display and edit modes, focus, guards, error style, accessibility, and the `EditPath` handler. |
+| `crates/dual-pane-desktop/cpp/include/dual_pane_desktop/folder_pane.hpp` | Display and edit modes, focus, guards, error style, accessibility, and the `EditPath` handler. |
 | `scripts/check-text-editor-focus.sh` and `scripts/check-settings-window.sh` | Native focus and catalogue evidence. |
 
 M6 adds no dependency or build tool.
