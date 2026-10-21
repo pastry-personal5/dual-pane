@@ -1,6 +1,6 @@
 # P4-M3 architecture
 
-Status: Active
+Status: Done
 
 The Qt Folder Items Filter Row edits application-owned tab state through a typed controller event and renders the resulting view model. The [overview checklist](milestone-03-overview.md#completion-checklist) defines acceptance.
 
@@ -40,7 +40,7 @@ Apply model and row updates on the GUI thread. While projection work runs, show 
 
 When Folder Items List has keyboard focus, route an unmodified printable text event other than Space into the active tab's filter and focus the Folder Items Filter Row for subsequent text input. Consume the initiating text exactly once; do not synthesize a second key press. Append subsequent printable input to the query, so `a` followed by `p` produces `Starts with: ap`. IME preedit is displayed in the focused text editor and does not update the query; committed text updates it once. Leave Space, movement, activation, modified shortcuts, and inline editor input with their existing owners.
 
-Activating the Close Filter Button submits an empty query for the tab shown by that row, restores the complete current projection, and hides the row. Use signal blocking or an equivalent explicit rendering guard when applying `filter_text`, changing tabs, showing or hiding the row, or applying an asynchronous result. Only user-originated edits enter the filter-edit handoff. Capture the observed tab before dispatch so a queued edit or close signal cannot alter a different tab. A tab with a nonempty query shows its row when activated without briefly rendering the previous tab's text or rows.
+Activating the Close Filter Button submits an empty query for the tab shown by that row, restores the complete current projection, and hides the row. Use signal blocking or an equivalent explicit rendering guard when applying `filter_text`, changing tabs, showing or hiding the row, or applying an asynchronous result. Only user-originated edits enter the filter-edit handoff. When a coherent filter view is rendered, retain that view's tab identity beside the native text field; text edits, Close, and Escape submit that retained identity rather than asking the model which tab is current when the callback runs. The application rejects it if that tab is no longer shown. Track an explicitly opened empty row separately: `Command+F` and a user-cleared field may keep it visible until focus loss, while a programmatic clear (for example a confirmed different-folder navigation) hides it. Reset this empty-row intent on every tab switch. A tab with a nonempty query shows its row when activated without briefly rendering the previous tab's text or rows.
 
 ## Shortcut catalogue and focus command
 
@@ -52,6 +52,6 @@ While the filter text editor has focus, its text input and ordinary editing shor
 
 ## Verification and sequencing
 
-Implement in this order: prefix matcher and Qt-free tests; presenter/model filter properties and typed edit handoff; observation-time gesture payloads and stale-event tests; native row and signal guards; shortcut catalogue and persistence; accessibility; then native acceptance. This keeps every native path on an already-tested application contract.
+Implement in this order: prefix matcher and Qt-free tests; presenter/model filter properties and typed edit handoff; observation-time gesture payloads and stale-event tests; native row and signal guards; shortcut catalogue and persistence; accessibility; then automated desktop acceptance. This keeps every native path on an already-tested application contract. Physical macOS, real-IME, and VoiceOver validation is deferred without a target date in the [overview](milestone-03-overview.md#deferred-native-validation).
 
-Desktop unit tests cover signal routing, programmatic-update suppression, tab identity, observation-time revisions and names, status differentiation, action-catalogue compatibility, and focus/shortcut precedence. Native verification covers actual layout, prefix results, rapid input and tab switching, stale events, projection failure and retry, shortcut rebinding, supported widths, and accessibility using a disposable profile.
+Desktop unit tests cover signal routing, programmatic-update suppression, rendered-tab identity, explicit-empty-row lifetime, observation-time revisions and names, status differentiation, action-catalogue compatibility, and focus/shortcut precedence. The physical-platform checks are recorded separately as deferred validation rather than a remaining milestone condition.

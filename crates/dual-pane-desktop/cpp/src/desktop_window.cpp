@@ -1300,6 +1300,45 @@ class FolderFilterTextEdit final : public QLineEdit {
     std::function<void()> focus_loss_handler_;
 };
 
+/// Native state that belongs to the one temporary filter row in a Browser.
+/// It preserves the tab identity shown to the person until their event has
+/// crossed the CXX-Qt boundary.
+class FilterRowState final {
+  public:
+    /// Records a coherently rendered filter view and resets an empty row when
+    /// it belongs to a different tab. Returns whether the rendered tab moved.
+    [[nodiscard]] bool render(std::uint64_t tab) {
+        const bool changed = !has_rendered_tab_ || tab != rendered_tab_;
+        if (changed)
+            show_empty_row_ = false;
+        rendered_tab_ = tab;
+        has_rendered_tab_ = true;
+        return changed;
+    }
+    void open_empty_row() { show_empty_row_ = true; }
+    void record_user_edit(const QString &text) { show_empty_row_ = text.isEmpty(); }
+    void dismiss() { show_empty_row_ = false; }
+    [[nodiscard]] auto rendered_tab() const -> std::uint64_t { return rendered_tab_; }
+    [[nodiscard]] auto keeps_empty_row() const -> bool { return show_empty_row_; }
+
+  private:
+    std::uint64_t rendered_tab_ = 0;
+    bool has_rendered_tab_ = false;
+    bool show_empty_row_ = false;
+};
+
+auto filter_status_text(int status, bool no_matches, const QString &text, int count) -> QString {
+    if (status == 1)
+        return QStringLiteral("Updating…");
+    if (status == 2)
+        return QStringLiteral("Filter unavailable; edit to retry");
+    if (no_matches)
+        return QStringLiteral("No matches");
+    if (text.isEmpty())
+        return QStringLiteral("%1 items").arg(count);
+    return QStringLiteral("%1 matches").arg(count);
+}
+
 class FolderPane final : public QFrame {
   public:
     FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)) {
@@ -1479,11 +1518,9 @@ class FolderPane final : public QFrame {
         update_toolbar();
         QObject::connect(model, &FolderItemsListModel::toolbarStateChanged, this, update_toolbar);
         QObject::connect(model, &FolderItemsListModel::sortChoiceChanged, this, [this, model] { update_sort(model); });
-        previous_filter_tab_ = model->activeTabId();
         const auto refresh_filter = [this, model] {
             const auto tab = model->activeTabId();
-            const bool tab_changed = tab != previous_filter_tab_;
-            previous_filter_tab_ = tab;
+            const bool tab_changed = filter_row_state_.render(tab);
             const auto &text = model->getFilterText();
             {
                 const QSignalBlocker blocker(filter_input_);
@@ -1491,18 +1528,9 @@ class FolderPane final : public QFrame {
             }
             if (!text.isEmpty())
                 filter_row_->show();
-            else if (tab_changed)
+            else if (tab_changed || !filter_row_state_.keeps_empty_row())
                 filter_row_->hide();
-            if (model->getFilterStatus() == 1)
-                filter_status_->setText(QStringLiteral("Updating…"));
-            else if (model->getFilterStatus() == 2)
-                filter_status_->setText(QStringLiteral("Filter unavailable; edit to retry"));
-            else if (model->getNoFilterMatches())
-                filter_status_->setText(QStringLiteral("No matches"));
-            else if (text.isEmpty())
-                filter_status_->setText(QStringLiteral("%1 items").arg(model->getFilterResultCount()));
-            else
-                filter_status_->setText(QStringLiteral("%1 matches").arg(model->getFilterResultCount()));
+            filter_status_->setText(filter_status_text(model->getFilterStatus(), model->getNoFilterMatches(), text, model->getFilterResultCount()));
             filter_input_->setAccessibleDescription(QStringLiteral("Starts with %1. %2").arg(text, filter_status_->text()));
             filter_status_->setAccessibleDescription(filter_status_->text());
             const auto announcement_text = QStringLiteral("Starts with %1. %2").arg(text, filter_status_->text());
@@ -1514,29 +1542,35 @@ class FolderPane final : public QFrame {
         };
         QObject::connect(model, &FolderItemsListModel::filterViewChanged, this, refresh_filter);
         QObject::connect(filter_input_, &QLineEdit::textChanged, this, [this, model](const QString &text) {
-            const auto observed_tab = model->activeTabId();
-            model->editFilterText(observed_tab, text);
+            // This is a user edit: preserve the tab whose text field produced
+            // it. A queued edit from the previous tab must be rejected rather
+            // than applied to whichever tab the model now shows.
+            filter_row_state_.record_user_edit(text);
+            model->editFilterText(filter_row_state_.rendered_tab(), text);
         });
         QObject::connect(close_filter, &QToolButton::clicked, this, [this, model] {
-            const auto observed_tab = model->activeTabId();
             const QString empty;
-            model->editFilterText(observed_tab, empty);
+            filter_row_state_.dismiss();
+            model->editFilterText(filter_row_state_.rendered_tab(), empty);
             filter_row_->hide();
             view_->focusList();
         });
-        filter_input_->setFocusLossHandler([this, model] {
-            if (model->getFilterText().isEmpty() && !filter_row_->isAncestorOf(QApplication::focusWidget()))
+        filter_input_->setFocusLossHandler([this] {
+            if (filter_input_->text().isEmpty() && !filter_row_->isAncestorOf(QApplication::focusWidget())) {
+                filter_row_state_.dismiss();
                 filter_row_->hide();
+            }
         });
         filter_input_->setEscapeHandler([this, model] {
-            const auto observed_tab = model->activeTabId();
             const QString empty;
-            model->editFilterText(observed_tab, empty);
+            filter_row_state_.dismiss();
+            model->editFilterText(filter_row_state_.rendered_tab(), empty);
             filter_row_->hide();
             view_->focusList();
         });
         view_->setTypeToFilterHandler([this, model](const QString &text) {
             const auto observed_tab = model->activeTabId();
+            filter_row_state_.record_user_edit(text);
             model->editFilterText(observed_tab, model->getFilterText() + text);
             filter_row_->show();
             filter_input_->setFocus(Qt::OtherFocusReason);
@@ -1582,6 +1616,7 @@ class FolderPane final : public QFrame {
     [[nodiscard]] auto status() const -> ElidedStatusLabel * { return status_; }
     [[nodiscard]] auto new_folder_row() const -> QWidget * { return new_folder_row_; }
     void focus_filter() {
+        filter_row_state_.open_empty_row();
         filter_row_->show();
         filter_input_->setFocus(Qt::ShortcutFocusReason);
     }
@@ -1599,7 +1634,7 @@ class FolderPane final : public QFrame {
     QWidget *filter_row_ = nullptr;
     FolderFilterTextEdit *filter_input_ = nullptr;
     QLabel *filter_status_ = nullptr;
-    std::uint64_t previous_filter_tab_ = 0;
+    FilterRowState filter_row_state_;
     QString last_filter_announcement_;
     ElidedStatusLabel *status_ = nullptr;
     QWidget *new_folder_row_ = nullptr;
@@ -4497,6 +4532,46 @@ auto run_text_editor_focus_checks(QApplication &app) -> int {
         commit.setCommitString(QStringLiteral("你"));
         QApplication::sendEvent(filter, &commit);
         check(text_changes == 1 && filter->text() == QStringLiteral("你"), "committed text changes the query exactly once");
+
+        // Filter-row delivery: programmatic renders are signal-blocked, while
+        // every user edit keeps the identity of the tab that supplied its
+        // text. This seam has no running workspace, so it deliberately
+        // models a tab switch between the edit and dispatch without asking a
+        // current view which tab is active.
+        FolderFilterTextEdit filter_row(&window);
+        FilterRowState filter_state;
+        int filter_user_edits = 0;
+        std::uint64_t submitted_filter_tab = 0;
+        QObject::connect(&filter_row, &QLineEdit::textChanged, &filter_row, [&](const QString &text) {
+            filter_state.record_user_edit(text);
+            submitted_filter_tab = filter_state.rendered_tab();
+            ++filter_user_edits;
+        });
+        check(filter_state.render(41), "the first rendered filter tab is observed");
+        {
+            const QSignalBlocker blocker(&filter_row);
+            filter_row.setText(QStringLiteral("alpha"));
+        }
+        check(filter_user_edits == 0 && filter_state.rendered_tab() == 41, "a programmatic filter render emits no user edit");
+        filter_row.setText(QStringLiteral("al"));
+        check(filter_user_edits == 1 && submitted_filter_tab == 41 && !filter_state.keeps_empty_row(), "a filter edit carries its rendered tab");
+        check(filter_state.render(42), "a tab switch is observed before its replacement filter renders");
+        {
+            const QSignalBlocker blocker(&filter_row);
+            filter_row.setText(QStringLiteral("bravo"));
+        }
+        check(filter_user_edits == 1 && submitted_filter_tab == 41 && filter_state.rendered_tab() == 42, "a replacement tab render cannot retarget an earlier edit");
+        filter_state.open_empty_row();
+        check(filter_state.keeps_empty_row(), "Command+F keeps its explicitly empty row visible");
+        check(filter_state.render(43) && !filter_state.keeps_empty_row(), "switching tabs dismisses an empty filter row");
+        filter_state.open_empty_row();
+        filter_state.record_user_edit(QStringLiteral("a"));
+        {
+            const QSignalBlocker blocker(&filter_row);
+            filter_row.clear();
+        }
+        check(!filter_state.keeps_empty_row(), "a programmatic clear after text does not retain an empty row");
+        check(filter_status_text(1, false, QStringLiteral("a"), 0) == QStringLiteral("Updating…") && filter_status_text(2, false, QStringLiteral("a"), 0) == QStringLiteral("Filter unavailable; edit to retry") && filter_status_text(0, true, QStringLiteral("a"), 0) == QStringLiteral("No matches") && filter_status_text(0, false, QString(), 0) == QStringLiteral("0 items") && filter_status_text(0, false, QStringLiteral("a"), 1) == QStringLiteral("1 matches"), "filter statuses distinguish updating, failure, empty folders, and matches");
 
         check(focus(filter), "the filter row takes focus again");
         press(Qt::Key_Q);

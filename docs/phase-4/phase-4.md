@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, and command-line entry into the running workspace.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, the clipboard-transfer model in P4-M4, and clipboard delivery in P4-M5; P4-M3 remains active. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, text-filter delivery in P4-M3, the clipboard-transfer model in P4-M4, and clipboard delivery in P4-M5. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -41,7 +41,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestones run in the order below, except P4-M9, which is independent and may be implemented while P4-M3 is active, ahead of P4-M6 to P4-M8. P4-M1, P4-M2, P4-M4, and P4-M5 are complete; P4-M3 is active.
+Milestones run in the order below, except P4-M9, which is independent and may be implemented ahead of P4-M6 to P4-M8. P4-M1 through P4-M5 are complete; P4-M9 is active.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -57,7 +57,7 @@ Plan: [overview](milestone-02-overview.md), [architecture](milestone-02-architec
 
 ### P4-M3: Deliver text filtering UI
 
-Status: Active
+Status: Done
 Goal: Add an accessible filter control and feedback to each Browser, wired to the tab-local state.
 Plan: [overview](milestone-03-overview.md), [architecture](milestone-03-architecture.md)
 
