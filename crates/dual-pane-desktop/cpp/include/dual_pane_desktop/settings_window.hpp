@@ -222,7 +222,7 @@ class SettingsWindow final : public QDialog {
             menu->setAttribute(Qt::WA_DeleteOnClose);
             menu->setAttribute(Qt::WA_StyledBackground);
             menu->setFocusPolicy(Qt::StrongFocus);
-            menu->setStyleSheet(QStringLiteral("QMenu#settingsInfoMenu { background-color:#1D2229; color:#F4F6F8; border:1px solid #778392; padding:4px; }"));
+            menu->setStyleSheet(QStringLiteral("QMenu#settingsInfoMenu { background-color:#2B323B; color:#F4F6F8; border:1px solid #778392; padding:0; }"));
             auto *label = new QLabel(description, menu);
             label->setObjectName(QStringLiteral("settingsInfoText"));
             label->setAccessibleName(description);
@@ -230,12 +230,16 @@ class SettingsWindow final : public QDialog {
             label->setMinimumWidth(300);
             label->setMaximumWidth(400);
             label->setContentsMargins(6, 6, 6, 6);
-            label->setStyleSheet(QStringLiteral("QLabel#settingsInfoText { background-color:#2B323B; color:#F4F6F8; border:1px solid #56616E; border-radius:5px; padding:6px; font-size:13px; }"));
+            label->setStyleSheet(QStringLiteral("QLabel#settingsInfoText { background:transparent; color:#F4F6F8; border:0; padding:6px; font-size:13px; }"));
             auto *action = new QWidgetAction(menu);
             action->setDefaultWidget(label);
             menu->addAction(action);
             QObject::connect(menu, &QMenu::aboutToHide, button, [button] { QTimer::singleShot(0, button, [button] { button->setFocus(Qt::OtherFocusReason); }); });
-            menu->popup(button->mapToGlobal(QPoint(0, button->height())));
+            QPoint anchor = button->mapToGlobal(QPoint(0, button->height()));
+            const int window_right = button->window()->mapToGlobal(QPoint(button->window()->width(), 0)).x();
+            if (anchor.x() + menu->sizeHint().width() > window_right)
+                anchor.setX(anchor.x() + button->width() - menu->sizeHint().width());
+            menu->popup(anchor);
             menu->setFocus();
         });
         return button;
@@ -249,7 +253,7 @@ class SettingsWindow final : public QDialog {
         layout->setSpacing(14);
         auto *title = new QLabel(QStringLiteral("General"), page);
         layout->addWidget(title);
-        auto make_card = [page, layout](const QString &name, const QString &heading, const QString &description) {
+        auto make_card = [page, layout](const QString &name, const QString &heading) {
             auto *card = new QFrame(page);
             card->setObjectName(QStringLiteral("settingsCard"));
             auto *card_layout = new QVBoxLayout(card);
@@ -259,16 +263,10 @@ class SettingsWindow final : public QDialog {
             card_heading->setObjectName(QStringLiteral("settingsCardHeading"));
             card->setAccessibleName(name);
             card_layout->addWidget(card_heading);
-            if (!description.isEmpty()) {
-                auto *card_description = new QLabel(description, card);
-                card_description->setObjectName(QStringLiteral("settingsCardDescription"));
-                card_description->setWordWrap(true);
-                card_layout->addWidget(card_description);
-            }
             layout->addWidget(card);
             return card_layout;
         };
-        auto *startup_card = make_card(QStringLiteral("Startup Notices"), QStringLiteral("Startup Notices"), QStringLiteral("Choose which notices open automatically when the app starts."));
+        auto *startup_card = make_card(QStringLiteral("Startup Notices"), QStringLiteral("Startup Notices"));
         auto *notices = new QHBoxLayout();
         auto *check = new ToggleSwitch(QStringLiteral("Don’t show notices at startup"), page);
         check->setObjectName(QStringLiteral("settingsHideNotices"));
@@ -280,10 +278,10 @@ class SettingsWindow final : public QDialog {
             QObject::connect(bridge_, &WorkspaceBridge::hideNoticesAtStartupChanged, page, [this, check] { QSignalBlocker block(check); check->setChecked(bridge_->getHideNoticesAtStartup()); });
         }
         notices->addWidget(check);
-        notices->addWidget(info_button(page, QStringLiteral("Startup notices"), QStringLiteral("When selected, routine notices stay in Notices at startup. Important errors still open Notices so you can act on them.")));
         notices->addStretch();
+        notices->addWidget(info_button(page, QStringLiteral("Startup notices"), QStringLiteral("When selected, routine notices stay in Notices at startup. Important errors still open Notices so you can act on them.")));
         startup_card->addLayout(notices);
-        auto *quit_card = make_card(QStringLiteral("Quitting"), QStringLiteral("Quitting"), QStringLiteral("Choose whether the Sidebar close button asks before it quits."));
+        auto *quit_card = make_card(QStringLiteral("Quitting"), QStringLiteral("Quitting"));
         auto *quit_row = new QHBoxLayout();
         auto *ask_quit = new ToggleSwitch(QStringLiteral("Ask before quitting from the close button"), page);
         ask_quit->setObjectName(QStringLiteral("settingsAskBeforeQuit"));
@@ -295,15 +293,10 @@ class SettingsWindow final : public QDialog {
             QObject::connect(bridge_, &WorkspaceBridge::skipQuitConfirmationChanged, page, [this, ask_quit] { QSignalBlocker block(ask_quit); ask_quit->setChecked(!bridge_->getSkipQuitConfirmation()); });
         }
         quit_row->addWidget(ask_quit);
-        quit_row->addWidget(info_button(page, QStringLiteral("Quit confirmation"), QStringLiteral("When selected, the close button at the right end of the Dual Pane title row asks before quitting. Choosing Don’t ask again in that confirmation clears this setting. Command+Q never asks, and running file operations always ask.")));
         quit_row->addStretch();
+        quit_row->addWidget(info_button(page, QStringLiteral("Quit confirmation"), QStringLiteral("When selected, the close button at the right end of the Dual Pane title row asks before quitting. Choosing Don’t ask again in that confirmation clears this setting. Command+Q never asks, and running file operations always ask.")));
         quit_card->addLayout(quit_row);
-        auto *visibility_card = make_card(QStringLiteral("Item Visibility"), QStringLiteral("Item Visibility"), QStringLiteral("Choose which hidden item classes appear in both Browsers."));
-        auto *visibility_help = new QLabel(QStringLiteral("An item matching more than one rule appears only when every matching Show control is selected."), page);
-        visibility_help->setObjectName(QStringLiteral("settingsVisibilityHelp"));
-        visibility_help->setAccessibleName(QStringLiteral("Visibility settings help"));
-        visibility_help->setWordWrap(true);
-        visibility_card->addWidget(visibility_help);
+        auto *visibility_card = make_card(QStringLiteral("Item Visibility"), QStringLiteral("Item Visibility"));
         auto *macos_items = new ToggleSwitch(QStringLiteral("Show macOS metadata and service items"), page);
         auto *dotfiles = new ToggleSwitch(QStringLiteral("Show dotfiles"), page);
         auto *macos_invisible = new ToggleSwitch(QStringLiteral("Show items marked invisible by macOS"), page);
@@ -340,14 +333,14 @@ class SettingsWindow final : public QDialog {
         auto add_visibility_row = [visibility_card, page, this](QCheckBox *control, const QString &subject, const QString &description) {
             auto *row = new QHBoxLayout();
             row->addWidget(control);
-            row->addWidget(info_button(page, subject, description));
             row->addStretch();
+            row->addWidget(info_button(page, subject, description + QStringLiteral(" An item matching more than one rule appears only when every matching Show control is selected.")));
             visibility_card->addLayout(row);
         };
         add_visibility_row(macos_items, QStringLiteral("macOS metadata and service items"), QStringLiteral("Shows items such as .DS_Store, Spotlight indexes, and other files macOS and its services maintain."));
         add_visibility_row(dotfiles, QStringLiteral("Dotfiles"), QStringLiteral("Shows files and folders whose names start with a dot, the Unix convention for hidden items."));
         add_visibility_row(macos_invisible, QStringLiteral("Items marked invisible by macOS"), QStringLiteral("Shows items macOS has explicitly flagged as invisible, separate from dotfiles and metadata items."));
-        auto *reset_card = make_card(QStringLiteral("Reset Settings"), QStringLiteral("Reset Settings"), QStringLiteral("Restore defaults for settings, Favorites, open tabs, and workspace layout."));
+        auto *reset_card = make_card(QStringLiteral("Reset Settings"), QStringLiteral("Reset Settings"));
         auto *reset_row = new QHBoxLayout();
         auto *reset = new QPushButton(QStringLiteral("Reset Settings"), page);
         reset->setObjectName(QStringLiteral("settingsReset"));
@@ -367,8 +360,8 @@ class SettingsWindow final : public QDialog {
             box->open();
         });
         reset_row->addWidget(reset);
-        reset_row->addWidget(info_button(page, QStringLiteral("Reset Settings"), QStringLiteral("Reset restores all compiled settings and shortcuts, removes Favorites, closes open tabs, and returns the workspace layout to its defaults. The current database is kept as a backup.")));
         reset_row->addStretch();
+        reset_row->addWidget(info_button(page, QStringLiteral("Reset Settings"), QStringLiteral("Reset restores all compiled settings and shortcuts, removes Favorites, closes open tabs, and returns the workspace layout to its defaults. The current database is kept as a backup.")));
         reset_card->addLayout(reset_row);
         layout->addStretch();
         return page;
@@ -395,7 +388,7 @@ class SettingsWindow final : public QDialog {
             label->setFixedWidth(width);
             head->addWidget(label);
         }
-        head->addStretch();
+        add_info_column_heading(header, head, QStringLiteral("shortcutColumnHeading"));
         return header;
     }
     static auto shortcut_column_width() -> int {
@@ -406,15 +399,39 @@ class SettingsWindow final : public QDialog {
         return metrics.horizontalAdvance(longest_supported_shortcut) + 6 + 18;
     }
     static auto original_shortcut_column_width() -> int { return 200; }
-    static auto shortcut_table_width() -> int {
-        constexpr int action_width = 170;
-        constexpr int scope_width = 120;
-        constexpr int add_width = 36;
-        constexpr int column_gap = 8;
-        constexpr int horizontal_padding = 8;
-        constexpr int card_border = 2;
-        constexpr int column_count = 5;
-        return action_width + shortcut_column_width() + original_shortcut_column_width() + scope_width + add_width + ((column_count - 1) * column_gap) + (2 * horizontal_padding) + card_border;
+    static auto info_column_width() -> int { return 18; }
+    static auto table_text_inset() -> int {
+        constexpr int card_border = 1;
+        constexpr int cell_padding = 8;
+        return card_border + cell_padding;
+    }
+    static auto category_section(QWidget *list, const QString &name, const QString &heading_name) -> QWidget * {
+        auto *section = new QWidget(list);
+        auto *layout = new QVBoxLayout(section);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(6);
+        auto *heading = new QLabel(name, section);
+        heading->setObjectName(heading_name);
+        heading->setContentsMargins(table_text_inset(), 0, 0, 0);
+        layout->addWidget(heading);
+        return section;
+    }
+    static void add_info_column_heading(QWidget *header, QHBoxLayout *head, const QString &heading_name) {
+        head->addStretch();
+        auto *label = new QLabel(header);
+        label->setObjectName(heading_name);
+        label->setFixedWidth(info_column_width());
+        head->addWidget(label);
+    }
+    void add_info_cell(QWidget *row, QHBoxLayout *cells, const QString &subject, const QString &description) {
+        cells->addStretch();
+        auto *cell = new QWidget(row);
+        cell->setObjectName(QStringLiteral("settingsInfoCell"));
+        cell->setFixedWidth(info_column_width());
+        auto *layout = new QHBoxLayout(cell);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(info_button(cell, subject, description), 0, Qt::AlignRight);
+        cells->addWidget(cell);
     }
     auto shortcut_page() -> QWidget * {
         auto *page = new QWidget(pages_);
@@ -429,7 +446,7 @@ class SettingsWindow final : public QDialog {
         shortcut_list_->setObjectName(QStringLiteral("settingsShortcutList"));
         shortcut_layout_ = new QVBoxLayout(shortcut_list_);
         shortcut_layout_->setContentsMargins(0, 0, 0, 0);
-        shortcut_layout_->setSpacing(10);
+        shortcut_layout_->setSpacing(20);
         shortcut_scroll_->setWidget(shortcut_list_);
         layout->addWidget(shortcut_scroll_);
         rebuild_shortcuts();
@@ -452,16 +469,14 @@ class SettingsWindow final : public QDialog {
         }
         const QStringList group_names{QStringLiteral("Navigation"), QStringLiteral("Tabs and Windows"), QStringLiteral("File Actions"), QStringLiteral("Sorting"), QStringLiteral("Other Actions")};
         for (int group_index = 0; group_index < group_names.size(); ++group_index) {
-            auto *group = new QFrame(shortcut_list_);
+            auto *section = category_section(shortcut_list_, group_names.at(group_index), QStringLiteral("shortcutGroupHeading"));
+            auto *group = new QFrame(section);
             group->setObjectName(QStringLiteral("shortcutGroup"));
             group->setAccessibleName(group_names.at(group_index) + QStringLiteral(" shortcuts"));
-            group->setFixedWidth(shortcut_table_width());
+            section->layout()->addWidget(group);
             auto *group_layout = new QVBoxLayout(group);
             group_layout->setContentsMargins(0, 0, 0, 0);
             group_layout->setSpacing(0);
-            auto *group_heading = new QLabel(group_names.at(group_index), group);
-            group_heading->setObjectName(QStringLiteral("shortcutGroupHeading"));
-            group_layout->addWidget(group_heading);
             group_layout->addWidget(shortcut_table_header(group));
             int group_rows = 0;
             for (int index = 0; index < bridge_->actionCount(); ++index) {
@@ -477,14 +492,10 @@ class SettingsWindow final : public QDialog {
                 auto *cells = new QHBoxLayout(row);
                 cells->setContentsMargins(8, 3, 8, 3);
                 cells->setSpacing(8);
-                auto *action_cell = new QWidget(row);
-                action_cell->setFixedWidth(170);
-                auto *action_layout = new QHBoxLayout(action_cell);
-                action_layout->setContentsMargins(0, 0, 0, 0);
-                auto *title = new QLabel(name, action_cell);
+                auto *title = new QLabel(name, row);
                 title->setAccessibleName(name);
-                action_layout->addWidget(title);
-                action_layout->addStretch();
+                title->setFixedWidth(170);
+                cells->addWidget(title);
                 QString scope = QStringLiteral("Workspace window");
                 if (bridge_->actionScope(index) == 0)
                     scope = QStringLiteral("Folder Items List");
@@ -492,8 +503,6 @@ class SettingsWindow final : public QDialog {
                     scope = QStringLiteral("Application");
                 const QString help = name + QStringLiteral(". This action is available in the ") + scope + QStringLiteral(". Add one or more shortcuts, remove individual entries, or restore its compiled default.");
                 row->setAccessibleDescription(help);
-                action_layout->addWidget(info_button(action_cell, name, help));
-                cells->addWidget(action_cell);
                 auto *shortcuts_cell = new QWidget(row);
                 shortcuts_cell->setFixedWidth(shortcut_column_width());
                 auto *shortcuts_layout = new QVBoxLayout(shortcuts_cell);
@@ -561,14 +570,14 @@ class SettingsWindow final : public QDialog {
                 add_layout->setContentsMargins(0, 0, 0, 0);
                 add_layout->addWidget(capture, 0, Qt::AlignLeft);
                 cells->addWidget(add_cell);
-                cells->addStretch();
+                add_info_cell(row, cells, name, help);
                 group_layout->addWidget(row);
                 group_layout->addWidget(feedback);
             }
             if (group_rows == 0) {
-                delete group;
+                delete section;
             } else {
-                shortcut_layout_->addWidget(group, 0, Qt::AlignLeft);
+                shortcut_layout_->addWidget(section);
             }
         }
         shortcut_layout_->addStretch();
@@ -601,7 +610,7 @@ class SettingsWindow final : public QDialog {
             label->setFixedWidth(width);
             head->addWidget(label);
         }
-        head->addStretch();
+        add_info_column_heading(header, head, QStringLiteral("contextMenuColumnHeading"));
         return header;
     }
     auto context_menu_page() -> QWidget * {
@@ -618,7 +627,7 @@ class SettingsWindow final : public QDialog {
         context_menu_list_->setObjectName(QStringLiteral("settingsContextMenuList"));
         context_menu_layout_ = new QVBoxLayout(context_menu_list_);
         context_menu_layout_->setContentsMargins(0, 0, 0, 0);
-        context_menu_layout_->setSpacing(10);
+        context_menu_layout_->setSpacing(20);
         context_menu_scroll_->setWidget(context_menu_list_);
         layout->addWidget(context_menu_scroll_, 1);
         context_menu_feedback_ = new QLabel(page);
@@ -674,17 +683,16 @@ class SettingsWindow final : public QDialog {
         for (int index = 0; index < bridge_->contextMenuActionCount(); ++index) {
             const QString group_name = bridge_->contextMenuGroupLabel(index);
             if (!group_layout || group_name != previous_group) {
-                auto *group = new QFrame(context_menu_list_);
+                auto *section = category_section(context_menu_list_, group_name, QStringLiteral("contextMenuGroupHeading"));
+                auto *group = new QFrame(section);
                 group->setObjectName(QStringLiteral("contextMenuGroup"));
                 group->setAccessibleName(group_name + QStringLiteral(" Context Menu actions"));
+                section->layout()->addWidget(group);
                 group_layout = new QVBoxLayout(group);
                 group_layout->setContentsMargins(0, 0, 0, 0);
                 group_layout->setSpacing(0);
-                auto *heading = new QLabel(group_name, group);
-                heading->setObjectName(QStringLiteral("contextMenuGroupHeading"));
-                group_layout->addWidget(heading);
                 group_layout->addWidget(context_menu_table_header(group));
-                context_menu_layout_->addWidget(group, 0, Qt::AlignLeft);
+                context_menu_layout_->addWidget(section);
                 previous_group = group_name;
                 group_rows = 0;
             }
@@ -697,15 +705,10 @@ class SettingsWindow final : public QDialog {
             auto *cells = new QHBoxLayout(row);
             cells->setContentsMargins(8, 3, 8, 3);
             cells->setSpacing(8);
-            auto *action_cell = new QWidget(row);
-            action_cell->setFixedWidth(260);
-            auto *action_cell_layout = new QHBoxLayout(action_cell);
-            action_cell_layout->setContentsMargins(0, 0, 0, 0);
-            auto *action_label = new QLabel(action, action_cell);
-            action_cell_layout->addWidget(action_label);
-            action_cell_layout->addStretch();
-            action_cell_layout->addWidget(info_button(action_cell, action, action + QStringLiteral(" in the Folder Items context menu. Use Normal and Comprehensive to choose which menu variant shows this action.")));
-            cells->addWidget(action_cell);
+            auto *action_label = new QLabel(action, row);
+            action_label->setObjectName(QStringLiteral("contextMenuAction"));
+            action_label->setFixedWidth(260);
+            cells->addWidget(action_label);
             auto add_checkbox = [this, row, cells, action, index](int kind, int width, bool checked) -> QCheckBox * {
                 auto *cell = new QWidget(row);
                 cell->setFixedWidth(width);
@@ -740,7 +743,7 @@ class SettingsWindow final : public QDialog {
             shortcut_label->setFixedWidth(220);
             cells->addWidget(shortcut_label);
             context_menu_shortcuts_.emplace_back(shortcut_label);
-            cells->addStretch();
+            add_info_cell(row, cells, action, action + QStringLiteral(" in the Folder Items context menu. Use Normal and Comprehensive to choose which menu variant shows this action."));
             group_layout->addWidget(row);
         }
         context_menu_layout_->addStretch();

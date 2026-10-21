@@ -132,6 +132,7 @@ auto run_folder_items_context_menu_checks(QApplication &app) -> int {
 /// launches this path with Qt's offscreen platform plugin.
 auto run_settings_window_checks(QApplication &app) -> int {
     QMainWindow owner;
+    owner.setStyleSheet(style_sheet());
     QToolButton gear(&owner);
     gear.setEnabled(false);
     WorkspaceBridge bridge;
@@ -174,7 +175,6 @@ auto run_settings_window_checks(QApplication &app) -> int {
         auto *macos_items = dialog->findChild<QCheckBox *>(QStringLiteral("settingsShowMacosItems"));
         auto *dotfiles = dialog->findChild<QCheckBox *>(QStringLiteral("settingsShowDotfiles"));
         auto *macos_invisible = dialog->findChild<QCheckBox *>(QStringLiteral("settingsShowMacosInvisible"));
-        auto *visibility_help = dialog->findChild<QLabel *>(QStringLiteral("settingsVisibilityHelp"));
         auto *reset = dialog->findChild<QPushButton *>(QStringLiteral("settingsReset"));
         check(categories && dialog->focusWidget() == categories && categories->currentRow() == 0, "initial category focus");
         check(categories && categories->count() == 3 && pages && pages->count() == 3, "three Settings categories and pages");
@@ -188,7 +188,17 @@ auto run_settings_window_checks(QApplication &app) -> int {
         auto *ask_quit = dialog->findChild<QCheckBox *>(QStringLiteral("settingsAskBeforeQuit"));
         check(ask_quit && ask_quit->accessibleName() == QStringLiteral("Ask before quitting from the close button") && ask_quit->isChecked() && ask_quit->focusPolicy() != Qt::NoFocus, "accessible quit confirmation control asks by default");
         check(macos_invisible && macos_invisible->accessibleName() == QStringLiteral("Show items marked invisible by macOS") && macos_invisible->focusPolicy() != Qt::NoFocus, "accessible macOS invisible control");
-        check(visibility_help && visibility_help->text().contains(QStringLiteral("every matching Show control")), "visibility overlap help");
+        check(dialog->findChildren<QLabel *>(QStringLiteral("settingsCardDescription")).isEmpty() && dialog->findChildren<QLabel *>(QStringLiteral("settingsVisibilityHelp")).isEmpty(), "General cards have no text above their controls");
+        const auto general_cards = dialog->findChildren<QFrame *>(QStringLiteral("settingsCard"));
+        int general_info_buttons = 0;
+        bool info_at_right = !general_cards.isEmpty();
+        for (auto *card : general_cards) {
+            for (auto *button : card->findChildren<QToolButton *>()) {
+                ++general_info_buttons;
+                info_at_right = info_at_right && button->mapTo(card, button->rect().topRight()).x() == card->contentsRect().right() - card->layout()->contentsMargins().right();
+            }
+        }
+        check(info_at_right && general_info_buttons == 6, "General information buttons sit at each card's right edge");
         check(close && close->parentWidget() == title_row && close->text().isEmpty() && !close->icon().isNull(), "bitmap Close button in title row");
         if (title_row) {
             const QPoint original = dialog->pos();
@@ -217,6 +227,50 @@ auto run_settings_window_checks(QApplication &app) -> int {
         check(std::count_if(normal_checks.cbegin(), normal_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }) == 7, "Normal factory configuration");
         check(std::all_of(comprehensive_checks.cbegin(), comprehensive_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }), "Comprehensive factory configuration");
         check(!normal_checks.isEmpty() && normal_checks.first()->accessibleName().contains(QStringLiteral("Normal Context Menu")), "accessible Context Menu checkbox");
+        const auto is_information = [](const QToolButton *button) { return button->accessibleName().endsWith(QStringLiteral(" information")); };
+        const auto information_ends_row = [&is_information](QWidget *row) {
+            auto *cells = row->layout();
+            auto *info_cell = row->findChild<QWidget *>(QStringLiteral("settingsInfoCell"), Qt::FindDirectChildrenOnly);
+            if (!cells || !info_cell)
+                return false;
+            const auto row_buttons = row->findChildren<QToolButton *>();
+            const auto cell_buttons = info_cell->findChildren<QToolButton *>();
+            if (std::count_if(row_buttons.cbegin(), row_buttons.cend(), is_information) != 1 || cell_buttons.size() != 1 || !is_information(cell_buttons.first()))
+                return false;
+            int last_cell = -1;
+            for (int position = 0; position < cells->count(); ++position) {
+                if (cells->itemAt(position)->widget())
+                    last_cell = position;
+            }
+            const int info_position = cells->indexOf(info_cell);
+            return info_position > 0 && last_cell == info_position && cells->itemAt(info_position - 1)->spacerItem() != nullptr;
+        };
+        const auto shortcut_rows = dialog->findChildren<QWidget *>(QStringLiteral("shortcutRow"));
+        check(std::all_of(shortcut_rows.cbegin(), shortcut_rows.cend(), information_ends_row), "Shortcut information buttons end each row after its free space");
+        check(std::all_of(context_rows.cbegin(), context_rows.cend(), information_ends_row), "Context Menu information buttons end each row after its free space");
+        const auto check_category_tables = [&check](QScrollArea *scroll, const QString &group_name, const QString &heading_name, const QString &column_heading_name, const char *fill_name, const char *heading_check_name, const char *heading_font_name) {
+            QApplication::processEvents();
+            auto *list = scroll ? scroll->widget() : nullptr;
+            const auto groups = list ? list->findChildren<QFrame *>(group_name) : QList<QFrame *>();
+            bool fills = list && !groups.isEmpty() && list->width() == scroll->viewport()->width();
+            bool headings = fills;
+            bool heading_fonts = fills;
+            for (auto *group : groups) {
+                fills = fills && group->width() == list->width();
+                auto *section = group->parentWidget();
+                auto *heading = section ? section->findChild<QLabel *>(heading_name, Qt::FindDirectChildrenOnly) : nullptr;
+                QLabel *action_heading = nullptr;
+                for (auto *label : group->findChildren<QLabel *>(column_heading_name)) {
+                    if (label->text() == QStringLiteral("Action"))
+                        action_heading = label;
+                }
+                heading_fonts = heading_fonts && heading && heading->font().pixelSize() == 11 && heading->font().weight() == QFont::Bold;
+                headings = headings && heading && action_heading && !group->isAncestorOf(heading) && heading->geometry().bottom() < group->geometry().top() && heading->mapTo(list, heading->contentsRect().topLeft()).x() == action_heading->mapTo(list, QPoint(0, 0)).x();
+            }
+            check(fills, fill_name);
+            check(headings, heading_check_name);
+            check(heading_fonts, heading_font_name);
+        };
         for (auto *button : dialog->findChildren<QToolButton *>()) {
             if (button->accessibleName() != QStringLiteral("Startup notices information"))
                 continue;
@@ -224,6 +278,13 @@ auto run_settings_window_checks(QApplication &app) -> int {
             auto *help = button->findChild<QMenu *>();
             check(help && help->isVisible(), "anchored help opens");
             if (help) {
+                const QImage popup = help->grab().toImage();
+                const QColor surface(QStringLiteral("#2B323B"));
+                const int middle = popup.height() / 2;
+                bool one_box = popup.width() > 12 && QColor(popup.pixel(0, middle)) != surface;
+                for (int x = 1; one_box && x <= 10; ++x)
+                    one_box = QColor(popup.pixel(x, middle)) == surface;
+                check(one_box, "information overlay draws one box");
                 QPointer<QMenu> closing_help(help);
                 help->close();
                 QApplication::processEvents();
@@ -234,8 +295,10 @@ auto run_settings_window_checks(QApplication &app) -> int {
         if (categories && pages) {
             categories->setCurrentRow(1);
             check(pages->currentIndex() == 1, "category switching");
+            check_category_tables(dialog->findChild<QScrollArea *>(QStringLiteral("settingsShortcutScroll")), QStringLiteral("shortcutGroup"), QStringLiteral("shortcutGroupHeading"), QStringLiteral("shortcutColumnHeading"), "shortcut tables fill the page width", "shortcut category names sit above their tables, aligned with Action", "shortcut category names are 11px bold");
             categories->setCurrentRow(2);
             check(pages->currentIndex() == 2 && pages->currentWidget()->accessibleName() == QStringLiteral("Context Menus Settings"), "Context Menus category switching");
+            check_category_tables(dialog->findChild<QScrollArea *>(QStringLiteral("settingsContextMenuScroll")), QStringLiteral("contextMenuGroup"), QStringLiteral("contextMenuGroupHeading"), QStringLiteral("contextMenuColumnHeading"), "Context Menu tables fill the page width", "Context Menu category names sit above their tables, aligned with Action", "Context Menu category names are 11px bold");
         }
         if (!normal_checks.isEmpty()) {
             auto *focused_check = normal_checks.first();

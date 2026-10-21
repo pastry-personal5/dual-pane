@@ -24,11 +24,11 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Shortcut Category Card | `shortcut_category_card` |
 | Shortcut Table Header | `shortcut_table_header` |
 | Original Shortcuts Column | `original_shortcuts_column` |
-| Shortcut Information Button | `shortcut_information_button` |
 | Add Shortcut Button | `add_shortcut_button` |
 | Remove Shortcut Button | `remove_shortcut_button` |
 | Reset to Default Shortcuts Button | `reset_to_default_shortcuts_button` |
 | Shortcut Capture Control | `shortcut_capture_control` |
+| Settings Information Button | `settings_information_button` |
 | Settings Information Overlay | `settings_information_overlay` |
 | Favorites Groups | `favorites_groups` |
 | Favorite Group | `favorite_group` |

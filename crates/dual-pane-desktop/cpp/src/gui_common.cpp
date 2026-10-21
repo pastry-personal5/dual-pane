@@ -109,14 +109,13 @@ auto style_sheet() -> QString {
       QWidget#settingsPage { background:%2; color:%3; }
       QFrame#settingsCard { background:%1; border:1px solid %4; border-radius:6px; }
       QLabel#settingsCardHeading { background:transparent; color:%3; font-size:14px; font-weight:600; }
-      QLabel#settingsCardDescription { background:transparent; color:#B7C0CA; }
       QWidget#settingsShortcutPage { background:%2; color:%3; }
       QWidget#settingsShortcutPage QLabel, QWidget#settingsShortcutPage QToolButton, QWidget#settingsShortcutPage QPushButton { color:%3; font-size:10px; }
       QWidget#shortcutTableHeader { background:%1; border-bottom:1px solid %4; }
       QLabel#shortcutColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
       QWidget#settingsShortcutList, QScrollArea#settingsShortcutScroll QWidget#qt_scrollarea_viewport { background:%2; color:%3; }
       QFrame#shortcutGroup { background:%2; border:1px solid %4; border-radius:4px; }
-      QLabel#shortcutGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:10px 8px; font-size:15px; font-weight:600; }
+      QWidget#settingsShortcutPage QLabel#shortcutGroupHeading { background:transparent; color:%3; border:0; padding:0; font-size:11px; font-weight:bold; }
       QLabel#shortcutColumnHeadingWide { background:transparent; color:#B7C0CA; font-size:13px; font-weight:600; }
       QWidget#shortcutRow { background:%2; border-bottom:1px solid %4; }
       QWidget#shortcutRow[alternate="true"] { background:#272B31; }
@@ -138,7 +137,7 @@ auto style_sheet() -> QString {
       QLabel#contextMenuColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
       QWidget#settingsContextMenuList, QScrollArea#settingsContextMenuScroll QWidget#qt_scrollarea_viewport { background:%2; color:%3; }
       QFrame#contextMenuGroup { background:%2; border:1px solid %4; border-radius:4px; }
-      QLabel#contextMenuGroupHeading { background:%1; color:#B7C0CA; border-bottom:1px solid %4; padding:10px 8px; font-size:15px; font-weight:600; }
+      QWidget#settingsContextMenuPage QLabel#contextMenuGroupHeading { background:transparent; color:%3; border:0; padding:0; font-size:11px; font-weight:bold; }
       QWidget#contextMenuRow { background:%2; border-bottom:1px solid %4; }
       QWidget#contextMenuRow[alternate="true"] { background:#272B31; }
       QWidget#contextMenuRow:hover { background:%11; }

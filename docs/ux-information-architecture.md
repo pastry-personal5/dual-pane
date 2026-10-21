@@ -61,20 +61,22 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
       - Reset Settings card
         - Reset Settings Button
     - Keyboard Shortcuts (Keyboard Shortcuts Settings page)
-      - Scrollable list of left-aligned category cards sized to the table columns, ending just beyond Add with a small right inset: Navigation, Tabs and Windows, File Actions, Sorting, and Other Actions
-        - Category heading
-        - Repeated Shortcut Table Header: Action, Shortcuts, Original Shortcuts, Scope, Add
+      - Scrollable list of full-width category tables: Navigation, Tabs and Windows, File Actions, Sorting, and Other Actions
+        - Category name as plain text above the table card, aligned with the Action column
+        - Repeated Shortcut Table Header: Action, Shortcuts, Original Shortcuts, Scope, Add, and an unlabeled information column
         - Action rows with:
-          - Action name and Shortcut Information Button
+          - Action name
           - Current shortcut combinations, each on its own line with a Remove Shortcut Button
           - Original factory shortcut combinations and Reset to Default Shortcuts Button
           - Shortcut scope
           - Add Shortcut Button in its own column
+          - Settings Information Button at the far right, after the unused width
           - Inline capture or rejection feedback when needed
     - Context Menus (Context Menus Settings page)
-      - Scrollable Folder Items menu action matrix grouped, in order, as Rename and Create, Open, Clipboard, Other Browser, and Delete
-        - Repeated header: Action, Normal, Comprehensive, Shortcut
-        - Action rows with independent Normal and Comprehensive visibility checkboxes and a read-only first effective shortcut
+      - Scrollable Folder Items menu action matrix of full-width tables grouped, in order, as Rename and Create, Open, Clipboard, Other Browser, and Delete
+        - Category name as plain text above the table card, aligned with the Action column
+        - Repeated header: Action, Normal, Comprehensive, Shortcut, and an unlabeled information column
+        - Action rows with independent Normal and Comprehensive visibility checkboxes, a read-only first effective shortcut, and a Settings Information Button at the far right
         - Inline feedback when a change would leave either menu with no configured action
       - Reset Normal Button
       - Reset Comprehensive Button
