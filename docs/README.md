@@ -2,7 +2,7 @@
 
 Status: Active
 
-This index lists the design and process docs, one line each. Read only the doc you need. The rules for writing docs are in [AGENTS.md](../AGENTS.md) under "Documentation".
+This index lists the design and process docs, one line each. Read only the doc you need. Doc rules: [AGENTS.md](../AGENTS.md).
 
 | Doc | What it covers |
 |-----|----------------|
@@ -40,61 +40,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-4/milestone-11-overview.md](phase-4/milestone-11-overview.md) | P4-M11 scope, evidence, owner decisions, checklist, and acceptance evidence for splitting the desktop GUI code into smaller modules. |
 | [phase-4/milestone-11-architecture.md](phase-4/milestone-11-architecture.md) | P4-M11 C++ and Rust desktop module layout and the folder-item action catalogue table. |
 | [phase-4/changelog.md](phase-4/changelog.md) | Phase 4 planning and later owner or design decisions. |
-| [archive/phases/phase-3/phase-3.md](archive/phases/phase-3/phase-3.md) | Completed Phase 3 goal, exit criteria, and milestone sequence. |
-| [archive/phases/phase-3/milestone-01-overview.md](archive/phases/phase-3/milestone-01-overview.md) | P3-M1 scope and executable completion checklist. |
-| [archive/phases/phase-3/milestone-01-architecture.md](archive/phases/phase-3/milestone-01-architecture.md) | P3-M1 naming and bridge migration approach. |
-| [archive/phases/phase-3/milestone-02-overview.md](archive/phases/phase-3/milestone-02-overview.md) | P3-M2 scope and checklist for Phase 3 configuration, defaults, Favorites, settings, and persistent storage. |
-| [archive/phases/phase-3/milestone-02-architecture.md](archive/phases/phase-3/milestone-02-architecture.md) | P3-M2 ownership and SQLite storage design for Favorites, folder sort memory, future sessions, and canonical actions. |
-| [archive/phases/phase-3/milestone-03-overview.md](archive/phases/phase-3/milestone-03-overview.md) | P3-M3 scope and executable checklist for the revised static Standard Layout. |
-| [archive/phases/phase-3/milestone-03-architecture.md](archive/phases/phase-3/milestone-03-architecture.md) | P3-M3 native presentation composition and deferred-behavior boundaries. |
-| [archive/phases/phase-3/milestone-04-overview.md](archive/phases/phase-3/milestone-04-overview.md) | P3-M4 recorded decisions, scenario trace, and executable completion checklist. |
-| [archive/phases/phase-3/milestone-04-architecture.md](archive/phases/phase-3/milestone-04-architecture.md) | P3-M4 sources of truth and P3-M5–P3-M10 implementation handoffs. |
-| [archive/phases/phase-3/milestone-05-overview.md](archive/phases/phase-3/milestone-05-overview.md) | P3-M5 scope and executable checklist for tabbed Qt-free workspace state, Favorites, sort, and refresh. |
-| [archive/phases/phase-3/milestone-05-architecture.md](archive/phases/phase-3/milestone-05-architecture.md) | P3-M5 ownership, state transitions, request routing, and implementation sequence. |
-| [archive/phases/phase-3/milestone-06-overview.md](archive/phases/phase-3/milestone-06-overview.md) | P3-M6 scope and executable checklist for the tabbed desktop interface, Favorites, sort, focus, and selection. |
-| [archive/phases/phase-3/milestone-06-architecture.md](archive/phases/phase-3/milestone-06-architecture.md) | P3-M6 projection, adapter, Qt Widgets, runtime, and verification approach. |
-| [archive/phases/phase-3/milestone-07-overview.md](archive/phases/phase-3/milestone-07-overview.md) | P3-M7 scope and completion checklist for safe Qt-free file-operation workflow. |
-| [archive/phases/phase-3/milestone-07-architecture.md](archive/phases/phase-3/milestone-07-architecture.md) | P3-M7 operation state, request, decision, and verification boundaries. |
-| [archive/phases/phase-3/milestone-08-overview.md](archive/phases/phase-3/milestone-08-overview.md) | P3-M8 recorded decisions and executable checklist for native file operations, Operation Panels, Notices, refresh, and file opening. |
-| [archive/phases/phase-3/milestone-08-architecture.md](archive/phases/phase-3/milestone-08-architecture.md) | P3-M8 P3-M7 contract extensions, native gateway, safety journal, presentation, and verification approach. |
-| [archive/phases/phase-3/milestone-09-overview.md](archive/phases/phase-3/milestone-09-overview.md) | P3-M9 decisions and executable checklist for session saving, restoration, Waiting timeout, and startup Notices. |
-| [archive/phases/phase-3/milestone-09-architecture.md](archive/phases/phase-3/milestone-09-architecture.md) | P3-M9 launch sequence, timeout protection, restoration and discard rules, storage, and verification approach. |
-| [archive/phases/phase-3/milestone-10-overview.md](archive/phases/phase-3/milestone-10-overview.md) | P3-M10 decisions, scope, and executable checklist for watching open locations and automatic refresh. |
-| [archive/phases/phase-3/milestone-10-architecture.md](archive/phases/phase-3/milestone-10-architecture.md) | P3-M10 watch lifecycle, read coalescing, native and fallback monitoring, feedback, and verification approach. |
-| [archive/phases/phase-3/milestone-11-overview.md](archive/phases/phase-3/milestone-11-overview.md) | P3-M11 scope and executable checklist for native macOS Quick Look. |
-| [archive/phases/phase-3/milestone-11-architecture.md](archive/phases/phase-3/milestone-11-architecture.md) | P3-M11 Quick Look panel ownership, held-Space lifecycle, and verification approach. |
-| [archive/phases/phase-3/milestone-12-overview.md](archive/phases/phase-3/milestone-12-overview.md) | P3-M12 scope and executable checklist for workspace visual clarity, Sidebar feedback, and summary wording. |
-| [archive/phases/phase-3/milestone-12-architecture.md](archive/phases/phase-3/milestone-12-architecture.md) | P3-M12 presentation-only visual-polish and verification approach. |
-| [archive/phases/phase-3/milestone-13-overview.md](archive/phases/phase-3/milestone-13-overview.md) | P3-M13 scope and executable checklist for the Settings Window shell. |
-| [archive/phases/phase-3/milestone-13-architecture.md](archive/phases/phase-3/milestone-13-architecture.md) | P3-M13 modal Settings entry, availability, and desktop-boundary design. |
-| [archive/phases/phase-3/milestone-14-overview.md](archive/phases/phase-3/milestone-14-overview.md) | P3-M14 owner decisions and checklist for basic settings and multiple keyboard shortcuts per action. |
-| [archive/phases/phase-3/milestone-14-architecture.md](archive/phases/phase-3/milestone-14-architecture.md) | P3-M14 application-owned settings and shortcut-editor delivery approach. |
-| [archive/phases/phase-3/milestone-15-overview.md](archive/phases/phase-3/milestone-15-overview.md) | P3-M15 owner decisions and completion checklist for three file and folder visibility settings. |
-| [archive/phases/phase-3/milestone-15-architecture.md](archive/phases/phase-3/milestone-15-architecture.md) | P3-M15 application-owned policy, native classification, live refresh, and persistence approach. |
-| [archive/phases/phase-3/milestone-16-overview.md](archive/phases/phase-3/milestone-16-overview.md) | P3-M16 scope and executable checklist for Favorite control polish and per-Browser preview panes. |
-| [archive/phases/phase-3/milestone-16-architecture.md](archive/phases/phase-3/milestone-16-architecture.md) | P3-M16 desktop composition, request ownership, image delivery, and layout-persistence approach. |
-| [archive/phases/phase-3/changelog.md](archive/phases/phase-3/changelog.md) | Phase 3 decisions and plan changes. |
-| [archive/phases/phase-3/open-items.md](archive/phases/phase-3/open-items.md) | Archived record of resolved Phase 3 open items and verification decisions. |
-| [archive/phases/phase-2/phase-2.md](archive/phases/phase-2/phase-2.md) | Completed Phase 2 goal, exit criteria, and milestone sequence. |
-| [archive/phases/phase-2/milestone-01-overview.md](archive/phases/phase-2/milestone-01-overview.md) | Completed P2-M1 interaction-decision scope and acceptance evidence. |
-| [archive/phases/phase-2/milestone-01-architecture.md](archive/phases/phase-2/milestone-01-architecture.md) | Completed P2-M1 documentation-only approach and implementation boundary. |
-| [archive/phases/phase-2/milestone-02-overview.md](archive/phases/phase-2/milestone-02-overview.md) | Completed P2-M2 scope and completion checklist for the Qt-free two-Browser workspace. |
-| [archive/phases/phase-2/milestone-02-architecture.md](archive/phases/phase-2/milestone-02-architecture.md) | Completed P2-M2 application-state, input/output, and testing plan. |
-| [archive/phases/phase-2/milestone-03-overview.md](archive/phases/phase-2/milestone-03-overview.md) | Completed P2-M3 Standard Layout scope and completion checklist. |
-| [archive/phases/phase-2/milestone-03-architecture.md](archive/phases/phase-2/milestone-03-architecture.md) | Completed P2-M3 shared desktop coordinator and native layout design. |
-| [archive/phases/phase-2/milestone-04-overview.md](archive/phases/phase-2/milestone-04-overview.md) | Completed P2-M4 scope, completion checklist, and acceptance evidence. |
-| [archive/phases/phase-2/milestone-04-architecture.md](archive/phases/phase-2/milestone-04-architecture.md) | Completed P2-M4 Browser-local Folder Items runtime and verification approach. |
-| [archive/phases/phase-2/changelog.md](archive/phases/phase-2/changelog.md) | Completed Phase 2 owner decisions and plan changes. |
+| [archive/phases/](archive/phases/) | Completed Phases 1–3: `phase-N/phase-N.md` (goal, exit criteria, milestones), `milestone-NN-overview.md` (scope, checklist), `milestone-NN-architecture.md` (approach), `changelog.md`; Phase 3 also has `open-items.md`. |
 | [release-notes/1.0.0.md](release-notes/1.0.0.md) | Concise release notes for version 1.0.0. |
 | [release-notes/2.0.0.md](release-notes/2.0.0.md) | Concise release notes for version 2.0.0. |
 | [release-notes/3.0.0.md](release-notes/3.0.0.md) | Concise release notes for version v3.0.0. |
-| [archive/phases/phase-1/phase-1.md](archive/phases/phase-1/phase-1.md) | Completed Phase 1 goal, exit criteria, and milestones. |
-| [archive/phases/phase-1/milestone-02-overview.md](archive/phases/phase-1/milestone-02-overview.md) | Archived P1-M2 scope, checklist, and evidence for the Cargo/Qt Widgets stack spike. |
-| [archive/phases/phase-1/milestone-02-architecture.md](archive/phases/phase-1/milestone-02-architecture.md) | Archived P1-M2 workspace, bridge, Qt window, and implementation plan. |
-| [archive/phases/phase-1/milestone-03-overview.md](archive/phases/phase-1/milestone-03-overview.md) | Archived P1-M3 scope, decisions, and checklist for the Qt-free inner crates. |
-| [archive/phases/phase-1/milestone-03-architecture.md](archive/phases/phase-1/milestone-03-architecture.md) | Archived P1-M3 domain, application, adapter, and test plan. |
-| [archive/phases/phase-1/milestone-04-overview.md](archive/phases/phase-1/milestone-04-overview.md) | Archived P1-M4 scope, decisions, and checklist for Qt worker delivery. |
-| [archive/phases/phase-1/milestone-04-architecture.md](archive/phases/phase-1/milestone-04-architecture.md) | Archived P1-M4 list model, Browser session, runtime, and synthetic-source plan. |
-| [archive/phases/phase-1/milestone-05-overview.md](archive/phases/phase-1/milestone-05-overview.md) | Archived P1-M5 scope, GUI behavior, decisions, checklist, and evidence. |
-| [archive/phases/phase-1/milestone-05-architecture.md](archive/phases/phase-1/milestone-05-architecture.md) | Archived P1-M5 directory gateway, selection, Qt UI, and test plan. |
 | [archive/](archive/README.md) | Finished or superseded docs. Skip unless you need history. |

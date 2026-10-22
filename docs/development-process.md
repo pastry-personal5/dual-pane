@@ -2,7 +2,7 @@
 
 Status: Active
 
-Development proceeds in numbered **phases**, and each phase is split into numbered **milestones**. This doc defines how phases and milestones work and where their plans live. The general rules for docs are in [AGENTS.md](../AGENTS.md) under "Documentation".
+Development proceeds in numbered **phases**, and each phase is split into numbered **milestones**. This doc defines how phases and milestones work and where their plans live. General doc rules are in [AGENTS.md](../AGENTS.md) under "Documentation".
 
 ## Phases and milestones
 
@@ -24,8 +24,8 @@ Development proceeds in numbered **phases**, and each phase is split into number
 A **milestone** is done when all of these hold:
 
 1. Every item in its completion checklist is checked with the required acceptance evidence.
-2. The gate passes: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
-3. Docs are updated in the same change, following AGENTS.md → "Documentation". This includes the milestone's status in its phase doc.
+2. The gate in [AGENTS.md](../AGENTS.md) (`make check`) passes.
+3. Docs are updated in the same change, including the milestone's status in its phase doc.
 
 A **phase** is done when every milestone is `Done` or `Dropped` and the phase's exit criteria hold.
 
@@ -72,11 +72,11 @@ Write its two plan docs first:
 - **`milestone-NN-overview.md`**: the milestone's goal, scope (what's in and out), and verifiable completion checklist.
 - **`milestone-NN-architecture.md`**: the technical approach — affected modules, new types or bridge surfaces, and any sequencing within the milestone.
 
-Link both from the milestone's entry in the phase doc. A milestone whose plan docs raise an item from AGENTS.md's "Undecided" section needs that item decided first — see "Ask before building on an undecided item" in AGENTS.md.
+Link both from the milestone's entry in the phase doc. Decide any raised "Undecided" item from AGENTS.md first.
 
 ### Changelog
 
-Each phase directory has a `changelog.md`. Add an entry whenever something happens during the phase that isn't obvious from a commit message alone: an owner decision, a design change from what a milestone's architecture doc originally said, an item moved from "Undecided" to "Decided" in AGENTS.md, or a dropped/reordered milestone. Keep entries short and reverse-chronological:
+Each phase directory has a `changelog.md`. Add a short entry for anything a commit message won't make obvious: an owner decision, a design change from a milestone's architecture doc, an item moved from "Undecided" to "Decided", or a dropped or reordered milestone. Newest first:
 
 ```markdown
 # Phase 1 changelog
@@ -92,8 +92,8 @@ Chronological record of decisions, owner calls, and design changes made during P
 
 ## Doc status and archiving
 
-The rules for where docs go, how they're formatted, and how they're archived are in [AGENTS.md](../AGENTS.md) under "Documentation". This section adds only process details.
+Placement, format, and archiving steps are in [AGENTS.md](../AGENTS.md) under "Documentation".
 
 - **Status values** for docs other than phase plans: `Draft`, `Proposal`, `Active`, `Superseded by <link>`, or `Archived`.
-- **When to archive:** a completed phase plan; a design replaced by a newer one; a spike or research note whose conclusions became decisions. When you archive a doc, also fix its links in `docs/roadmap.md`.
-- **Proposals are not decisions.** When a question from AGENTS.md's "Undecided" section or from an open-decisions list gets answered, record the answer under "Decided" in AGENTS.md.
+- **Archive** a completed phase plan, a replaced design, or a spike whose conclusions became decisions, and fix its links in `docs/roadmap.md`.
+- **Proposals are not decisions.** Record answered open questions under "Decided" in AGENTS.md.
