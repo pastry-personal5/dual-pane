@@ -55,6 +55,40 @@ impl<R: WorkRunner> WorkspaceSession<R> {
         }
         self.submit(Command::SetFilterText { browser, tab, text });
     }
+    /// Submits entered path text for the tab the editor observed. `origin` is
+    /// the exact location the editor was filled with and is used only when the
+    /// text was not edited. Text that is not valid UTF-16 is refused.
+    pub fn submit_path_observed(&mut self, browser: BrowserSide, observed_tab: u64, text: Option<String>, origin: Option<Location>, edited: bool) {
+        let tab = TabId::new(observed_tab);
+        if self.view(browser).active_tab() != Some(tab) {
+            return;
+        }
+        let shown_text = text.clone().unwrap_or_default();
+        self.presenter_mut(browser).note_entered_path(&shown_text);
+        let submission = match (text, origin) {
+            (None, _) => PathSubmission::Undecodable,
+            (Some(_), Some(location)) if !edited => PathSubmission::Unchanged(location),
+            (Some(text), _) => PathSubmission::Typed(text),
+        };
+        self.submit(Command::SubmitPath { browser, tab, submission });
+    }
+    /// Escape in the Path Edit Control while a check is pending.
+    pub fn cancel_path_entry(&mut self, browser: BrowserSide, observed_tab: u64) {
+        let tab = TabId::new(observed_tab);
+        if self.view(browser).active_tab() == Some(tab) {
+            self.submit(Command::CancelPathEntry { browser, tab });
+        }
+    }
+    /// Forgets failed or pending path text after an edit, Escape, or focus loss.
+    pub fn discard_path_entry(&mut self, browser: BrowserSide) {
+        self.presenter_mut(browser).discard_path_entry();
+    }
+    fn presenter_mut(&mut self, browser: BrowserSide) -> &mut BrowserPresenter {
+        match browser {
+            BrowserSide::Left => &mut self.left,
+            BrowserSide::Right => &mut self.right,
+        }
+    }
     /// Records view state, such as a scroll position, that a Browser reports
     /// without the person acting on it, so it never activates that Browser.
     #[cfg(test)]

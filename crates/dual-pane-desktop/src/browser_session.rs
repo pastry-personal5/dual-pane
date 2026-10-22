@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, EditorOutcome, FavoritesEvent, InputController, OperationsPresenter, OperationsViewModel, UNREPRESENTABLE_NAME_TEXT, UiEvent, WorkspacePresenter, WorkspaceViewModel, name_rejection_text};
-use dual_pane_application::{ClipboardAction, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteRejection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, Input, Output, SettingsFailure, WindowLayout, WorkRequest, Workspace};
+use dual_pane_application::{ClipboardAction, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteRejection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, Input, Output, PathSubmission, SettingsFailure, WindowLayout, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection, TabId};
 
 use crate::native_location::{location_from_path, path_from_location};

@@ -110,4 +110,16 @@ pub enum WorkRequest {
         item: Location,
     },
     ReopenJournal,
+    /// Rebuilds an entered path from stored names on the Browser's read lanes.
+    ResolvePath {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+        candidate: Location,
+    },
+    CancelPathResolve {
+        browser: BrowserSide,
+        tab: TabId,
+        token: RequestToken,
+    },
 }

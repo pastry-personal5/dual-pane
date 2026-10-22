@@ -11,6 +11,7 @@ mod filter;
 mod input;
 mod operations;
 mod output;
+mod path_entry;
 mod preview;
 mod projection;
 mod settings;
@@ -24,6 +25,7 @@ pub use filter::{FilterFailure, FilterRequest, FilterResult, FilterStatus, proje
 pub use input::{Command, Event, Input, ResolvedTarget};
 pub use operations::{ByteProgress, CleanupResult, FinalizeResult, NameProblem, OperationEffect, OperationErrorKind, OperationFailure, OperationJob, OperationOutcome, OperationProgress, OperationStatus, PendingDecision, PlannedItem, ScanFailure, ScanSkip, StepResult};
 pub use output::{Output, RowChange, listing_changes};
+pub use path_entry::{PathEntryFailure, PathRejection, PathSubmission, PathTarget, ResolvedPath, parse_path};
 pub use preview::{PreviewRequest, PreviewResult, PreviewView};
 pub use projection::{BrowserChrome, FavoriteEdit, FavoriteRejection, MonitoringStatus, Notice, NoticeKind, TabSummary, WorkspaceChrome};
 pub use settings::{ActionBinding, ActionId, ActionShortcuts, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ContextMenuGroup, ContextMenuKind, ContextMenuPreference, ContextMenuPreferenceRejection, ContextMenuPreferences, FOLDER_SORT_LIMIT, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, SettingsState, SettingsStatus, Shortcut, ShortcutRejection, ShortcutScope, TabSnapshot, VisibilityPolicy, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot, context_menu_group, default_bindings, default_shortcut, default_shortcut_lists, default_shortcuts, fresh_profile_favorites, fresh_profile_screenshots, validate_bindings};

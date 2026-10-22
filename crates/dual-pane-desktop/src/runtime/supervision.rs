@@ -17,6 +17,7 @@ pub(super) type ListingOutcome = Option<Result<(Arc<[Entry]>, Option<Vec<RowChan
 
 pub(super) enum WorkerOutcome {
     Completed(ListingOutcome),
+    Resolved(crate::path_resolver::Resolution),
     Panicked,
 }
 
@@ -65,14 +66,18 @@ pub(super) fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factor
         let worker_job = job.clone();
         let worker: WorkerTask = Box::new(move || {
             let outcome = match catch_unwind(AssertUnwindSafe(|| {
+                if worker_job.resolve {
+                    return WorkerOutcome::Resolved(crate::path_resolver::resolve_path(&worker_job.location, &worker_job.state.cancelled));
+                }
                 let source = worker_source_factory();
-                let entries = source(&worker_job.location, worker_job.sort, worker_job.visibility, &worker_job.state.cancelled)?;
-                Some(entries.map(|entries| {
-                    let changes = worker_job.previous.as_deref().map(|previous| listing_changes(previous, &entries));
-                    (entries, changes)
+                WorkerOutcome::Completed(source(&worker_job.location, worker_job.sort, worker_job.visibility, &worker_job.state.cancelled).map(|entries| {
+                    entries.map(|entries| {
+                        let changes = worker_job.previous.as_deref().map(|previous| listing_changes(previous, &entries));
+                        (entries, changes)
+                    })
                 }))
             })) {
-                Ok(outcome) => WorkerOutcome::Completed(outcome),
+                Ok(outcome) => outcome,
                 Err(payload) => {
                     drop(payload);
                     WorkerOutcome::Panicked
@@ -81,13 +86,13 @@ pub(super) fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factor
             result_sender.send((worker_job, outcome)).ok();
         });
         if spawn_worker(worker).is_err() {
-            finish(&delivery, &job, Event::FolderItemsFailed { browser: job.browser, tab: job.tab, token: job.token, kind: ListingErrorKind::Internal });
+            finish(&delivery, &job, failure_event(&job, ListingErrorKind::Internal));
             sleep(delay);
             delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             continue;
         }
         let Ok((job, outcome)) = result_receiver.recv() else {
-            finish(&delivery, &job, Event::FolderItemsFailed { browser: job.browser, tab: job.tab, token: job.token, kind: ListingErrorKind::Internal });
+            finish(&delivery, &job, failure_event(&job, ListingErrorKind::Internal));
             sleep(delay);
             delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             continue;
@@ -105,13 +110,22 @@ pub(super) fn supervise_with(queue: impl IntoIterator<Item = Job>, source_factor
                 finish(&delivery, &job, Event::FolderItemsCancelled { browser: job.browser, tab: job.tab, token: job.token });
                 delay = INITIAL_RESTART_DELAY;
             }
+            WorkerOutcome::Resolved(resolution) => {
+                finish(&delivery, &job, Event::PathResolved { browser: job.browser, tab: job.tab, token: job.token, result: resolution.unwrap_or(Err(ListingErrorKind::Internal)) });
+                delay = INITIAL_RESTART_DELAY;
+            }
             WorkerOutcome::Panicked => {
-                finish(&delivery, &job, Event::FolderItemsFailed { browser: job.browser, tab: job.tab, token: job.token, kind: ListingErrorKind::Internal });
+                finish(&delivery, &job, failure_event(&job, ListingErrorKind::Internal));
                 sleep(delay);
                 delay = delay.saturating_mul(2).min(MAX_RESTART_DELAY);
             }
         }
     }
+}
+
+/// The terminal event of a job that could not produce a result.
+fn failure_event(job: &Job, kind: ListingErrorKind) -> Event {
+    if job.resolve { Event::PathResolved { browser: job.browser, tab: job.tab, token: job.token, result: Err(kind) } } else { Event::FolderItemsFailed { browser: job.browser, tab: job.tab, token: job.token, kind } }
 }
 
 pub(super) fn finish(delivery: &Delivery, job: &Job, event: Event) {
@@ -136,7 +150,7 @@ pub(super) fn wake(delivery: &Delivery) {
 /// The read a listing event completes. Other events carry no read token.
 pub(super) fn event_address(event: &Event) -> Option<(BrowserSide, TabId, RequestToken)> {
     match event {
-        Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } => Some((*browser, *tab, *token)),
+        Event::FolderItemsLoaded { browser, tab, token, .. } | Event::FolderItemsFailed { browser, tab, token, .. } | Event::FolderItemsCancelled { browser, tab, token, .. } | Event::PathResolved { browser, tab, token, .. } => Some((*browser, *tab, *token)),
         Event::ClipboardPublished { .. } | Event::ClipboardChanged { .. } | Event::ClipboardRead { .. } | Event::ClipboardPreflighted { .. } | Event::FilterProjected { .. } | Event::PreviewFinished { .. } | Event::OperationScanned { .. } | Event::OperationStepped { .. } | Event::OperationFinalized { .. } | Event::OperationCleaned { .. } | Event::OperationExecutorUnavailable { .. } | Event::OperationProgress { .. } | Event::ItemResolved { .. } | Event::OpenFailed { .. } | Event::JournalStatus { .. } | Event::TemporariesSwept { .. } | Event::LocationInvalidated { .. } | Event::WatcherReady { .. } | Event::WatcherStatusChanged { .. } | Event::WatchedLocationInvalidated { .. } | Event::ApplicationActivityChanged { .. } | Event::ReadCapacityAvailable | Event::FavoriteTargetProbed { .. } | Event::ScreenshotsFolderProbed { .. } | Event::SettingsSaved { .. } | Event::SettingsSaveFailed { .. } | Event::SessionSaveFailed { .. } | Event::SettingsLoaded { .. } | Event::SettingsLoadedWithSession { .. } | Event::SettingsLoadFailed { .. } | Event::SettingsLoadFailedAtLaunch { .. } | Event::SettingsLoadTimedOut | Event::StartupPeriodElapsed | Event::SettingsReset { .. } | Event::SettingsResetFailed { .. } => None,
     }
 }

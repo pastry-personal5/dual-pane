@@ -136,7 +136,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Copy Items | `CopyItems` | P4-M5 ID; `Command+C` default with Folder Items List focus |
 | Cut Items | `CutItems` | P4-M5 ID; `Command+X` default with Folder Items List focus |
 | Paste Items | `PasteItems` | P4-M5 ID; `Command+V` default with Folder Items List focus |
-| Edit Path | `EditPath` | Planned ID; `Command+L` default |
+| Edit Path | `EditPath` | P4-M6 ID; `Command+L` default; Window scope |
 
 ## Phase 3 rendered components
 

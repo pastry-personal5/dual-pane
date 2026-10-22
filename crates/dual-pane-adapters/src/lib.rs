@@ -11,7 +11,7 @@ mod operation_panels;
 mod operation_presenter;
 mod workspace_presenter;
 
-pub use browser_presenter::{BrowserPresenter, BrowserViewModel, Clock, EditorRequest, FolderItemsColumn, FolderItemsUpdate, RowKind, RowViewModel, Summary, TabViewModel, Toolbar, reader_start_failure_status};
+pub use browser_presenter::{BrowserPresenter, BrowserViewModel, Clock, EditorRequest, FolderItemsColumn, FolderItemsUpdate, PathEntryView, RowKind, RowViewModel, Summary, TabViewModel, Toolbar, reader_start_failure_status};
 pub use format::{UNAVAILABLE, format_exact, format_relative, format_size, location_text};
 pub use input_controller::{FavoritesEvent, GroupMotion, InputController, SelectionMovement, UiEvent};
 pub use operation_panels::{ChoiceViewModel, DecisionCardViewModel, EditorOutcome, HIDE_DELAY, OperationPanelViewModel, OperationsPresenter, OperationsViewModel, REVEAL_DELAY, Ticks};

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::clipboard::CapturedTransfer;
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MenuAvailability, MenuInvocation, MenuTarget, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, folder_item_spec, fresh_profile_favorites, fresh_profile_screenshots};
+use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MenuAvailability, MenuInvocation, MenuTarget, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PathEntryFailure, PathRejection, PathSubmission, PathTarget, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, folder_item_spec, fresh_profile_favorites, fresh_profile_screenshots, parse_path};
 use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationRoot, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
@@ -189,6 +189,8 @@ struct TabState {
     filter_status: FilterStatus,
     filter_result: Option<FilterResult>,
     scroll_reference: Option<Arc<[Entry]>>,
+    /// The token of the submitted path still being checked, if any.
+    path_check: Option<RequestToken>,
 }
 #[derive(Debug)]
 struct FolderItems {
@@ -263,7 +265,102 @@ impl Workspace {
         transition
     }
     fn command(&mut self, command: Command) -> Transition {
+        let mut superseded = Transition::default();
+        if let Some((browser, tab)) = self.navigation_target(&command) {
+            superseded = self.supersede_path_check(browser, tab, true);
+        }
+        superseded.append(self.dispatch_command(command));
+        superseded
+    }
+    /// The tab a command navigates by the person's choice, which ends that
+    /// tab's pending path check. Watcher, operation, and visibility rereads
+    /// do not pass through here.
+    fn navigation_target(&self, command: &Command) -> Option<(BrowserSide, TabId)> {
         match command {
+            Command::Navigate { browser, .. } | Command::OpenFavoriteItem { browser, .. } => Some((*browser, self.active_tab(*browser))),
+            Command::GoBack { browser, tab } | Command::GoForward { browser, tab } | Command::Refresh { browser, tab } | Command::GoToParent { browser, tab } | Command::OpenEntry { browser, tab, .. } | Command::ShowPackageContents { browser, tab, .. } => Some((*browser, *tab)),
+            _ => None,
+        }
+    }
+    /// Forgets the tab's pending path check and asks the runtime to cancel its
+    /// job. `announce` tells the editor to leave its pending state.
+    fn supersede_path_check(&mut self, browser: BrowserSide, tab: TabId, announce: bool) -> Transition {
+        let Some(token) = self.tab_mut(browser, tab).and_then(|state| state.path_check.take()) else { return Transition::default() };
+        let mut transition = Transition { outputs: vec![], work: vec![WorkRequest::CancelPathResolve { browser, tab, token }] };
+        if announce {
+            transition.outputs.push(Output::PathEntryCancelled { browser, tab });
+        }
+        transition
+    }
+    fn submit_path(&mut self, browser: BrowserSide, tab: TabId, submission: PathSubmission) -> Transition {
+        if self.tab(browser, tab).is_none() || self.active_tab(browser) != tab {
+            return Transition::default();
+        }
+        let mut transition = self.supersede_path_check(browser, tab, false);
+        let base = self.tab(browser, tab).and_then(|state| state.folder_items.as_ref().map(|items| items.location.clone()));
+        let candidate = match submission {
+            PathSubmission::Unchanged(location) => {
+                transition.outputs.push(Output::PathEntryAccepted { browser, tab });
+                transition.append(self.navigate(browser, location, None));
+                return transition;
+            }
+            PathSubmission::Undecodable => Err(PathRejection::Malformed),
+            PathSubmission::Typed(text) => parse_path(&text, base.as_ref(), &self.home),
+        };
+        match candidate {
+            Err(reason) => transition.outputs.push(Output::PathEntryRejected { browser, tab, reason: PathEntryFailure::Rejected(reason) }),
+            Ok(candidate) => {
+                let token = self.next_token();
+                if let Some(state) = self.tab_mut(browser, tab) {
+                    state.path_check = Some(token);
+                }
+                transition.outputs.push(Output::PathEntryPending { browser, tab });
+                transition.work.push(WorkRequest::ResolvePath { browser, tab, token, candidate });
+            }
+        }
+        transition
+    }
+    fn path_resolved(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, result: Result<crate::ResolvedPath, ListingErrorKind>) -> Transition {
+        let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
+        if state.path_check != Some(token) {
+            return Transition::default();
+        }
+        state.path_check = None;
+        let resolved = match result {
+            Ok(resolved) => resolved,
+            Err(kind) => return Transition::output(Output::PathEntryRejected { browser, tab, reason: PathEntryFailure::Listing(kind) }),
+        };
+        let mut transition = Transition::output(Output::PathEntryAccepted { browser, tab });
+        let folder = match resolved.target {
+            PathTarget::Folder => resolved.location,
+            PathTarget::File => {
+                let (Some(folder), Some(name)) = (resolved.location.parent(), resolved.location.components().last().cloned()) else { return transition };
+                if self.filter_hides(browser, tab, &folder, &name) {
+                    transition.append(self.set_filter_text(browser, tab, String::new()));
+                }
+                self.pending_selection = Some(PendingSelection { browser, tab, folder: folder.clone(), name });
+                folder
+            }
+        };
+        if let Some(state) = self.tab_mut(browser, tab) {
+            state.restoring = false;
+            state.visibility_recheck = false;
+        }
+        transition.append(self.start_read(browser, tab, folder, None));
+        transition
+    }
+    /// Whether the tab's filter, for the folder it shows, hides `name`.
+    fn filter_hides(&self, browser: BrowserSide, tab: TabId, folder: &Location, name: &EntryName) -> bool {
+        let Some(state) = self.tab(browser, tab) else { return false };
+        if state.filter_text.is_empty() || state.folder_items.as_ref().is_none_or(|items| items.location != *folder) {
+            return false;
+        }
+        state.filter_result.as_ref().is_none_or(|result| !result.entries.iter().any(|entry| entry.name() == name))
+    }
+    fn dispatch_command(&mut self, command: Command) -> Transition {
+        match command {
+            Command::SubmitPath { browser, tab, submission } => self.submit_path(browser, tab, submission),
+            Command::CancelPathEntry { browser, tab } => self.supersede_path_check(browser, tab, true),
             Command::RequestFolderItemsMenu { browser, tab, visible_revision, kind, target } => self.request_folder_items_menu(browser, tab, visible_revision, kind, target),
             Command::InvokeFolderItemsMenu { token, action } => self.invoke_folder_items_menu(token, action),
             Command::DismissFolderItemsMenu { token } => {
@@ -344,6 +441,7 @@ impl Workspace {
             Event::OperationCleaned { id, generation, result } => self.operation_transition(id, |operations| operations.cleaned(id, generation, result)),
             Event::OperationExecutorUnavailable { id, generation } => self.operation_transition(id, |operations| operations.unavailable(id, generation)),
             Event::OperationProgress { id, generation, bytes } => self.operation_transition(id, |operations| operations.bytes_copied(id, generation, bytes)),
+            Event::PathResolved { browser, tab, token, result } => self.path_resolved(browser, tab, token, result),
             Event::ItemResolved { browser, tab, token, item, target } => self.item_resolved(browser, tab, token, item, target),
             Event::OpenFailed { item } => self.add_notice(NoticeKind::OpenFailed { item }),
             Event::JournalStatus { available } => {
@@ -1264,6 +1362,7 @@ impl Workspace {
                 }
             },
         };
+        transition.append(self.supersede_path_check(side, tab, true));
         if let Some(name) = select {
             self.pending_selection = Some(PendingSelection { browser: side, tab, folder: folder.clone(), name });
             // A tab that already shows the folder rereads it so the file is selected as the listing arrives.
@@ -1279,6 +1378,7 @@ impl Workspace {
             return Transition::default();
         };
         let was_active = self.active_tab(browser) == tab;
+        let cancel_path = self.supersede_path_check(browser, tab, false);
         self.visibility_retries.remove(&(browser, tab));
         let final_tab = self.browser(browser).order.tabs().len() == 1;
         if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab) {
@@ -1300,6 +1400,7 @@ impl Workspace {
             }
         };
         let mut transition = Transition { outputs: vec![Output::TabsChanged { browser, active_tab: replacement }], work: pending.into_iter().map(|token| WorkRequest::Cancel { browser, tab, token }).chain(std::iter::once(WorkRequest::CancelFilter { browser, tab })).collect() };
+        transition.append(cancel_path);
         if was_active {
             if let Some(state) = self.tab_mut(browser, replacement) {
                 state.visible_revision = state.visible_revision.wrapping_add(1);
@@ -2419,7 +2520,7 @@ impl BrowserState {
 }
 impl TabState {
     fn new(id: TabId) -> Self {
-        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: None, restoring: false, visibility_cleared: false, visibility_recheck: false, filter_text: String::new(), filter_generation: 0, visible_revision: 0, filter_status: FilterStatus::Ready, filter_result: None, scroll_reference: None }
+        Self { id, history: TabHistory::default(), folder_items: None, pending: None, error: None, requested: None, restoring: false, visibility_cleared: false, visibility_recheck: false, filter_text: String::new(), filter_generation: 0, visible_revision: 0, filter_status: FilterStatus::Ready, filter_result: None, scroll_reference: None, path_check: None }
     }
     fn requested(id: TabId, location: Location) -> Self {
         Self { requested: Some(location), restoring: true, ..Self::new(id) }

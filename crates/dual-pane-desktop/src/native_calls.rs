@@ -72,6 +72,39 @@ pub fn is_volume_root(path: &Path) -> io::Result<bool> {
     Ok(metadata.dev() != parent_metadata.dev() || (metadata.dev() == parent_metadata.dev() && metadata.ino() == parent_metadata.ino()))
 }
 
+/// The name macOS stores for the final component of `path`, without following
+/// a final link. Intermediate links are followed by the kernel. The lookup
+/// ignores letter case and Unicode normalization on volumes that do, so the
+/// returned spelling can differ from the typed one.
+pub fn stored_name(path: &Path) -> io::Result<Vec<u8>> {
+    let path = c_path(path)?;
+    let mut request = libc::attrlist { bitmapcount: libc::ATTR_BIT_MAP_COUNT, reserved: 0, commonattr: libc::ATTR_CMN_NAME, volattr: 0, dirattr: 0, fileattr: 0, forkattr: 0 };
+    // The buffer holds a length word, the name reference, and the name bytes
+    // (at most `NAME_MAX` bytes of UTF-8 plus a terminator on macOS).
+    let mut buffer = [0_u8; 4 + 8 + 1024];
+    // SAFETY: `path` is NUL-terminated, `request` is a valid attribute list
+    // that outlives the call, and `buffer` is writable for its full length.
+    let status = unsafe { libc::getattrlist(path.as_ptr(), (&raw mut request).cast::<c_void>(), buffer.as_mut_ptr().cast::<c_void>(), buffer.len(), libc::FSOPT_NOFOLLOW) };
+    if status != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let malformed = || io::Error::from(io::ErrorKind::InvalidData);
+    let total = u32::from_ne_bytes(buffer[0..4].try_into().map_err(|_| malformed())?) as usize;
+    let offset = i32::from_ne_bytes(buffer[4..8].try_into().map_err(|_| malformed())?);
+    let length = u32::from_ne_bytes(buffer[8..12].try_into().map_err(|_| malformed())?) as usize;
+    // The offset counts from the start of the name reference, at byte 4.
+    let start = usize::try_from(i64::from(offset) + 4).map_err(|_| malformed())?;
+    let end = start.checked_add(length).ok_or_else(malformed)?;
+    if total > buffer.len() || end > total || length == 0 {
+        return Err(malformed());
+    }
+    let mut name = &buffer[start..end];
+    if let [rest @ .., 0] = name {
+        name = rest;
+    }
+    Ok(name.to_vec())
+}
+
 fn c_path(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }

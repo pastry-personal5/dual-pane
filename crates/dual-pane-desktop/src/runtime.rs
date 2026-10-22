@@ -89,6 +89,9 @@ struct Job {
     visibility: VisibilityPolicy,
     /// The shown Folder Items this read's result is diffed against.
     previous: Option<Arc<[Entry]>>,
+    /// True for an entered-path check: `location` is the candidate to resolve
+    /// and `sort`, `visibility`, and `previous` are unused.
+    resolve: bool,
     state: Arc<JobState>,
 }
 
@@ -300,11 +303,41 @@ impl WorkRunner for Runtime {
                     BrowserSide::Left => &self.left_jobs,
                     BrowserSide::Right => &self.right_jobs,
                 };
-                if let Err((job, closed)) = jobs.send(Job { browser, tab, token, location, sort, visibility, previous, state })
+                if let Err((job, closed)) = jobs.send(Job { browser, tab, token, location, sort, visibility, previous, resolve: false, state })
                     && job.state.claim_terminal()
                 {
                     self.outstanding.remove(&job.token);
                     return Some(Event::FolderItemsFailed { browser: job.browser, tab: job.tab, token: job.token, kind: if closed { ListingErrorKind::Internal } else { ListingErrorKind::Busy } });
+                }
+                None
+            }
+            WorkRequest::ResolvePath { browser, tab, token, candidate } => {
+                if self.outstanding.values().filter(|(owner, _, _)| *owner == browser).count() >= self.read_capacity {
+                    return Some(Event::PathResolved { browser, tab, token, result: Err(ListingErrorKind::Busy) });
+                }
+                let state = Arc::new(JobState { cancelled: AtomicBool::new(false), terminal_claimed: AtomicBool::new(false) });
+                self.outstanding.insert(token, (browser, tab, Arc::clone(&state)));
+                let jobs = match browser {
+                    BrowserSide::Left => &self.left_jobs,
+                    BrowserSide::Right => &self.right_jobs,
+                };
+                if let Err((job, closed)) = jobs.send(Job { browser, tab, token, location: candidate, sort: SortSpec::default(), visibility: VisibilityPolicy::default(), previous: None, resolve: true, state })
+                    && job.state.claim_terminal()
+                {
+                    self.outstanding.remove(&job.token);
+                    return Some(Event::PathResolved { browser, tab, token, result: Err(if closed { ListingErrorKind::Internal } else { ListingErrorKind::Busy }) });
+                }
+                None
+            }
+            WorkRequest::CancelPathResolve { browser, tab, token } => {
+                // The application already forgot the check, so no event answers it.
+                if let Some((owner, owner_tab, state)) = self.outstanding.get(&token)
+                    && *owner == browser
+                    && *owner_tab == tab
+                {
+                    state.cancelled.store(true, Ordering::Relaxed);
+                    state.claim_terminal();
+                    self.outstanding.remove(&token);
                 }
                 None
             }

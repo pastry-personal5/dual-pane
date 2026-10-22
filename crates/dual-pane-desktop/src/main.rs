@@ -14,6 +14,7 @@ mod operation_lane;
 mod operation_scan;
 mod operation_step;
 mod operations_bridge;
+mod path_resolver;
 mod preview_reader;
 mod runtime;
 pub mod settings_storage;

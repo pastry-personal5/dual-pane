@@ -1,4 +1,4 @@
-use crate::{ActionId, ClipboardAction, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ContextMenuPreferenceRejection, FavoriteEdit, FavoriteRejection, FavoritesRecords, FilterStatus, FolderItemsMenuSnapshot, Notice, OperationJob, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
+use crate::{ActionId, ClipboardAction, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ContextMenuPreferenceRejection, FavoriteEdit, FavoriteRejection, FavoritesRecords, FilterStatus, FolderItemsMenuSnapshot, Notice, OperationJob, PathEntryFailure, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, OperationCommand, OperationId, OperationRejection, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
@@ -124,6 +124,27 @@ pub enum Output {
         filter_status: FilterStatus,
         total_count: usize,
         visible_revision: u64,
+    },
+    /// A submitted path is being checked. The editor shows it read-only.
+    PathEntryPending {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    /// The check accepted the folder; editing ends and the ordinary read takes over.
+    PathEntryAccepted {
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    PathEntryRejected {
+        browser: BrowserSide,
+        tab: TabId,
+        reason: PathEntryFailure,
+    },
+    /// The pending check ended without a result: Escape or a navigation the
+    /// person started in the tab.
+    PathEntryCancelled {
+        browser: BrowserSide,
+        tab: TabId,
     },
     LoadingStarted {
         browser: BrowserSide,

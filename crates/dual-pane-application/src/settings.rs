@@ -39,6 +39,7 @@ pub enum ActionId {
     CopyItems,
     CutItems,
     PasteItems,
+    EditPath,
 }
 
 /// The two persistent Folder Items Context Menu configurations.
@@ -835,9 +836,11 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::CopyItems), shortcut(true, false, Key::Character('C')));
         assert_eq!(default_shortcut(ActionId::CutItems), shortcut(true, false, Key::Character('X')));
         assert_eq!(default_shortcut(ActionId::PasteItems), shortcut(true, false, Key::Character('V')));
+        assert_eq!(default_shortcut(ActionId::EditPath), shortcut(true, false, Key::Character('L')));
+        assert_eq!(ActionId::ALL.last(), Some(&ActionId::EditPath), "Edit Path is appended last");
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
         assert_eq!(default_shortcut(ActionId::OpenInFinder), None);
-        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 3..], &[ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems], "clipboard IDs are appended");
+        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 4..ActionId::ALL.len() - 1], &[ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems], "clipboard IDs are appended");
     }
     #[test]
     fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
@@ -857,7 +860,7 @@ mod tests {
     #[test]
     fn focus_filter_default_is_appended_and_respects_older_bindings() {
         let command_f = default_shortcut(ActionId::FocusFolderItemsFilter).unwrap();
-        assert_eq!(ActionId::ALL.get(ActionId::ALL.len() - 4), Some(&ActionId::FocusFolderItemsFilter));
+        assert_eq!(ActionId::ALL.get(ActionId::ALL.len() - 5), Some(&ActionId::FocusFolderItemsFilter));
         assert_eq!(ActionId::FocusFolderItemsFilter.scope(), ShortcutScope::Window);
         let mut old = SettingsState::new();
         old.apply(SettingsSnapshot { bindings: vec![ActionBinding { action: ActionId::FocusOtherBrowser, shortcut: Some(command_f) }], ..SettingsSnapshot::default() });

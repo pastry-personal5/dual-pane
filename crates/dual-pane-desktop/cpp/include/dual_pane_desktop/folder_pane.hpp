@@ -657,6 +657,174 @@ class FolderFilterTextEdit final : public QLineEdit {
     std::function<void()> focus_loss_handler_;
 };
 
+/// The Browser's Path Edit Control. It shows the confirmed path while it has
+/// no focus, and focus always means editing, so a control that is not editing
+/// never holds focus. Return submits, Escape discards, and a pending or failed
+/// submission keeps its text until it ends. The application owns every result.
+class PathEditControl final : public QLineEdit {
+  public:
+    PathEditControl(FolderItemsListModel *model, std::function<void()> focus_list, QWidget *parent) : QLineEdit(parent), model_(model), focus_list_(std::move(focus_list)), accepted_seen_(model->getPathAcceptedCount()) {
+        setObjectName(QStringLiteral("pathEditControl"));
+        setAccessibleName(QStringLiteral("Path Edit Control"));
+        setFocusPolicy(Qt::StrongFocus);
+        QObject::connect(this, &QLineEdit::textEdited, this, [this] {
+            edited_ = true;
+            // Editing the failed text clears its error.
+            if (model_->getPathEntryState() == path_failed)
+                model_->discardPathEntry();
+        });
+        QObject::connect(model, &FolderItemsListModel::pathTextChanged, this, [this] {
+            if (!editing_)
+                setText(model_->getPathText());
+        });
+        QObject::connect(model, &FolderItemsListModel::pathEntryRevisionChanged, this, [this] { sync(); });
+        QObject::connect(model, &FolderItemsListModel::tabsRevisionChanged, this, [this] {
+            // A tab switch discards the draft; a running check finishes in its own tab.
+            if (editing_ && model_->activeTabId() != observed_tab_)
+                end_editing();
+        });
+    }
+
+    /// `EditPath`: moves focus here, which starts editing and selects all.
+    void edit() { setFocus(Qt::ShortcutFocusReason); }
+    [[nodiscard]] auto editing() const -> bool { return editing_; }
+
+  protected:
+    void focusInEvent(QFocusEvent *event) override {
+        QLineEdit::focusInEvent(event);
+        if (event->reason() == Qt::PopupFocusReason || editing_)
+            return;
+        model_->activateBrowser();
+        model_->beginPathEntry();
+        editing_ = true;
+        edited_ = false;
+        observed_tab_ = model_->activeTabId();
+        accepted_seen_ = model_->getPathAcceptedCount();
+        QTimer::singleShot(0, this, [this] {
+            if (editing_ && !edited_)
+                selectAll();
+        });
+    }
+    void focusOutEvent(QFocusEvent *event) override {
+        QLineEdit::focusOutEvent(event);
+        if (event->reason() == Qt::PopupFocusReason)
+            return;
+        QTimer::singleShot(0, this, [this] {
+            if (hasFocus() || !editing_)
+                return;
+            // A running check finishes on its own; anything else ends here.
+            if (model_->getPathEntryState() != path_pending)
+                end_editing();
+        });
+    }
+    void keyPressEvent(QKeyEvent *event) override {
+        if (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::KeypadModifier) {
+            if (event->key() == Qt::Key_Escape) {
+                event->accept();
+                escape();
+                return;
+            }
+            if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+                event->accept();
+                submit();
+                return;
+            }
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+
+  private:
+    static constexpr int path_pending = 1;
+    static constexpr int path_failed = 2;
+
+    void submit() {
+        if (model_->getPathEntryState() == path_pending)
+            return;
+        // Empty text acts like Escape and is never submitted.
+        if (text().isEmpty()) {
+            escape();
+            return;
+        }
+        model_->submitPath(observed_tab_, text(), edited_);
+    }
+    void escape() {
+        if (model_->getPathEntryState() == path_pending)
+            model_->cancelPathEntry(observed_tab_);
+        end_editing();
+        focus_list_();
+    }
+    /// Restores display mode with the confirmed path.
+    void end_editing() {
+        editing_ = false;
+        edited_ = false;
+        if (model_->getPathEntryState() != 0)
+            model_->discardPathEntry();
+        apply_state(0, QString());
+        setText(model_->getPathText());
+        deselect();
+        if (hasFocus())
+            focus_list_();
+    }
+    void apply_state(int state, const QString &error) {
+        const bool pending = state == path_pending;
+        const bool failed = state == path_failed;
+        setReadOnly(pending);
+        setProperty("pathPending", pending);
+        setProperty("pathError", failed);
+        repolish(this);
+        QString description;
+        if (pending)
+            description = QStringLiteral("Checking path");
+        else if (failed)
+            description = error;
+        else if (editing_)
+            description = QStringLiteral("Editing");
+        setAccessibleDescription(description);
+    }
+    /// Applies the application's submission state to the editor.
+    void sync() {
+        const int state = model_->getPathEntryState();
+        const auto error = model_->getPathError();
+        if (!editing_ && state != 0 && !hasFocus() && state == path_failed) {
+            // The result arrived after focus left: nothing to keep.
+            model_->discardPathEntry();
+            return;
+        }
+        if (state == 0) {
+            const bool accepted = model_->getPathAcceptedCount() != accepted_seen_;
+            accepted_seen_ = model_->getPathAcceptedCount();
+            if (editing_ || property("pathPending").toBool() || property("pathError").toBool()) {
+                const bool had_focus = hasFocus();
+                end_editing_quiet();
+                if (accepted && had_focus)
+                    focus_list_();
+            }
+            return;
+        }
+        apply_state(state, error);
+        if (state == path_failed) {
+            if (!editing_ && hasFocus())
+                editing_ = true;
+            QAccessibleAnnouncementEvent announcement(this, error);
+            QAccessible::updateAccessibility(&announcement);
+        }
+    }
+    void end_editing_quiet() {
+        editing_ = false;
+        edited_ = false;
+        apply_state(0, QString());
+        setText(model_->getPathText());
+        deselect();
+    }
+
+    FolderItemsListModel *model_;
+    std::function<void()> focus_list_;
+    bool editing_ = false;
+    bool edited_ = false;
+    quint64 observed_tab_ = 0;
+    int accepted_seen_ = 0;
+};
+
 /// Native state that belongs to the one temporary filter row in a Browser.
 /// It preserves the tab identity shown to the person until their event has
 /// crossed the CXX-Qt boundary.
@@ -1369,13 +1537,8 @@ class Browser final : public QWidget {
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
         layout->addWidget(new BrowserTabsStrip(model, this, [this] { folder_->view()->focusList(); }));
-        auto *path = new QLineEdit(this);
-        path->setObjectName(QStringLiteral("pathEditControl"));
-        path->setReadOnly(true);
-        path->setFocusPolicy(Qt::NoFocus);
-        path->setAttribute(Qt::WA_TransparentForMouseEvents);
-        path->setAccessibleName(QStringLiteral("Path Edit Control"));
-        layout->addWidget(path);
+        path_ = new PathEditControl(model, [this] { folder_->view()->focusList(); }, this);
+        layout->addWidget(path_);
         preview_splitter_->addWidget(folder_);
         preview_splitter_->addWidget(preview_);
         preview_splitter_->setCollapsible(0, false);
@@ -1404,7 +1567,6 @@ class Browser final : public QWidget {
             QTimer::singleShot(0, this, [this] { send_preview_target(); });
         });
         preview_->refresh(model);
-        QObject::connect(model, &FolderItemsListModel::pathTextChanged, this, [path, model] { path->setText(model->getPathText()); });
         overlay_->setObjectName(QStringLiteral("expandOverlay"));
         overlay_->setAccessibleName(QStringLiteral("Expand"));
         overlay_->setAlignment(Qt::AlignCenter);
@@ -1437,6 +1599,8 @@ class Browser final : public QWidget {
     [[nodiscard]] auto folder() const -> FolderPane * { return folder_; }
     [[nodiscard]] auto editors() const -> NameEditController * { return editors_; }
     void focus_filter() { folder_->focus_filter(); }
+    void edit_path() { path_->edit(); }
+    [[nodiscard]] auto path_control() const -> PathEditControl * { return path_; }
     [[nodiscard]] auto preview_splitter() const -> ThinSplitter * { return preview_splitter_; }
     [[nodiscard]] auto preview_height() const -> int { return chosen_preview_height_; }
     void set_preview_changed_handler(std::function<void()> handler) { preview_changed_ = std::move(handler); }
@@ -1498,6 +1662,7 @@ class Browser final : public QWidget {
     }
     FolderItemsListModel *model_;
     FolderPane *folder_;
+    PathEditControl *path_ = nullptr;
     ThinSplitter *preview_splitter_;
     PreviewPane *preview_;
     int chosen_preview_height_ = 0;

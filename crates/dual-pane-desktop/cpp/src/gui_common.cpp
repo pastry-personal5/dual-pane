@@ -67,6 +67,8 @@ auto style_sheet() -> QString {
       QWidget#browser[browserActive="true"][windowActive="true"], QWidget#browserTabsStrip[browserActive="true"][windowActive="true"], QLineEdit#pathEditControl[browserActive="true"][windowActive="true"] { background:%2; }
       QWidget#browser[browserActive="false"][windowActive="true"], QLineEdit#pathEditControl[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
       QWidget#browserTabsStrip[browserActive="false"][windowActive="true"] { background:%9; }
+      QLineEdit#pathEditControl[pathError="true"] { border:1px solid #D9534F; }
+      QLineEdit#pathEditControl[pathPending="true"] { font-style:italic; }
       QWidget#previewPane { background:%1; color:%3; }
       QWidget#previewPane[browserActive="true"][windowActive="true"] { background:%2; color:%3; }
       QWidget#previewPane[browserActive="false"][windowActive="true"] { background:%9; color:%10; }

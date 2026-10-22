@@ -15,6 +15,7 @@ mod context_menus;
 mod filter;
 mod navigation;
 mod operations;
+mod path_entry;
 mod preview;
 mod selection;
 mod status;
@@ -73,6 +74,14 @@ pub mod ffi {
         #[qproperty(bool, missing_folder, cxx_name = "missingFolder", READ, NOTIFY)]
         /// Changes whenever an inline name editor may open.
         #[qproperty(i32, editor_revision, cxx_name = "editorRevision", READ, NOTIFY)]
+        /// The Path Edit Control's submission state: 0 idle, 1 checking, 2 failed.
+        #[qproperty(i32, path_entry_state, cxx_name = "pathEntryState", READ, NOTIFY)]
+        /// Why the last submission failed, or empty.
+        #[qproperty(QString, path_error, cxx_name = "pathError", READ, NOTIFY)]
+        /// Changes whenever the submission state does.
+        #[qproperty(i32, path_entry_revision, cxx_name = "pathEntryRevision", READ, NOTIFY)]
+        /// Counts accepted submissions, so the editor can tell success from cancellation.
+        #[qproperty(i32, path_accepted_count, cxx_name = "pathAcceptedCount", READ, NOTIFY)]
         type FolderItemsListModel = super::FolderItemsListModelRust;
 
         #[cxx_override]
@@ -143,6 +152,15 @@ pub mod ffi {
         fn visible_revision(self: &FolderItemsListModel) -> u64;
         #[cxx_name = "editFilterText"]
         fn edit_filter_text(self: Pin<&mut FolderItemsListModel>, observed_tab: u64, text: &QString);
+        /// Captures the exact location the Path Edit Control is filled with.
+        #[cxx_name = "beginPathEntry"]
+        fn begin_path_entry(self: Pin<&mut FolderItemsListModel>);
+        #[cxx_name = "submitPath"]
+        fn submit_path(self: Pin<&mut FolderItemsListModel>, observed_tab: u64, text: &QString, edited: bool);
+        #[cxx_name = "cancelPathEntry"]
+        fn cancel_path_entry(self: Pin<&mut FolderItemsListModel>, observed_tab: u64);
+        #[cxx_name = "discardPathEntry"]
+        fn discard_path_entry(self: Pin<&mut FolderItemsListModel>);
         #[cxx_name = "startFileCommandObserved"]
         fn start_file_command_observed(self: Pin<&mut FolderItemsListModel>, command: i32, tab: u64, visible_revision: u64);
         /// Clipboard command: 0 Copy, 1 Cut, 2 Paste.
@@ -344,13 +362,19 @@ pub struct FolderItemsListModelRust {
     missing_folder: bool,
     editor_revision: i32,
     name_error: QString,
+    path_entry_state: i32,
+    path_error: QString,
+    path_entry_revision: i32,
+    path_accepted_count: i32,
+    /// The location the Path Edit Control was filled with when editing began.
+    path_origin: Option<dual_pane_domain::Location>,
     browser: BrowserSide,
     shown: BrowserViewModel,
     context_menu: Option<FolderItemsMenuSnapshot>,
 }
 impl Default for FolderItemsListModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), filter_text: QString::default(), filter_status: 0, filter_result_count: 0, no_filter_matches: false, cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), browser: BrowserSide::Left, shown: BrowserViewModel::default(), context_menu: None }
+        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), filter_text: QString::default(), filter_status: 0, filter_result_count: 0, no_filter_matches: false, cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), path_entry_state: 0, path_error: QString::default(), path_entry_revision: 0, path_accepted_count: 0, path_origin: None, browser: BrowserSide::Left, shown: BrowserViewModel::default(), context_menu: None }
     }
 }
 
@@ -436,6 +460,23 @@ impl ffi::FolderItemsListModel {
         self.as_mut().set_status_token(token);
         self.as_mut().set_missing_folder(missing);
         self.as_mut().set_editor_revision(editor);
+        let entry = self.rust().shown.path_entry();
+        let (state, error, entry_revision, accepted) = (
+            if entry.is_pending() {
+                1
+            } else if entry.error().is_some() {
+                2
+            } else {
+                0
+            },
+            QString::from(entry.error().unwrap_or_default()),
+            revision(entry.revision()),
+            revision(entry.accepted()),
+        );
+        self.as_mut().set_path_entry_state(state);
+        self.as_mut().set_path_error(error);
+        self.as_mut().set_path_entry_revision(entry_revision);
+        self.as_mut().set_path_accepted_count(accepted);
         self.as_mut().filter_view_changed();
     }
     /// Replaces the shown view, notifying Qt of only the rows that changed

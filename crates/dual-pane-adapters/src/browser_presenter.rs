@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{BrowserChrome, ClipboardAction, ClipboardRejection, FilterStatus, MonitoringStatus, Output, PreviewView, RowChange};
+use dual_pane_application::{BrowserChrome, ClipboardAction, ClipboardRejection, FilterStatus, MonitoringStatus, Output, PathEntryFailure, PathRejection, PreviewView, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
@@ -20,6 +20,44 @@ pub struct Summary {
     pub count: String,
     pub selected: String,
     pub size: String,
+}
+
+/// The Path Edit Control's submission state for the shown tab.
+///
+/// `error` stays until `discard_path_entry` runs, which the desktop calls when
+/// the text is edited, Escape is pressed, or focus leaves. Every change bumps
+/// `revision`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PathEntryView {
+    tab: Option<TabId>,
+    entered: String,
+    pending: bool,
+    error: Option<String>,
+    revision: u64,
+    accepted: u64,
+}
+
+impl PathEntryView {
+    /// The tab the state belongs to.
+    pub fn tab(&self) -> Option<TabId> {
+        self.tab
+    }
+    /// True while the submitted path is being checked.
+    pub fn is_pending(&self) -> bool {
+        self.pending
+    }
+    /// Why the last submission failed, as safe display text.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    /// How many submissions this Browser has accepted. The editor watches
+    /// it to know that editing ended in success.
+    pub fn accepted(&self) -> u64 {
+        self.accepted
+    }
 }
 
 /// What a Browser shows. Rows are formatted when requested, so updating the view
@@ -42,6 +80,7 @@ pub struct BrowserViewModel {
     missing_folder: bool,
     editor: Option<EditorRequest>,
     editor_revision: u64,
+    path_entry: PathEntryView,
     entries: Arc<[Entry]>,
     filter_text: String,
     filter_status: FilterStatus,
@@ -73,7 +112,7 @@ pub struct BrowserViewModel {
 
 impl Default for BrowserViewModel {
     fn default() -> Self {
-        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, entries: Arc::from([]), filter_text: String::new(), filter_status: FilterStatus::Ready, total_count: 0, visible_revision: 0, selection: Selection::default(), cursor_row: None, selection_revision: 0, preview: PreviewView::Collapsed, preview_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default(), pending_cut: Arc::from([]), pending_cut_kinds: HashMap::new() }
+        Self { location: None, location_text: String::new(), root_label: String::new(), loading: false, error: None, base_status: String::new(), status_text: String::new(), status_message: None, status_token: 0, monitoring: None, missing_folder: false, editor: None, editor_revision: 0, path_entry: PathEntryView::default(), entries: Arc::from([]), filter_text: String::new(), filter_status: FilterStatus::Ready, total_count: 0, visible_revision: 0, selection: Selection::default(), cursor_row: None, selection_revision: 0, preview: PreviewView::Collapsed, preview_revision: 0, summary: Summary::default(), scroll_hint: None, folder_items_revision: 0, folder_items_delta: None, listed_at: 0, time_zone: TimeZone::UTC, active_tab: None, tabs: Vec::new(), tabs_revision: 0, toolbar: Toolbar::default(), pending_cut: Arc::from([]), pending_cut_kinds: HashMap::new() }
     }
 }
 
@@ -231,6 +270,10 @@ impl BrowserViewModel {
     }
 
     /// Changes whenever an inline editor is allowed to open.
+    pub fn path_entry(&self) -> &PathEntryView {
+        &self.path_entry
+    }
+
     pub fn editor_revision(&self) -> u64 {
         self.editor_revision
     }
@@ -468,8 +511,17 @@ impl BrowserViewModel {
         }
     }
 
+    /// Forgets pending and failed path entry, bumping the revision when
+    /// anything was shown.
+    fn clear_path_entry(&mut self) {
+        if self.path_entry.pending || self.path_entry.error.is_some() || self.path_entry.tab.is_some() {
+            self.path_entry = PathEntryView { revision: self.path_entry.revision.wrapping_add(1), accepted: self.path_entry.accepted, ..PathEntryView::default() };
+            self.refresh_status();
+        }
+    }
+
     fn refresh_status(&mut self) {
-        self.status_text = self.status_message.clone().unwrap_or_else(|| self.base_status.clone());
+        self.status_text = if self.path_entry.pending { "Loading…".to_owned() } else { self.path_entry.error.clone().or_else(|| self.status_message.clone()).unwrap_or_else(|| self.base_status.clone()) };
     }
 
     fn refresh_base_status(&mut self) {
@@ -577,6 +629,18 @@ impl BrowserPresenter {
         }
     }
 
+    /// Records the text a submission carries, which names the subject of a
+    /// failure message.
+    pub fn note_entered_path(&mut self, text: &str) {
+        text.clone_into(&mut self.view.path_entry.entered);
+    }
+
+    /// Ends pending or failed path entry: the text was edited, Escape was
+    /// pressed, focus left, or the tab changed.
+    pub fn discard_path_entry(&mut self) {
+        self.view.clear_path_entry();
+    }
+
     /// Clears a refusal reason once its display time passed, unless a newer
     /// one replaced it.
     pub fn expire_status(&mut self, token: u64) {
@@ -625,7 +689,7 @@ impl BrowserPresenter {
             return;
         }
         let output_browser = match output {
-            Output::ClipboardRejected { browser: Some(browser), .. } | Output::ClipboardPrepared { browser, .. } | Output::ClipboardPasteStarted { browser, .. } | Output::LoadingStarted { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
+            Output::ClipboardRejected { browser: Some(browser), .. } | Output::ClipboardPrepared { browser, .. } | Output::ClipboardPasteStarted { browser, .. } | Output::LoadingStarted { browser, .. } | Output::PathEntryPending { browser, .. } | Output::PathEntryAccepted { browser, .. } | Output::PathEntryRejected { browser, .. } | Output::PathEntryCancelled { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
             Output::FolderItemsMenuReady { .. } | Output::ContextMenuPreferenceRejected { .. } | Output::ClipboardPresentationChanged { .. } | Output::ClipboardRejected { browser: None, .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::RevealInFinder { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::ActivateWindow { .. } | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
@@ -641,7 +705,12 @@ impl BrowserPresenter {
             None
         };
         match output {
-            Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => self.view.active_tab = Some(*tab),
+            Output::ActiveTabChanged { tab, .. } | Output::TabsChanged { active_tab: tab, .. } | Output::TabViewChanged { tab, .. } => {
+                if self.view.active_tab != Some(*tab) {
+                    self.view.clear_path_entry();
+                }
+                self.view.active_tab = Some(*tab);
+            }
             Output::LoadingStarted { tab, .. } | Output::FolderItemsLoaded { tab, .. } | Output::VisibleItemsChanged { tab, .. } | Output::SelectionChanged { tab, .. } | Output::FolderItemsFailed { tab, .. } | Output::FolderItemsCancelled { tab, .. } => {
                 if self.view.active_tab.is_some_and(|active| active != *tab) {
                     return;
@@ -701,6 +770,32 @@ impl BrowserPresenter {
                 view.folder_items_delta = None;
                 view.listed_at = *self.listed_at_by_tab.entry(*tab).or_insert_with(|| (self.clock)());
                 view.refresh_summary();
+            }
+            Output::PathEntryPending { tab, .. } => {
+                if view.active_tab == Some(*tab) {
+                    let entered = std::mem::take(&mut view.path_entry.entered);
+                    view.path_entry = PathEntryView { tab: Some(*tab), entered, pending: true, error: None, revision: view.path_entry.revision.wrapping_add(1), accepted: view.path_entry.accepted };
+                }
+            }
+            Output::PathEntryRejected { tab, reason, .. } => {
+                if view.active_tab == Some(*tab) {
+                    let message = path_entry_message(*reason, &view.path_entry.entered);
+                    let entered = std::mem::take(&mut view.path_entry.entered);
+                    view.path_entry = PathEntryView { tab: Some(*tab), entered, pending: false, error: Some(message), revision: view.path_entry.revision.wrapping_add(1), accepted: view.path_entry.accepted };
+                }
+            }
+            Output::PathEntryAccepted { tab, .. } => {
+                // An unedited Return is accepted without a pending state, so the shown tab decides.
+                if view.active_tab == Some(*tab) {
+                    view.clear_path_entry();
+                    view.path_entry.accepted = view.path_entry.accepted.wrapping_add(1);
+                    view.path_entry.revision = view.path_entry.revision.wrapping_add(1);
+                }
+            }
+            Output::PathEntryCancelled { tab, .. } => {
+                if view.path_entry.tab == Some(*tab) {
+                    view.clear_path_entry();
+                }
             }
             Output::LoadingStarted { .. } => {
                 view.loading = true;
@@ -819,8 +914,21 @@ fn row_kind(kind: EntryKind) -> RowKind {
 }
 
 fn error_message(error: &ListingError) -> String {
-    let path = location_text(error.location());
-    match error.kind() {
+    listing_kind_message(error.kind(), &location_text(error.location()))
+}
+
+/// Failure wording for entered text, with the entered path as the subject.
+fn path_entry_message(reason: PathEntryFailure, entered: &str) -> String {
+    match reason {
+        PathEntryFailure::Rejected(PathRejection::Malformed) => format!("“{entered}” isn’t a valid path."),
+        PathEntryFailure::Rejected(PathRejection::NoConfirmedFolder) => "This tab has no folder yet. Enter a full path that starts with / or ~.".to_owned(),
+        PathEntryFailure::Rejected(PathRejection::UndecodableText) => format!("“{entered}” can’t be matched to a file name. Use a relative path, Up, or Back."),
+        PathEntryFailure::Listing(kind) => listing_kind_message(kind, entered),
+    }
+}
+
+fn listing_kind_message(kind: ListingErrorKind, path: &str) -> String {
+    match kind {
         ListingErrorKind::ItemMissing => format!("“{path}” no longer exists."),
         ListingErrorKind::NotADirectory => format!("“{path}” is not a folder."),
         ListingErrorKind::PermissionDenied => format!("You don’t have permission to open “{path}”."),

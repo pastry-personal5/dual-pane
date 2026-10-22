@@ -389,16 +389,18 @@ auto run_text_editor_focus_checks(QApplication &app) -> int {
     auto *filter = new FolderFilterTextEdit(&window);
     auto *rename = new FileNameEditor(QStringLiteral("renameItemEditor"), QStringLiteral("Rename Item Editor"), QString(), [] {}, [] {}, &window);
     auto *favorite = new InlineNameEditor(QStringLiteral("favoriteItemAliasEditor"), QStringLiteral("Favorite Item Alias Editor"), QString(), [](const QString &) { return QString(); }, [] {}, new QLabel(&window), &window);
+    auto *path = new PathEditControl(&left_model, [left] { left->setFocus(Qt::OtherFocusReason); }, &window);
     auto *button = new QToolButton(&window);
     button->setFocusPolicy(Qt::StrongFocus);
-    for (QWidget *widget : std::initializer_list<QWidget *>{left, right, filter, rename, favorite, button})
+    for (QWidget *widget : std::initializer_list<QWidget *>{left, right, filter, rename, favorite, path, button})
         layout->addWidget(widget);
 
     // Per Browser: Copy, Cut, and Paste Items.
     std::array<std::array<int, 3>, 2> list_commands{};
-    int new_tabs = 0, quits = 0;
+    int new_tabs = 0, quits = 0, edit_paths = 0;
     QHash<QString, ShortcutBinder::Handler> handlers;
     handlers.insert(QStringLiteral("NewTab"), [&new_tabs] { ++new_tabs; });
+    handlers.insert(QStringLiteral("EditPath"), [&edit_paths] { ++edit_paths; });
     handlers.insert(QStringLiteral("QuitApplication"), [&quits] { ++quits; });
     QHash<QString, ShortcutBinder::ListHandler> list_handlers;
     const std::array<std::pair<QString, int>, 3> clipboard_commands = {{{QStringLiteral("CopyItems"), clipboard_copy}, {QStringLiteral("CutItems"), clipboard_cut}, {QStringLiteral("PasteItems"), clipboard_paste}}};
@@ -407,7 +409,7 @@ auto run_text_editor_focus_checks(QApplication &app) -> int {
     WorkspaceBridge bridge;
     ShortcutBinder shortcuts(&window, &bridge, handlers, {left, right}, list_handlers);
     // The delivered defaults; `delivered_shortcuts_map_to_qt_key_sequences` pins them.
-    shortcuts.rebind({{QStringLiteral("CopyItems"), QStringLiteral("Ctrl+C"), scope_folder_items_list}, {QStringLiteral("CutItems"), QStringLiteral("Ctrl+X"), scope_folder_items_list}, {QStringLiteral("PasteItems"), QStringLiteral("Ctrl+V"), scope_folder_items_list}, {QStringLiteral("NewTab"), QStringLiteral("Ctrl+T"), scope_window}, {QStringLiteral("QuitApplication"), QStringLiteral("Ctrl+Q"), scope_application}});
+    shortcuts.rebind({{QStringLiteral("CopyItems"), QStringLiteral("Ctrl+C"), scope_folder_items_list}, {QStringLiteral("CutItems"), QStringLiteral("Ctrl+X"), scope_folder_items_list}, {QStringLiteral("PasteItems"), QStringLiteral("Ctrl+V"), scope_folder_items_list}, {QStringLiteral("NewTab"), QStringLiteral("Ctrl+T"), scope_window}, {QStringLiteral("EditPath"), QStringLiteral("Ctrl+L"), scope_window}, {QStringLiteral("QuitApplication"), QStringLiteral("Ctrl+Q"), scope_application}});
     QObject::connect(&app, &QApplication::focusChanged, &window, [&shortcuts](QWidget *, QWidget *now) { shortcuts.followFocus(now); });
     window.show();
     window.activateWindow();
@@ -461,7 +463,12 @@ auto run_text_editor_focus_checks(QApplication &app) -> int {
         press(Qt::Key_V);
         check(list_commands == observed, "Folder Items commands need a focused Folder Items List");
 
-        const std::array<std::pair<QLineEdit *, std::string>, 3> editors = {{{filter, "filter row"}, {rename, "rename editor"}, {favorite, "Favorites name editor"}}};
+        // Positive control: Command+L starts path editing from outside a text field.
+        check(focus(button), "a button takes focus before Command+L");
+        press(Qt::Key_L);
+        check(edit_paths == 1, "Command+L reaches the Edit Path action outside a text field");
+
+        const std::array<std::pair<QLineEdit *, std::string>, 4> editors = {{{filter, "filter row"}, {rename, "rename editor"}, {favorite, "Favorites name editor"}, {path, "Path Edit Control"}}};
         for (const auto &[editor, name] : editors) {
             check(edits_text(editor), name + " is a text field");
             editor->setText(QStringLiteral("alpha"));
@@ -478,9 +485,31 @@ auto run_text_editor_focus_checks(QApplication &app) -> int {
             press(Qt::Key_A);
             check(editor->selectedText() == editor->text(), name + ": Command+A selects text");
             press(Qt::Key_T);
-            check(list_commands == observed && new_tabs == tabs, name + ": Folder Items and workspace shortcuts stand aside");
+            press(Qt::Key_L);
+            check(list_commands == observed && new_tabs == tabs && edit_paths == 1, name + ": Folder Items and workspace shortcuts stand aside, including Command+L");
         }
         check(!edits_text(left) && !edits_text(button), "lists and buttons are not text fields");
+
+        // The Path Edit Control: focus starts editing, Escape ends it and
+        // hands focus to the list, and focus never stays on a control that is
+        // not editing.
+        path->setText(QStringLiteral("/confirmed"));
+        check(focus(path) && path->editing(), "focusing the Path Edit Control starts editing");
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(path, &escape);
+        QApplication::processEvents();
+        check(!path->editing() && QApplication::focusWidget() == left, "Escape ends editing and focuses the Folder Items List");
+        check(path->focusPolicy() == Qt::StrongFocus, "the Path Edit Control joins the Tab order");
+        check(focus(path), "the Path Edit Control takes focus again");
+        path->setText(QStringLiteral("/typed"));
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(path, &enter);
+        QApplication::processEvents();
+        check(path->hasFocus() && path->editing(), "Return with no running workspace leaves the editor as it was");
+        path->clear();
+        QApplication::sendEvent(path, &enter);
+        QApplication::processEvents();
+        check(!path->editing(), "Return on empty text acts like Escape");
 
         // A rename waiting on its job is read-only; its text still copies,
         // and nothing else takes its keys.

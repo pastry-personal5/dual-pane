@@ -342,6 +342,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     QHash<QString, ShortcutBinder::Handler> handlers;
     handlers.insert(QStringLiteral("FocusOtherBrowser"), [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 1 : 0)->view()->focusList(); });
     handlers.insert(QStringLiteral("FocusFolderItemsFilter"), [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->focus_filter(); });
+    handlers.insert(QStringLiteral("EditPath"), [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->edit_path(); });
     handlers.insert(QStringLiteral("NavigateParent"), [active_model] { active_model()->goToParent(); });
     handlers.insert(QStringLiteral("CloseWindow"), [&window] { window.close(); });
     handlers.insert(QStringLiteral("ToggleFullScreen"), [&window] {
