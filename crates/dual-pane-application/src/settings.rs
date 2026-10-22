@@ -869,6 +869,18 @@ mod tests {
         assert_eq!(defaults.set_shortcuts(ActionId::FocusFolderItemsFilter, vec![default_shortcut(ActionId::FocusOtherBrowser).unwrap()]), Err(ShortcutRejection::Conflict(ActionId::FocusOtherBrowser)));
     }
     #[test]
+    fn edit_path_default_is_added_to_older_profiles_unless_command_l_is_taken() {
+        let command_l = default_shortcut(ActionId::EditPath).unwrap();
+        let mut older = SettingsState::new();
+        older.apply(SettingsSnapshot { bindings: vec![ActionBinding { action: ActionId::NewTab, shortcut: default_shortcut(ActionId::NewTab) }], ..SettingsSnapshot::default() });
+        assert_eq!(older.binding(ActionId::EditPath), Some(command_l), "an older profile gains the default");
+        let mut taken = SettingsState::new();
+        taken.apply(SettingsSnapshot { bindings: vec![ActionBinding { action: ActionId::FocusOtherBrowser, shortcut: Some(command_l) }], ..SettingsSnapshot::default() });
+        assert_eq!(taken.binding(ActionId::EditPath), None, "a shortcut an older profile accepted is never taken");
+        let mut defaults = SettingsState::new();
+        assert_eq!(defaults.set_shortcuts(ActionId::EditPath, vec![default_shortcut(ActionId::FocusFolderItemsFilter).unwrap()]), Err(ShortcutRejection::Conflict(ActionId::FocusFolderItemsFilter)));
+    }
+    #[test]
     fn clipboard_defaults_append_without_overwriting_custom_conflicting_or_unbound_profiles() {
         let custom = Shortcut::new(true, true, false, false, Key::Character('C'));
         let mut state = SettingsState::new();

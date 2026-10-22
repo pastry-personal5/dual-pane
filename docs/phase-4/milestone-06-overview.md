@@ -1,6 +1,6 @@
 # P4-M6: Navigate by entered path
 
-Status: Planned
+Status: Active
 
 This milestone turns the read-only Path Edit Control into a navigation entry point for the active Browser Tab. The [architecture plan](milestone-06-architecture.md) defines parsing, path identity, worker placement, and state handoff. This checklist is the definition of done.
 
@@ -59,10 +59,10 @@ The accepted behavior is recorded in [UX GUI](../ux-gui.md), [product behavior](
 ## Completion checklist
 
 - [x] The owner decided the [owner decisions](#owner-decisions) on 2026-10-19. The record is in this overview, the architecture plan follows it, and the links to the renamed section are updated.
-- [ ] Add `EditPath` to the end of `ActionId::ALL`. It is named **Edit Path**, has Window scope and the `Command+L` default, and appears in Keyboard Shortcuts Settings. Older profiles gain it through the existing missing-action completion, which never takes a shortcut an older profile already accepted. Conflict, rebinding, reset, and persistence tests pass. `scripts/check-settings-window.sh` shows the action.
+- [x] Add `EditPath` to the end of `ActionId::ALL`. It is named **Edit Path**, has Window scope and the `Command+L` default, and appears in Keyboard Shortcuts Settings. Older profiles gain it through the existing missing-action completion, which never takes a shortcut an older profile already accepted. Conflict, rebinding, reset, and persistence tests pass. `scripts/check-settings-window.sh` shows the action.
 - [ ] `EditPath` is available whenever the active Browser can navigate, including while its tab is loading, shows an error, or shows the Missing Folder Overlay. Typing an absolute path is the way out of such a state. It is unavailable wherever row activation and Back are, as the existing availability code decides.
 - [ ] `Command+L`, a click on the Path Edit Control, and Full Keyboard Access traversal start editing the active Browser's Path Edit Control and select all its text, without changing Folder Items selection. A click on an inactive Browser's control also activates that Browser. `Command+L` does nothing while any text field, including the control itself, has focus (decision 12). When editing ends, the control shows only the confirmed path. A confirmed-path update during editing, a pending check, or a failed submission never overwrites the text. Such updates come from Back, a watcher refresh, a launch target, or Reset Settings.
-- [ ] Qt-free parsing resolves the following and rejects malformed text with a reason, without I/O:
+- [x] Qt-free parsing resolves the following and rejects malformed text with a reason, without I/O:
   - Absolute paths.
   - `~` and `~/` paths, using the workspace's home location rather than `$HOME`.
   - Paths relative to the submitting tab's captured confirmed folder.
@@ -72,10 +72,10 @@ The accepted behavior is recorded in [UX GUI](../ux-gui.md), [product behavior](
   - Text containing U+FFFD or an unpaired surrogate is refused, never replaced.
 - [ ] A worker resolves each component to its stored name without replacing link names. The resolved Location therefore equals the Location reached through Folder Items rows, even when the typed text differs in letter case or Unicode normalization. Temporary-directory tests show the two routes share history, sort memory, and operation refresh.
 - [ ] A file target hidden by the filter clears it, and a file target hidden by Item Visibility selects nothing (decisions 13 and 14). Tests cover both.
-- [ ] An accepted folder navigates through the ordinary workflow: history, filter clearing, sort memory, watching, and session saving. An unedited or same-location submission is a same-folder reread. A file, or a link to one, opens its folder with the file selected. A package, or a link to one, opens its contents. A link to a folder keeps the link's name in the Location.
+- [x] An accepted folder navigates through the ordinary workflow: history, filter clearing, sort memory, watching, and session saving. An unedited or same-location submission is a same-folder reread. A file, or a link to one, opens its folder with the file selected. A package, or a link to one, opens its contents. A link to a folder keeps the link's name in the Location.
 - [ ] The resolver maps its errors onto the existing listing error kinds as the [architecture plan](milestone-06-architecture.md#application-state-and-handoff) states. These failures receive distinct feedback in the control's error style, the Status Bar, and an announcement: malformed, missing, not a folder, permission denied, privacy restricted, busy, and internal. A failure leaves the tab's Folder Items, confirmed path, selection, error state, and command availability unchanged.
-- [ ] Cancellation is covered. A check is cancelled or superseded by Escape, a newer submission, a navigation the person starts in that tab (a row, Back, Forward, Up, `Command+R`, a Favorite, or a launch target), or closing the tab. Watcher and operation rereads of the current folder do not cancel it. A cancelled or late result never navigates a tab after a newer request and never reaches a different tab. A tab or Browser switch discards failed text and lets a running check finish in its own tab (decision 6). A late success navigates that tab in the background, and neither it nor a late failure reaches another tab's editor. Busy read capacity reports busy without changing the tab.
-- [ ] `scripts/check-text-editor-focus.sh` builds the Path Edit Control. It verifies that while editing, Command+L does nothing, Command+C, Command+X, Command+V, and Command+A edit the text, Folder Items and workspace shortcuts stand aside, Return and Escape reach the editor, and Quit stays bound.
+- [x] Cancellation is covered. A check is cancelled or superseded by Escape, a newer submission, a navigation the person starts in that tab (a row, Back, Forward, Up, `Command+R`, a Favorite, or a launch target), or closing the tab. Watcher and operation rereads of the current folder do not cancel it. A cancelled or late result never navigates a tab after a newer request and never reaches a different tab. A tab or Browser switch discards failed text and lets a running check finish in its own tab (decision 6). A late success navigates that tab in the background, and neither it nor a late failure reaches another tab's editor. Busy read capacity reports busy without changing the tab.
+- [x] `scripts/check-text-editor-focus.sh` builds the Path Edit Control. It verifies that while editing, Command+L does nothing, Command+C, Command+X, Command+V, and Command+A edit the text, Folder Items and workspace shortcuts stand aside, Return and Escape reach the editor, and Quit stays bound.
 - [ ] While a check runs, the control shows the submitted text read-only with a busy cue, and the Status Bar shows "Loading…" (decision 11). Escape, a newer submission, or a navigation the person starts in that tab ends the pending state and restores the confirmed path. A check that accepts the folder ends editing before the ordinary read takes over. Tests cover each exit.
 - [ ] The accessible name stays “Path Edit Control”. Editing, pending, and error states are exposed to assistive technology, and errors are announced. Focus moves to the Folder Items List after a successful submission and after Escape (decisions 4 and 5).
 - [ ] Qt-free tests cover parsing, home-relative and relative bases, root, history, stale and cancelled results, and tab switching. Non-UTF-8 coverage uses synthetic byte-exact Locations. Native tests use temporary directories and a disposable profile to cover the following:
@@ -88,9 +88,19 @@ The accepted behavior is recorded in [UX GUI](../ux-gui.md), [product behavior](
   - A package, a file, an unreadable folder, root, and a slow or cancelled check.
   - Native non-UTF-8 fixtures are not applicable on the APFS temporary volume, which refuses such names (`EILSEQ`). Record that here rather than leaving the case unrun.
 - [x] The accepted [owner decisions](#owner-decisions) are recorded in [UX GUI](../ux-gui.md), in [product behavior](../product-behavior.md) where scope widens, and in the [changelog](changelog.md), all dated 2026-10-19.
-- [ ] With the implementation, replace the released-version read-only Path Edit Control note in [UX GUI](../ux-gui.md), and update the [UX terms](../ux-terms.md) `EditPath` row and the README where user-visible behavior changes.
-- [ ] Direct `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass, and so do `make check`, `scripts/check-settings-window.sh`, and `scripts/check-text-editor-focus.sh`. Record evidence here before marking P4-M6 Done.
+- [x] With the implementation, replace the released-version read-only Path Edit Control note in [UX GUI](../ux-gui.md), and update the [UX terms](../ux-terms.md) `EditPath` row and the README where user-visible behavior changes.
+- [x] Direct `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass, and so do `make check`, `scripts/check-settings-window.sh`, and `scripts/check-text-editor-focus.sh`. Record evidence here before marking P4-M6 Done.
 
 ## Acceptance evidence
 
-Pending implementation.
+Verified 2026-10-22:
+
+- `EditPath`: `edit_path_default_is_added_to_older_profiles_unless_command_l_is_taken` and the catalogue tests in `settings.rs`; `scripts/check-settings-window.sh` passes.
+- Parsing: `crates/dual-pane-application/tests/path_entry.rs`.
+- Navigation, supersession, cancellation, tab switching, and error-tab entry: `crates/dual-pane-application/tests/path_submission.rs` (19 tests).
+- Resolver: `path_resolver.rs` unit tests (links, loops, packages, files, permission, Unicode variants) and the runtime tests for lane, busy, and cancellation. APFS refuses non-UTF-8 names (`EILSEQ`), so native non-UTF-8 fixtures are not applicable; synthetic byte-exact Locations cover that case.
+- Editor: `scripts/check-text-editor-focus.sh` passes with the Path Edit Control.
+- Gate: `make check` (which runs the direct fmt, clippy, and test commands) passed with 558 tests, 1 ignored, 0 failed; `scripts/check-settings-window.sh` and `scripts/check-text-editor-focus.sh` pass.
+- Defect found in review and fixed: an unedited Return left the editor in edit mode, because the presenter ignored `PathEntryAccepted` without a pending state.
+
+Still unchecked, with no native evidence yet: click and Full Keyboard Access activation of an inactive Browser, pending and error cues and announcements in a running window, hidden-file selection under Item Visibility, shared history and sort memory between the two routes, and `EditPath` availability in loading, error, and Missing Folder states.

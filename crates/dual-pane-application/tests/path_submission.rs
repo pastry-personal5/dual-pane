@@ -259,3 +259,18 @@ fn a_filter_that_hides_the_file_is_cleared_but_one_that_shows_it_stays() {
         assert_eq!(shows_all, cleared, "filter {filter_text:?}");
     }
 }
+
+#[test]
+fn an_error_tab_accepts_an_absolute_path_and_refuses_a_relative_one() {
+    let mut workspace = Workspace::new();
+    let transition = workspace.handle(Command::Navigate { browser: LEFT, location: folder("gone") }.into());
+    let (_, tab, token, _) = read(&transition).unwrap();
+    workspace.handle(Event::FolderItemsFailed { browser: LEFT, tab, token, kind: ListingErrorKind::ItemMissing }.into());
+    let relative = submit(&mut workspace, tab, "inside");
+    assert!(has(&relative, |output| matches!(output, Output::PathEntryRejected { reason: PathEntryFailure::Rejected(PathRejection::NoConfirmedFolder), .. })));
+    assert!(relative.work.is_empty());
+    let absolute = submit(&mut workspace, tab, "/b");
+    let (_, check, candidate) = resolve_request(&absolute);
+    let accepted = resolved(&mut workspace, tab, check, candidate.clone(), PathTarget::Folder);
+    assert_eq!(read(&accepted).unwrap().3, candidate, "typing an absolute path is the way out of an error");
+}
