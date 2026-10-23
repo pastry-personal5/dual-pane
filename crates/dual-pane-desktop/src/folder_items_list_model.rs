@@ -12,6 +12,7 @@ use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection
 use crate::workspace_bridge::{key_sequence, revision, with_session};
 
 mod context_menus;
+mod drag_drop;
 mod filter;
 mod navigation;
 mod operations;
@@ -150,6 +151,18 @@ pub mod ffi {
         fn active_tab_id(self: &FolderItemsListModel) -> u64;
         #[cxx_name = "visibleRevision"]
         fn visible_revision(self: &FolderItemsListModel) -> u64;
+        #[cxx_name = "browserSide"]
+        fn browser_side(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "rowIsSelected"]
+        fn row_is_selected(self: &FolderItemsListModel, row: i32) -> bool;
+        #[cxx_name = "beginFileDrag"]
+        fn begin_file_drag(self: Pin<&mut FolderItemsListModel>, tab: u64, visible_revision: u64) -> u64;
+        #[cxx_name = "previewFileDrop"]
+        fn preview_file_drop(self: Pin<&mut FolderItemsListModel>, drag: u64, source_browser: i32, target_kind: i32, target_tab: u64, row: i32, copy: bool) -> i32;
+        #[cxx_name = "acceptFileDrop"]
+        fn accept_file_drop(self: Pin<&mut FolderItemsListModel>, drag: u64, source_browser: i32, target_kind: i32, target_tab: u64, row: i32, copy: bool) -> bool;
+        #[cxx_name = "cancelFileDrag"]
+        fn cancel_file_drag(self: Pin<&mut FolderItemsListModel>, drag: u64);
         #[cxx_name = "editFilterText"]
         fn edit_filter_text(self: Pin<&mut FolderItemsListModel>, observed_tab: u64, text: &QString);
         /// Captures the exact location the Path Edit Control is filled with.
@@ -475,8 +488,8 @@ impl ffi::FolderItemsListModel {
         );
         self.as_mut().set_path_entry_state(state);
         self.as_mut().set_path_error(error);
-        self.as_mut().set_path_entry_revision(entry_revision);
         self.as_mut().set_path_accepted_count(accepted);
+        self.as_mut().set_path_entry_revision(entry_revision);
         self.as_mut().filter_view_changed();
     }
     /// Replaces the shown view, notifying Qt of only the rows that changed
@@ -541,6 +554,9 @@ impl ffi::FolderItemsListModel {
     }
     fn visible_revision(&self) -> u64 {
         self.rust().shown.visible_revision()
+    }
+    fn browser_side(&self) -> i32 {
+        if self.rust().browser == BrowserSide::Left { 0 } else { 1 }
     }
     fn submit_ui(mut self: Pin<&mut Self>, event: UiEvent) {
         let browser = self.rust().browser;

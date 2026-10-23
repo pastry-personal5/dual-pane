@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{BrowserChrome, ClipboardAction, ClipboardRejection, FilterStatus, MonitoringStatus, Output, PathEntryFailure, PathRejection, PreviewView, RowChange};
+use dual_pane_application::{BrowserChrome, ClipboardAction, ClipboardRejection, DropRejection, FilterStatus, MonitoringStatus, Output, PathEntryFailure, PathRejection, PreviewView, RowChange};
 use dual_pane_domain::{BrowserSide, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, ScrollAnchor, Selection, SortSpec, TabId, entry_type_text};
 use jiff::tz::TimeZone;
 
@@ -689,8 +689,8 @@ impl BrowserPresenter {
             return;
         }
         let output_browser = match output {
-            Output::ClipboardRejected { browser: Some(browser), .. } | Output::ClipboardPrepared { browser, .. } | Output::ClipboardPasteStarted { browser, .. } | Output::LoadingStarted { browser, .. } | Output::PathEntryPending { browser, .. } | Output::PathEntryAccepted { browser, .. } | Output::PathEntryRejected { browser, .. } | Output::PathEntryCancelled { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
-            Output::FolderItemsMenuReady { .. } | Output::ContextMenuPreferenceRejected { .. } | Output::ClipboardPresentationChanged { .. } | Output::ClipboardRejected { browser: None, .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::RevealInFinder { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::ActivateWindow { .. } | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
+            Output::DropChecking { browser, .. } | Output::DropRejected { browser, .. } | Output::DropStarted { browser, .. } | Output::ClipboardRejected { browser: Some(browser), .. } | Output::ClipboardPrepared { browser, .. } | Output::ClipboardPasteStarted { browser, .. } | Output::LoadingStarted { browser, .. } | Output::PathEntryPending { browser, .. } | Output::PathEntryAccepted { browser, .. } | Output::PathEntryRejected { browser, .. } | Output::PathEntryCancelled { browser, .. } | Output::FolderItemsLoaded { browser, .. } | Output::VisibleItemsChanged { browser, .. } | Output::SelectionChanged { browser, .. } | Output::PreviewChanged { browser, .. } | Output::FolderItemsFailed { browser, .. } | Output::FolderItemsCancelled { browser, .. } | Output::ActiveBrowserChanged { browser } | Output::ActiveTabChanged { browser, .. } | Output::TabsChanged { browser, .. } | Output::TabViewChanged { browser, .. } | Output::OperationRejected { browser, .. } | Output::NameEditorOpened { browser, .. } => *browser,
+            Output::DragStarted { .. } | Output::DropPreviewed { .. } | Output::FolderItemsMenuReady { .. } | Output::ContextMenuPreferenceRejected { .. } | Output::ClipboardPresentationChanged { .. } | Output::ClipboardRejected { browser: None, .. } | Output::ShortcutEditRejected { .. } | Output::OperationChanged { .. } | Output::OperationDismissed { .. } | Output::OpenItem { .. } | Output::RevealInFinder { .. } | Output::QuitConfirmationRequired { .. } | Output::QuitAccepted | Output::ActivateWindow { .. } | Output::SessionRestored { .. } | Output::LayoutReset | Output::FavoritesChanged { .. } | Output::FavoriteEditRejected { .. } | Output::SettingsSaveFailed { .. } | Output::SettingsLoadFailed { .. } | Output::NoticeAdded { .. } | Output::OpenNotices => return,
         };
         if output_browser != self.browser {
             return;
@@ -721,6 +721,18 @@ impl BrowserPresenter {
         }
         let view = &mut self.view;
         match output {
+            Output::DropChecking { .. } => {
+                view.status_message = Some("Checking destination…".to_owned());
+                view.status_token = view.status_token.wrapping_add(1);
+            }
+            Output::DropRejected { reason, .. } => {
+                view.status_message = Some(drop_rejection_text(*reason).to_owned());
+                view.status_token = view.status_token.wrapping_add(1);
+            }
+            Output::DropStarted { action, .. } => {
+                view.status_message = Some(format!("{} started.", if *action == dual_pane_application::DropAction::Copy { "Copy" } else { "Move" }));
+                view.status_token = view.status_token.wrapping_add(1);
+            }
             Output::ClipboardRejected { reason, .. } => {
                 view.status_message = Some(clipboard_rejection_text(*reason).to_owned());
                 view.status_token = view.status_token.wrapping_add(1);
@@ -895,6 +907,23 @@ fn clipboard_rejection_text(reason: ClipboardRejection) -> &'static str {
         ClipboardRejection::SameSourceAndDestination => "Items cannot be pasted into their current folder.",
         ClipboardRejection::DestinationWithinSource => "A folder cannot be pasted inside itself.",
         ClipboardRejection::JournalUnavailable => "Copy is unavailable until the safety journal is ready.",
+    }
+}
+
+fn drop_rejection_text(reason: DropRejection) -> &'static str {
+    match reason {
+        DropRejection::UnknownDrag => "That drag is no longer available.",
+        DropRejection::StaleSource => "The dragged folder view changed. Try again.",
+        DropRejection::StaleTarget => "The drop target changed. Try again.",
+        DropRejection::NoSelection => "Select one or more items first.",
+        DropRejection::UnsupportedSource => "The selected items cannot be dragged.",
+        DropRejection::UnsupportedTarget => "Items cannot be dropped there.",
+        DropRejection::UnsupportedAction => "That drag action is not supported.",
+        DropRejection::DestinationUnavailable => "The destination folder is not available.",
+        DropRejection::SameSourceAndDestination => "Items cannot be moved or copied into their current folder.",
+        DropRejection::DestinationWithinSource => "A folder cannot be placed inside itself.",
+        DropRejection::DuplicateSource => "The drag contains duplicate or overlapping items.",
+        DropRejection::JournalUnavailable => "Copy is unavailable until the safety journal is ready.",
     }
 }
 

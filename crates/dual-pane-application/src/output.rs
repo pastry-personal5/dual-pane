@@ -1,4 +1,4 @@
-use crate::{ActionId, ClipboardAction, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ContextMenuPreferenceRejection, FavoriteEdit, FavoriteRejection, FavoritesRecords, FilterStatus, FolderItemsMenuSnapshot, Notice, OperationJob, PathEntryFailure, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
+use crate::{ActionId, ClipboardAction, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ContextMenuPreferenceRejection, DragId, DropAction, DropPreview, DropRejection, DropRequestId, FavoriteEdit, FavoriteRejection, FavoritesRecords, FilterStatus, FolderItemsMenuSnapshot, Notice, OperationJob, PathEntryFailure, PreviewView, SettingsFailure, ShortcutRejection, WindowLayout};
 use dual_pane_domain::{BrowserSide, Entry, EntryName, ListingError, Location, OperationCommand, OperationId, OperationRejection, ScrollAnchor, Selection, TabId};
 use std::sync::Arc;
 
@@ -18,6 +18,30 @@ pub struct RowChange {
 /// folder, a first listing, or a gateway change that does not fit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
+    DragStarted {
+        drag: DragId,
+        browser: BrowserSide,
+        tab: TabId,
+        count: usize,
+    },
+    DropPreviewed {
+        preview: Result<DropPreview, DropRejection>,
+    },
+    DropChecking {
+        request: DropRequestId,
+        browser: BrowserSide,
+        tab: TabId,
+    },
+    DropRejected {
+        browser: BrowserSide,
+        tab: TabId,
+        reason: DropRejection,
+    },
+    DropStarted {
+        browser: BrowserSide,
+        tab: TabId,
+        action: DropAction,
+    },
     FolderItemsMenuReady {
         snapshot: Option<FolderItemsMenuSnapshot>,
     },

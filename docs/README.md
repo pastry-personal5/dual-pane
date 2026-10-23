@@ -27,7 +27,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-4/milestone-04-architecture.md](phase-4/milestone-04-architecture.md) | P4-M4 clipboard intent and existing operation-engine handoff. |
 | [phase-4/milestone-05-overview.md](phase-4/milestone-05-overview.md) | P4-M5 checklist for Copy, Cut, Paste, and Finder clipboard interchange. |
 | [phase-4/milestone-05-architecture.md](phase-4/milestone-05-architecture.md) | P4-M5 macOS clipboard adapter, Finder Copy publishing and reading, and command routing. |
-| [phase-4/milestone-06-overview.md](phase-4/milestone-06-overview.md) | P4-M6 accepted owner decisions and checklist for editable path navigation. |
+| [phase-4/milestone-06-overview.md](phase-4/milestone-06-overview.md) | Completed P4-M6 decisions, checklist, and acceptance evidence for editable path navigation. |
 | [phase-4/milestone-06-architecture.md](phase-4/milestone-06-architecture.md) | P4-M6 parsing, stored-name resolution, read-lane placement, stale guards, and editor approach. |
 | [phase-4/milestone-07-overview.md](phase-4/milestone-07-overview.md) | P4-M7 checklist for safe file drag and drop. |
 | [phase-4/milestone-07-architecture.md](phase-4/milestone-07-architecture.md) | P4-M7 drag payload, target, and operation handoff. |

@@ -7,6 +7,7 @@
 mod actions;
 mod clipboard;
 mod context_menu;
+mod drag_drop;
 mod filter;
 mod input;
 mod operations;
@@ -21,6 +22,7 @@ mod workspace;
 pub use actions::{ActionSpec, FOLDER_ITEM_ACTION_COUNT, FolderItemSpec, MenuAvailability, MenuInvocation, MenuOperation, MenuTarget, ShortcutCategory, folder_item_spec, spec as action_spec};
 pub use clipboard::{ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, TransferId};
 pub use context_menu::{FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken};
+pub use drag_drop::{DragId, DropAction, DropPreflight, DropPreview, DropRejection, DropRequestId, DropTarget, ResolvedDropDestination};
 pub use filter::{FilterFailure, FilterRequest, FilterResult, FilterStatus, project_filter};
 pub use input::{Command, Event, Input, ResolvedTarget};
 pub use operations::{ByteProgress, CleanupResult, FinalizeResult, NameProblem, OperationEffect, OperationErrorKind, OperationFailure, OperationJob, OperationOutcome, OperationProgress, OperationStatus, PendingDecision, PlannedItem, ScanFailure, ScanSkip, StepResult};

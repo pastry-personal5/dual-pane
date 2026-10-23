@@ -15,6 +15,7 @@ class BrowserTabButton final : public QAbstractButton {
         setObjectName(QStringLiteral("browserTab"));
         setFocusPolicy(Qt::TabFocus);
         setMouseTracking(true);
+        setAcceptDrops(true);
         close_->setObjectName(QStringLiteral("closeTabButton"));
         close_->setText(QStringLiteral("×"));
         close_->setToolTip(QStringLiteral("Close Tab"));
@@ -59,6 +60,15 @@ class BrowserTabButton final : public QAbstractButton {
         if (hasFocus()) {
             painter.setPen(QColor(QString::fromLatin1(active_color)));
             painter.drawRect(rect().adjusted(1, 1, -2, -2));
+        }
+        const int drop_count = property("fileDropCount").toInt();
+        if (drop_count > 0) {
+            painter.setPen(QPen(QColor(QString::fromLatin1(active_color)), 2));
+            painter.drawRect(rect().adjusted(2, 2, -3, -3));
+            const auto action = property("fileDropCopy").toBool() ? QStringLiteral("Copy") : QStringLiteral("Move");
+            painter.setPen(QColor(QString::fromLatin1(text_color)));
+            painter.drawText(rect().adjusted(4, 0, -4, 0), Qt::AlignCenter, QStringLiteral("%1 %2").arg(action).arg(drop_count));
+            return;
         }
         painter.setPen(QColor(QString::fromLatin1(browser_active ? text_color : inactive_text_color)));
         const auto text_rect = rect().adjusted(8, 0, -22, 0);
@@ -139,6 +149,12 @@ class BrowserTabsStrip final : public QWidget {
     }
 
   private:
+    static void clear_file_drop(BrowserTabButton *button) {
+        button->setProperty("fileDropCount", 0);
+        button->setProperty("fileDropCopy", false);
+        button->setAccessibleDescription(button->toolTip());
+        button->update();
+    }
     void rebuild() {
         if (dragging_)
             cancel_drag();
@@ -195,6 +211,48 @@ class BrowserTabsStrip final : public QWidget {
         auto *button = dynamic_cast<BrowserTabButton *>(watched);
         if (button == nullptr)
             return QWidget::eventFilter(watched, event);
+        if (event->type() == QEvent::DragLeave) {
+            clear_file_drop(button);
+            event->accept();
+            return true;
+        }
+        if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove || event->type() == QEvent::Drop) {
+            auto *drop = dynamic_cast<QDropEvent *>(event);
+            const auto drag = internal_file_drag(drop);
+            const int source_browser = drop == nullptr || drop->source() == nullptr ? -1 : drop->source()->property("dualPaneBrowser").toInt();
+            const bool supported = drop != nullptr && drop_modifiers_supported(drop->modifiers());
+            const bool copy = supported && drop_is_copy(drop->modifiers());
+            const int count = drag && supported ? model_->previewFileDrop(*drag, source_browser, 2, button->id(), -1, copy) : -1;
+            if (event->type() == QEvent::Drop) {
+                clear_file_drop(button);
+                if (drag && count > 0 && model_->acceptFileDrop(*drag, source_browser, 2, button->id(), -1, copy)) {
+                    drop->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+                    drop->accept();
+                } else if (drop != nullptr) {
+                    drop->ignore();
+                }
+                return true;
+            }
+            if (drop == nullptr || count <= 0) {
+                clear_file_drop(button);
+                if (drop != nullptr)
+                    drop->ignore();
+                return true;
+            }
+            button->setProperty("fileDropCount", count);
+            button->setProperty("fileDropCopy", copy);
+            const auto description = QStringLiteral("%1 %2 %3 into %4").arg(copy ? QStringLiteral("Copy") : QStringLiteral("Move")).arg(count).arg(count == 1 ? QStringLiteral("Item") : QStringLiteral("Items")).arg(button->toolTip());
+            const bool changed = button->accessibleDescription() != description;
+            button->setAccessibleDescription(description);
+            if (changed) {
+                QAccessibleAnnouncementEvent announcement(button, description);
+                QAccessible::updateAccessibility(&announcement);
+            }
+            button->update();
+            drop->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+            drop->accept();
+            return true;
+        }
         const auto *mouse = dynamic_cast<QMouseEvent *>(event);
         if (event->type() == QEvent::MouseButtonPress && mouse != nullptr && mouse->button() == Qt::LeftButton) {
             pressed_ = button;

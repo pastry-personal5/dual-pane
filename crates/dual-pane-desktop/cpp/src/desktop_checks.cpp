@@ -20,6 +20,419 @@ QT_BEGIN_NAMESPACE
 Q_GUI_EXPORT auto qt_sendShortcutOverrideEvent(QObject *receiver, ulong timestamp, int key, Qt::KeyboardModifiers modifiers, const QString &text, bool auto_repeat, ushort count) -> bool;
 QT_END_NAMESPACE
 namespace dual_pane_desktop::gui {
+namespace {
+struct PathAnnouncementCapture {
+    QObject *object = nullptr;
+    QString message;
+};
+auto path_announcement_capture() -> PathAnnouncementCapture & {
+    static PathAnnouncementCapture capture;
+    return capture;
+}
+void record_path_check_announcement(QAccessibleEvent *event) {
+    if (event->type() == QAccessible::Announcement && event->object() == path_announcement_capture().object)
+        if (auto *announcement = dynamic_cast<QAccessibleAnnouncementEvent *>(event))
+            path_announcement_capture().message = announcement->message();
+}
+} // namespace
+
+void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, const std::array<Browser *, 2> &browsers, FolderItemsListModel &left_model) {
+    const QString root = qEnvironmentVariable("DUAL_PANE_INTERNAL_PATH_ENTRY_ROOT");
+    const QString start = root + QStringLiteral("/Start");
+    const QString stored = root + QStringLiteral("/Stored");
+    const QString missing = root + QStringLiteral("/Missing");
+    auto *path = browsers.at(0)->path_control();
+    auto *right_path = browsers.at(1)->path_control();
+    auto *list = browsers.at(0)->view();
+    auto *timer = new QTimer(&window);
+    timer->setInterval(20);
+    struct State {
+        int step = 0;
+        QElapsedTimer elapsed;
+        QAccessible::UpdateHandler previous_handler = nullptr;
+    };
+    auto state = std::make_shared<State>();
+    state->elapsed.start();
+    path_announcement_capture().object = path;
+    path_announcement_capture().message.clear();
+    state->previous_handler = QAccessible::installUpdateHandler(record_path_check_announcement);
+    const auto finish = [state, timer](bool passed, const char *reason) {
+        timer->stop();
+        QAccessible::installUpdateHandler(state->previous_handler);
+        path_announcement_capture().object = nullptr;
+        if (!passed)
+            std::cerr << "Path entry check failed: " << reason << '\n';
+        QApplication::exit(passed ? 0 : 1);
+    };
+    const auto type_path = [path](const QString &value) {
+        path->setFocus(Qt::OtherFocusReason);
+        path->selectAll();
+        QInputMethodEvent commit;
+        commit.setCommitString(value);
+        QApplication::sendEvent(path, &commit);
+        return path->text() == value;
+    };
+    const auto enter = [path] {
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(path, &key);
+    };
+    const auto escape = [path] {
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(path, &key);
+    };
+    QObject::connect(timer, &QTimer::timeout, &window, [=, &bridge, &left_model, &window] {
+        if (state->elapsed.elapsed() > 10000) {
+            finish(false, "timed out waiting for the workspace");
+            return;
+        }
+        switch (state->step) {
+        case 0: {
+            if (!window.isVisible() || left_model.getPathText() != start || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            left_model.selectRow(0);
+            const auto selected = left_model.selectedRanges();
+            if (selected.isEmpty()) {
+                finish(false, "could not select the fixture item");
+                return;
+            }
+            // Offscreen Qt does not synthesize platform focus from a mouse
+            // event, so deliver the mouse focus event explicitly first.
+            right_path->setFocus(Qt::MouseFocusReason);
+            const QPointF local(5, 5);
+            const QPointF global = right_path->mapToGlobal(QPoint(5, 5));
+            QMouseEvent click(QEvent::MouseButtonPress, local, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(right_path, &click);
+            QMouseEvent release(QEvent::MouseButtonRelease, local, local, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(right_path, &release);
+            QApplication::processEvents();
+            if (bridge.getActiveBrowser() != 1 || !right_path->editing() || right_path->selectedText() != right_path->text()) {
+                finish(false, "click on the inactive Browser does not activate and select its path");
+                return;
+            }
+            list->setFocus(Qt::OtherFocusReason);
+            bool reached = false;
+            for (int index = 0; index < 40 && !reached; ++index) {
+                QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+                QApplication::sendEvent(QApplication::focusWidget(), &tab);
+                reached = QApplication::focusWidget() == path;
+            }
+            QApplication::processEvents();
+            if (!reached || !path->editing() || path->selectedText() != start || bridge.getActiveBrowser() != 0 || left_model.selectedRanges() != selected) {
+                finish(false, "Tab traversal does not enter the active Path Edit Control");
+                return;
+            }
+            left_model.goToParent();
+            state->step = 1;
+            return;
+        }
+        case 1:
+            if (left_model.getPathText() != root || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            if (path->text() != start) {
+                finish(false, "confirmed path update overwrote an unedited draft");
+                return;
+            }
+            enter();
+            QApplication::processEvents();
+            if (path->editing() || QApplication::focusWidget() != list) {
+                finish(false, "accepted unedited Return did not return focus to Folder Items");
+                return;
+            }
+            state->step = 2;
+            return;
+        case 2:
+            if (left_model.getPathText() != start || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            if (!type_path(missing)) {
+                finish(false, "typed path did not reach the editor");
+                return;
+            }
+            enter();
+            if (left_model.getPathEntryState() != 1 || !path->isReadOnly() || !path->property("pathPending").toBool() || path->accessibleDescription() != QStringLiteral("Checking path") || left_model.getStatusText() != QStringLiteral("Loading…")) {
+                finish(false, "pending path does not show its busy and accessible state");
+                return;
+            }
+            right_path->setFocus(Qt::OtherFocusReason);
+            state->step = 3;
+            return;
+        case 3:
+            if (left_model.getPathEntryState() == 1)
+                return;
+            if (left_model.getPathEntryState() != 0 || path->text() != start || path->property("pathError").toBool()) {
+                finish(false, "a background failure kept text after Browser focus left");
+                return;
+            }
+            if (!type_path(missing)) {
+                finish(false, "could not retry the missing path");
+                return;
+            }
+            enter();
+            state->step = 4;
+            return;
+        case 4:
+            if (left_model.getPathEntryState() == 1)
+                return;
+            if (left_model.getPathEntryState() != 2 || !path->property("pathError").toBool() || path->accessibleName() != QStringLiteral("Path Edit Control") || !path->accessibleDescription().contains(QStringLiteral("no longer exists")) || !left_model.getStatusText().contains(QStringLiteral("no longer exists")) || path_announcement_capture().message != path->accessibleDescription() || left_model.getPathText() != start || path->text() != missing) {
+                finish(false, "missing path did not keep the confirmed tab and announce its error");
+                return;
+            }
+            escape();
+            if (path->text() != start || QApplication::focusWidget() != list) {
+                finish(false, "Escape did not restore the confirmed path and focus");
+                return;
+            }
+            if (!type_path(stored)) {
+                finish(false, "could not type a valid path after Escape");
+                return;
+            }
+            enter();
+            state->step = 5;
+            return;
+        case 5:
+            if (left_model.getPathText() != stored || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            if (path->editing() || QApplication::focusWidget() != list || !left_model.getPathText().endsWith(QStringLiteral("/Stored"))) {
+                finish(false, "successful path did not navigate and return focus");
+                return;
+            }
+            if (!type_path(start)) {
+                finish(false, "could not type a path to cancel");
+                return;
+            }
+            enter();
+            escape();
+            if (left_model.getPathEntryState() != 0 || path->text() != stored) {
+                finish(false, "Escape did not cancel the pending check");
+                return;
+            }
+            state->elapsed.restart();
+            state->step = 6;
+            return;
+        case 6:
+            if (state->elapsed.elapsed() < 200)
+                return;
+            if (left_model.getPathText() != stored) {
+                finish(false, "a cancelled check navigated late");
+                return;
+            }
+            if (!QDir(stored).removeRecursively()) {
+                finish(false, "could not remove the disposable folder fixture");
+                return;
+            }
+            left_model.refreshFolder();
+            state->step = 7;
+            return;
+        case 7:
+            if (!left_model.getMissingFolder())
+                return;
+            list->setFocus(Qt::OtherFocusReason);
+            if (!qt_sendShortcutOverrideEvent(list, 0, Qt::Key_L, Qt::ControlModifier, QString(), false, 1)) {
+                QKeyEvent command_l(QEvent::KeyPress, Qt::Key_L, Qt::ControlModifier);
+                QApplication::sendEvent(list, &command_l);
+            }
+            QApplication::processEvents();
+            if (!path->editing() || QApplication::focusWidget() != path || path->selectedText() != stored) {
+                finish(false, "Command+L did not open the path editor over the Missing Folder Overlay");
+                return;
+            }
+            if (!type_path(start)) {
+                finish(false, "could not enter an absolute path from the Missing Folder Overlay");
+                return;
+            }
+            enter();
+            state->step = 8;
+            return;
+        case 8:
+            if (left_model.getPathText() != start || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            finish(!path->editing() && QApplication::focusWidget() == list, "absolute path did not recover the missing-folder tab");
+            return;
+        default:
+            finish(false, "invalid check step");
+        }
+    });
+    timer->start();
+}
+
+void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browser *, 2> &browsers, FolderItemsListModel &left_model, FolderItemsListModel &right_model) {
+    const QString root = qEnvironmentVariable("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT");
+    const QString source = root + QStringLiteral("/Source");
+    const QString destination = root + QStringLiteral("/Destination");
+    auto *timer = new QTimer(&window);
+    timer->setInterval(20);
+    struct State {
+        int step = 0;
+        std::uint64_t drag = 0;
+        std::uint64_t inactive_tab = 0;
+        QElapsedTimer elapsed;
+    };
+    auto state = std::make_shared<State>();
+    state->elapsed.start();
+    const auto finish = [state, timer](bool passed, const char *reason) {
+        timer->stop();
+        if (!passed)
+            std::cerr << "File drag and drop check failed: " << reason << '\n';
+        QApplication::exit(passed ? 0 : 1);
+    };
+    const auto row_named = [](FolderItemsListModel &model, const QString &name) {
+        for (int row = 0; row < model.rowCount(QModelIndex()); ++row)
+            if (model.index(row, 1, QModelIndex()).data(Qt::DisplayRole).toString() == name)
+                return row;
+        return -1;
+    };
+    QObject::connect(timer, &QTimer::timeout, &window, [=, &left_model, &right_model, &window] {
+        if (state->elapsed.elapsed() > 15000) {
+            finish(false, "timed out waiting for the workspace or operation");
+            return;
+        }
+        switch (state->step) {
+        case 0:
+            if (!window.isVisible() || left_model.getPathText() != source || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            right_model.beginPathEntry();
+            right_model.submitPath(right_model.activeTabId(), destination, true);
+            state->step = 1;
+            return;
+        case 1: {
+            if (right_model.getPathText() != destination || right_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            const int copy_row = row_named(left_model, QStringLiteral("copy-me"));
+            if (copy_row < 0) {
+                finish(false, "source listing did not contain copy-me");
+                return;
+            }
+            left_model.selectRow(copy_row);
+            state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
+            const auto payload = file_drag_payload(state->drag);
+            QMimeData exact;
+            exact.setData(QString::fromLatin1(file_drag_mime), payload);
+            QMimeData malformed;
+            malformed.setData(QString::fromLatin1(file_drag_mime), payload + QByteArray(1, '\0'));
+            if (state->drag == 0 || payload.size() != 9 || decode_file_drag_payload(&exact) != state->drag || decode_file_drag_payload(&malformed).has_value() || payload.contains("copy-me")) {
+                finish(false, "private payload was not a path-free exact versioned token");
+                return;
+            }
+            if (right_model.previewFileDrop(state->drag, 1, 0, right_model.activeTabId(), -1, false) >= 0 || right_model.previewFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, false) != 1 || right_model.previewFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, true) != 1) {
+                finish(false, "Browser-folder hover did not update Move and Option-Copy");
+                return;
+            }
+            if (!right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, true) || right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, true)) {
+                finish(false, "drop token was not accepted exactly once");
+                return;
+            }
+            state->step = 2;
+            return;
+        }
+        case 2:
+            if (!QFileInfo::exists(destination + QStringLiteral("/copy-me")))
+                return;
+            if (!QFileInfo::exists(source + QStringLiteral("/copy-me"))) {
+                finish(false, "Copy removed its source");
+                return;
+            }
+            left_model.refreshFolder();
+            state->step = 3;
+            return;
+        case 3: {
+            if (left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            const int move_row = row_named(left_model, QStringLiteral("move-me"));
+            if (move_row < 0)
+                return;
+            left_model.selectRow(move_row);
+            state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
+            if (state->drag == 0 || !right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, false)) {
+                finish(false, "Move drop was not accepted");
+                return;
+            }
+            state->step = 4;
+            return;
+        }
+        case 4:
+            if (!QFileInfo::exists(destination + QStringLiteral("/move-me")) || QFileInfo::exists(source + QStringLiteral("/move-me")))
+                return;
+            left_model.refreshFolder();
+            right_model.refreshFolder();
+            state->step = 5;
+            return;
+        case 5: {
+            if (left_model.getStatusText() == QStringLiteral("Loading…") || right_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            const int item = row_named(left_model, QStringLiteral("row-target"));
+            const int folder = row_named(right_model, QStringLiteral("Folder"));
+            const int file = row_named(right_model, QStringLiteral("copy-me"));
+            if (item < 0 || folder < 0 || file < 0)
+                return;
+            left_model.selectRow(item);
+            state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
+            if (right_model.previewFileDrop(state->drag, 0, 1, right_model.activeTabId(), folder, false) != 1 || right_model.previewFileDrop(state->drag, 0, 1, right_model.activeTabId(), file, false) >= 0) {
+                finish(false, "folder-row eligibility did not distinguish folders and files");
+                return;
+            }
+            state->inactive_tab = right_model.activeTabId();
+            right_model.newTab();
+            if (right_model.activeTabId() == state->inactive_tab || right_model.previewFileDrop(state->drag, 0, 2, state->inactive_tab, -1, false) != 1) {
+                finish(false, "inactive-tab target activated or lost stable identity");
+                return;
+            }
+            left_model.cancelFileDrag(state->drag);
+            if (right_model.previewFileDrop(state->drag, 0, 2, state->inactive_tab, -1, false) >= 0) {
+                finish(false, "cancelled token remained usable");
+                return;
+            }
+            state->step = 6;
+            return;
+        }
+        case 6: {
+            const int item = row_named(left_model, QStringLiteral("row-target"));
+            if (item < 0)
+                return;
+            left_model.selectRow(item);
+            const auto stale = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
+            left_model.refreshFolder();
+            state->drag = stale;
+            state->step = 7;
+            return;
+        }
+        case 7:
+            if (left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            if (right_model.previewFileDrop(state->drag, 0, 2, state->inactive_tab, -1, false) >= 0) {
+                finish(false, "a source revision change did not invalidate the drag");
+                return;
+            }
+            right_model.activateTab(state->inactive_tab);
+            state->elapsed.restart();
+            state->step = 8;
+            return;
+        case 8: {
+            if (right_model.activeTabId() != state->inactive_tab || right_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            const int item = row_named(right_model, QStringLiteral("move-me"));
+            if (item < 0) {
+                finish(false, "right Browser source did not contain move-me");
+                return;
+            }
+            right_model.selectRow(item);
+            state->drag = right_model.beginFileDrag(right_model.activeTabId(), right_model.visibleRevision());
+            if (state->drag == 0 || !left_model.acceptFileDrop(state->drag, 1, 0, left_model.activeTabId(), -1, true)) {
+                finish(false, "right-to-left Copy drop was not accepted");
+                return;
+            }
+            state->step = 9;
+            return;
+        }
+        case 9:
+            if (!QFileInfo::exists(source + QStringLiteral("/move-me")))
+                return;
+            finish(QFileInfo::exists(destination + QStringLiteral("/move-me")), "right-to-left Copy removed its source");
+            return;
+        default:
+            finish(false, "invalid check step");
+        }
+    });
+    timer->start();
+}
 
 /// Exercises the owned non-blocking native menu lifecycle without starting a
 /// workspace or observing the global clipboard.

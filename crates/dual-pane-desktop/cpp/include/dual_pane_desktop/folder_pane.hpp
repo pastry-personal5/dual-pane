@@ -296,6 +296,10 @@ class FolderItemsList final : public QTreeView {
         setSelectionBehavior(QAbstractItemView::SelectRows);
         setEditTriggers(QAbstractItemView::NoEditTriggers);
         setMouseTracking(true);
+        setAcceptDrops(true);
+        viewport()->setAcceptDrops(true);
+        setProperty("dualPaneFolderItemsSource", true);
+        setProperty("dualPaneBrowser", model_->browserSide());
         viewport()->setMouseTracking(true);
         setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         setUniformRowHeights(true);
@@ -360,6 +364,17 @@ class FolderItemsList final : public QTreeView {
             painter.setPen(QColor(QString::fromLatin1(active_color)));
             painter.drawRect(viewport()->rect().adjusted(0, 0, -1, -1));
         }
+        if (drop_count_ > 0) {
+            QPainter painter(viewport());
+            painter.setPen(QPen(QColor(QString::fromLatin1(active_color)), 2));
+            const auto target = drop_row_ >= 0 ? visualRect(model_->index(drop_row_, 0)).adjusted(1, 1, viewport()->width() - visualRect(model_->index(drop_row_, 0)).right() - 2, -2) : viewport()->rect().adjusted(2, 2, -3, -3);
+            painter.drawRect(target);
+            const auto label = QStringLiteral("%1 %2 %3").arg(drop_copy_ ? QStringLiteral("Copy") : QStringLiteral("Move")).arg(drop_count_).arg(drop_count_ == 1 ? QStringLiteral("Item") : QStringLiteral("Items"));
+            const auto label_rect = QRect(target.left() + 5, target.top() + 4, fontMetrics().horizontalAdvance(label) + 12, fontMetrics().height() + 6);
+            painter.fillRect(label_rect, QColor(QString::fromLatin1(active_color)));
+            painter.setPen(QColor(QString::fromLatin1(text_color)));
+            painter.drawText(label_rect, Qt::AlignCenter, label);
+        }
     }
     auto selectionCommand(const QModelIndex &, const QEvent *) const -> QItemSelectionModel::SelectionFlags override { return QItemSelectionModel::NoUpdate; }
 
@@ -370,20 +385,67 @@ class FolderItemsList final : public QTreeView {
             focusList();
             // Qt maps ControlModifier to the Command key on macOS.
             const auto modifiers = user_modifiers(event->modifiers());
+            drag_candidate_ = index.isValid() && modifiers == Qt::NoModifier;
+            drag_press_ = event->position().toPoint();
+            drag_tab_ = model_->activeTabId();
+            drag_revision_ = model_->visibleRevision();
             if (!index.isValid())
                 model_->clearSelection();
             else if (modifiers == Qt::ControlModifier)
                 model_->toggleRow(index.row());
             else if (modifiers == Qt::ShiftModifier)
                 model_->extendToRow(index.row());
-            else
+            else if (!model_->rowIsSelected(index.row()))
                 model_->selectRow(index.row());
         } else if (event->button() == Qt::RightButton) {
             focusList();
         }
     }
-    void mouseReleaseEvent(QMouseEvent *event) override { event->accept(); }
-    void mouseMoveEvent(QMouseEvent *event) override { event->accept(); }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        drag_candidate_ = false;
+        event->accept();
+    }
+    void mouseMoveEvent(QMouseEvent *event) override {
+        event->accept();
+        if (!drag_candidate_ || !event->buttons().testFlag(Qt::LeftButton) || (event->position().toPoint() - drag_press_).manhattanLength() < QApplication::startDragDistance())
+            return;
+        drag_candidate_ = false;
+        const auto drag_id = model_->beginFileDrag(drag_tab_, drag_revision_);
+        if (drag_id == 0)
+            return;
+        auto *mime = new QMimeData();
+        mime->setData(QString::fromLatin1(file_drag_mime), file_drag_payload(drag_id));
+        QDrag drag(this);
+        drag.setMimeData(mime);
+        drag.exec(Qt::CopyAction | Qt::MoveAction, Qt::MoveAction);
+        model_->cancelFileDrag(drag_id);
+    }
+    void dragEnterEvent(QDragEnterEvent *event) override { update_drop(event); }
+    void dragMoveEvent(QDragMoveEvent *event) override { update_drop(event); }
+    void dragLeaveEvent(QDragLeaveEvent *event) override {
+        clear_drop();
+        event->accept();
+    }
+    void dropEvent(QDropEvent *event) override {
+        const auto drag = internal_file_drag(event);
+        const auto index = indexAt(event->position().toPoint());
+        const int row = index.isValid() ? index.row() : -1;
+        const int kind = row >= 0 ? 1 : 0;
+        if (!drop_modifiers_supported(event->modifiers())) {
+            clear_drop();
+            event->ignore();
+            return;
+        }
+        const bool copy = drop_is_copy(event->modifiers());
+        clear_drop();
+        const int source_browser = event->source() == nullptr ? -1 : event->source()->property("dualPaneBrowser").toInt();
+        if (drag && model_->acceptFileDrop(*drag, source_browser, kind, model_->activeTabId(), row, copy)) {
+            event->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+            event->accept();
+        } else {
+            event->ignore();
+        }
+    }
     void mouseDoubleClickEvent(QMouseEvent *event) override {
         event->accept();
         if (event->button() != Qt::LeftButton || user_modifiers(event->modifiers()) != Qt::NoModifier)
@@ -481,6 +543,49 @@ class FolderItemsList final : public QTreeView {
     }
 
   private:
+    template <typename Event>
+    void update_drop(Event *event) {
+        const auto drag = internal_file_drag(event);
+        const auto index = indexAt(event->position().toPoint());
+        const int row = index.isValid() ? index.row() : -1;
+        const int kind = row >= 0 ? 1 : 0;
+        if (!drop_modifiers_supported(event->modifiers())) {
+            clear_drop();
+            event->ignore();
+            return;
+        }
+        const bool copy = drop_is_copy(event->modifiers());
+        const int source_browser = event->source() == nullptr ? -1 : event->source()->property("dualPaneBrowser").toInt();
+        const int count = drag ? model_->previewFileDrop(*drag, source_browser, kind, model_->activeTabId(), row, copy) : -1;
+        if (count <= 0) {
+            clear_drop();
+            event->ignore();
+            return;
+        }
+        drop_row_ = row;
+        drop_count_ = count;
+        drop_copy_ = copy;
+        const auto destination = row >= 0 ? model_->index(row, 1).data(Qt::DisplayRole).toString() : model_->getPathText();
+        const auto description = QStringLiteral("%1 %2 %3 into %4").arg(copy ? QStringLiteral("Copy") : QStringLiteral("Move")).arg(count).arg(count == 1 ? QStringLiteral("Item") : QStringLiteral("Items")).arg(destination);
+        const bool changed = accessibleDescription() != description;
+        setAccessibleDescription(description);
+        if (changed) {
+            QAccessibleAnnouncementEvent announcement(this, description);
+            QAccessible::updateAccessibility(&announcement);
+        }
+        viewport()->update();
+        event->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+        event->accept();
+    }
+    void clear_drop() {
+        if (drop_count_ <= 0)
+            return;
+        drop_row_ = -1;
+        drop_count_ = 0;
+        drop_copy_ = false;
+        setAccessibleDescription(QString());
+        viewport()->update();
+    }
     void start_quick_look() {
         const int cursor = model_->getCursorRow();
         if (cursor < 0)
@@ -594,6 +699,13 @@ class FolderItemsList final : public QTreeView {
     std::uint64_t quick_look_tab_ = 0;
     std::uint64_t quick_look_revision_ = 0;
     bool restoring_ = false;
+    bool drag_candidate_ = false;
+    QPoint drag_press_;
+    std::uint64_t drag_tab_ = 0;
+    std::uint64_t drag_revision_ = 0;
+    int drop_row_ = -1;
+    int drop_count_ = 0;
+    bool drop_copy_ = false;
 };
 
 class ElidedStatusLabel final : public QLabel {
@@ -692,7 +804,10 @@ class PathEditControl final : public QLineEdit {
   protected:
     void focusInEvent(QFocusEvent *event) override {
         QLineEdit::focusInEvent(event);
-        if (event->reason() == Qt::PopupFocusReason || editing_)
+        if (event->reason() == Qt::PopupFocusReason)
+            return;
+        lost_focus_during_pending_ = false;
+        if (editing_)
             return;
         model_->activateBrowser();
         model_->beginPathEntry();
@@ -709,8 +824,16 @@ class PathEditControl final : public QLineEdit {
         QLineEdit::focusOutEvent(event);
         if (event->reason() == Qt::PopupFocusReason)
             return;
+        // Mark this synchronously so a resolver result delivered before the
+        // queued focus check cannot expose or announce an abandoned failure.
+        if (model_->getPathEntryState() == path_pending)
+            lost_focus_during_pending_ = true;
         QTimer::singleShot(0, this, [this] {
-            if (hasFocus() || !editing_)
+            if (hasFocus()) {
+                lost_focus_during_pending_ = false;
+                return;
+            }
+            if (!editing_)
                 return;
             // A running check finishes on its own; anything else ends here.
             if (model_->getPathEntryState() != path_pending)
@@ -757,6 +880,7 @@ class PathEditControl final : public QLineEdit {
     void end_editing() {
         editing_ = false;
         edited_ = false;
+        lost_focus_during_pending_ = false;
         if (model_->getPathEntryState() != 0)
             model_->discardPathEntry();
         apply_state(0, QString());
@@ -785,7 +909,7 @@ class PathEditControl final : public QLineEdit {
     void sync() {
         const int state = model_->getPathEntryState();
         const auto error = model_->getPathError();
-        if (!editing_ && state != 0 && !hasFocus() && state == path_failed) {
+        if ((!editing_ || lost_focus_during_pending_) && state == path_failed && !hasFocus()) {
             // The result arrived after focus left: nothing to keep.
             model_->discardPathEntry();
             return;
@@ -812,6 +936,7 @@ class PathEditControl final : public QLineEdit {
     void end_editing_quiet() {
         editing_ = false;
         edited_ = false;
+        lost_focus_during_pending_ = false;
         apply_state(0, QString());
         setText(model_->getPathText());
         deselect();
@@ -821,6 +946,7 @@ class PathEditControl final : public QLineEdit {
     std::function<void()> focus_list_;
     bool editing_ = false;
     bool edited_ = false;
+    bool lost_focus_during_pending_ = false;
     quint64 observed_tab_ = 0;
     int accepted_seen_ = 0;
 };
@@ -1588,8 +1714,10 @@ class Browser final : public QWidget {
         QObject::connect(model, &FolderItemsListModel::missingFolderChanged, this, [this] { update_overlays(); });
         // A refused file command's reason shows for a few seconds, then the
         // Status Bar returns to its loading, error, or path text.
-        QObject::connect(model, &FolderItemsListModel::statusTokenChanged, this, [model] {
+        QObject::connect(model, &FolderItemsListModel::statusTokenChanged, this, [this, model] {
             const int token = model->getStatusToken();
+            QAccessibleAnnouncementEvent announcement(folder_->status(), model->getStatusText());
+            QAccessible::updateAccessibility(&announcement);
             QTimer::singleShot(status_reason_milliseconds, model, [model, token] { model->expireStatus(token); });
         });
         folder_->view()->setMenuHandler([menus, model](const QPoint &at, int row, bool comprehensive) { menus->show(model, at, row, comprehensive); });

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, ContextMenuKind, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, FolderItemsMenuTarget, FolderItemsMenuToken, MonitoringStatus, PathSubmission, PlannedItem, PreviewRequest, PreviewResult, ResolvedPath, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
+use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, ContextMenuKind, DragId, DropAction, DropRejection, DropRequestId, DropTarget, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, FolderItemsMenuTarget, FolderItemsMenuToken, MonitoringStatus, PathSubmission, PlannedItem, PreviewRequest, PreviewResult, ResolvedDropDestination, ResolvedPath, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, OperationRoot, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,26 @@ pub enum Input {
 /// Browser's active tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    BeginDrag {
+        browser: BrowserSide,
+        tab: TabId,
+        visible_revision: u64,
+    },
+    PreviewDrop {
+        drag: DragId,
+        source_browser: BrowserSide,
+        target: DropTarget,
+        action: DropAction,
+    },
+    AcceptDrop {
+        drag: DragId,
+        source_browser: BrowserSide,
+        target: DropTarget,
+        action: DropAction,
+    },
+    CancelDrag {
+        drag: DragId,
+    },
     RequestFolderItemsMenu {
         browser: BrowserSide,
         tab: TabId,
@@ -336,6 +356,10 @@ impl Command {
 /// sweep of temporaries left by earlier launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    DropPreflighted {
+        request: DropRequestId,
+        result: Result<ResolvedDropDestination, DropRejection>,
+    },
     /// Answers `WorkRequest::ResolvePath`. A result is accepted only while its
     /// token is still the tab's pending path check.
     PathResolved {

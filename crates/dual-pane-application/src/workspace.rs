@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::clipboard::CapturedTransfer;
+use crate::drag_drop::{CapturedDrag, PendingDrop};
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MenuAvailability, MenuInvocation, MenuTarget, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PathEntryFailure, PathRejection, PathSubmission, PathTarget, PreviewRequest, PreviewResult, PreviewView, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, folder_item_spec, fresh_profile_favorites, fresh_profile_screenshots, parse_path};
+use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, DragId, DropAction, DropPreflight, DropPreview, DropRejection, DropRequestId, DropTarget, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MenuAvailability, MenuInvocation, MenuTarget, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PathEntryFailure, PathRejection, PathSubmission, PathTarget, PreviewRequest, PreviewResult, PreviewView, ResolvedDropDestination, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, folder_item_spec, fresh_profile_favorites, fresh_profile_screenshots, parse_path};
 use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationRoot, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
@@ -75,12 +76,16 @@ pub struct Workspace {
     next_transfer: u64,
     next_menu_token: u64,
     live_menu: Option<LiveFolderItemsMenu>,
+    current_drag: Option<CapturedDrag>,
+    pending_drops: HashMap<DropRequestId, PendingDrop>,
+    next_drag: u64,
+    next_drop_request: u64,
     /// Whether the runtime can record temporaries, which Copy needs. It
     /// counts as available until the runtime reports otherwise.
     journal_available: bool,
-    /// The Item to select once a refreshed listing shows it, after a
-    /// successful Rename or New Folder.
-    pending_selection: Option<PendingSelection>,
+    /// The Item each tab should select once a refreshed listing shows it,
+    /// after a successful Rename or New Folder or an entered file path.
+    pending_selections: HashMap<(BrowserSide, TabId), PendingSelection>,
     /// The command-line target waiting for the launch session restore.
     launch_target: Option<LaunchTarget>,
     /// The latest link activation waiting for its target to resolve.
@@ -131,8 +136,6 @@ struct LaunchTarget {
 }
 #[derive(Debug, Clone)]
 struct PendingSelection {
-    browser: BrowserSide,
-    tab: TabId,
     folder: Location,
     name: EntryName,
 }
@@ -225,7 +228,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, journal_available: true, pending_selection: None, launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, current_drag: None, pending_drops: HashMap::new(), next_drag: 0, next_drop_request: 0, journal_available: true, pending_selections: HashMap::new(), launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn is_quitting(&self) -> bool {
         self.quitting
@@ -338,7 +341,7 @@ impl Workspace {
                 if self.filter_hides(browser, tab, &folder, &name) {
                     transition.append(self.set_filter_text(browser, tab, String::new()));
                 }
-                self.pending_selection = Some(PendingSelection { browser, tab, folder: folder.clone(), name });
+                self.pending_selections.insert((browser, tab), PendingSelection { folder: folder.clone(), name });
                 folder
             }
         };
@@ -359,6 +362,13 @@ impl Workspace {
     }
     fn dispatch_command(&mut self, command: Command) -> Transition {
         match command {
+            Command::BeginDrag { browser, tab, visible_revision } => self.begin_drag(browser, tab, visible_revision),
+            Command::PreviewDrop { drag, source_browser, target, action } => Transition::output(Output::DropPreviewed { preview: self.preview_drop(drag, source_browser, &target, action) }),
+            Command::AcceptDrop { drag, source_browser, target, action } => self.accept_drop(drag, source_browser, target, action),
+            Command::CancelDrag { drag } => {
+                self.current_drag.take_if(|current| current.id == drag);
+                Transition::default()
+            }
             Command::SubmitPath { browser, tab, submission } => self.submit_path(browser, tab, submission),
             Command::CancelPathEntry { browser, tab } => self.supersede_path_check(browser, tab, true),
             Command::RequestFolderItemsMenu { browser, tab, visible_revision, kind, target } => self.request_folder_items_menu(browser, tab, visible_revision, kind, target),
@@ -429,6 +439,7 @@ impl Workspace {
     }
     fn event(&mut self, event: Event) -> Transition {
         match event {
+            Event::DropPreflighted { request, result } => self.drop_preflighted(request, result),
             Event::ClipboardPublished { request, transfer, generation, succeeded } => self.clipboard_published(request, transfer, generation, succeeded),
             Event::ClipboardChanged { generation, offer } => self.clipboard_changed(generation, offer),
             Event::ClipboardRead { request, generation, snapshot } => self.clipboard_read(request, generation, snapshot),
@@ -661,6 +672,140 @@ impl Workspace {
         let Some((row, entry)) = self.single_selected_entry(browser, tab) else { return Transition::default() };
         let name = entry.name().clone();
         self.command(build(row, name))
+    }
+    fn begin_drag(&mut self, browser: BrowserSide, tab: TabId, visible_revision: u64) -> Transition {
+        if self.quitting || !self.valid_observation(browser, tab, visible_revision) {
+            return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::StaleSource) });
+        }
+        let roots = match self.clipboard_roots(browser, tab) {
+            Ok(roots) => roots,
+            Err(ClipboardRejection::NoSelection) => return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::NoSelection) }),
+            Err(ClipboardRejection::StaleTab | ClipboardRejection::StaleObservation) => return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::StaleSource) }),
+            Err(_) => return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::UnsupportedSource) }),
+        };
+        if roots.iter().any(|root| root.kind == EntryKind::Other) {
+            return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::UnsupportedSource) });
+        }
+        let Some(items) = self.tab(browser, tab).and_then(|state| state.folder_items.as_ref()) else { return Transition::default() };
+        let (source, listing) = (items.location.clone(), items.listing);
+        self.next_drag = self.next_drag.wrapping_add(1).max(1);
+        let id = DragId::new(self.next_drag);
+        let count = roots.len();
+        self.current_drag = Some(CapturedDrag { id, browser, tab, source, listing, visible_revision, roots });
+        Transition::output(Output::DragStarted { drag: id, browser, tab, count })
+    }
+    fn drag_source_valid(&self, drag: &CapturedDrag) -> bool {
+        self.active_tab(drag.browser) == drag.tab && self.tab(drag.browser, drag.tab).is_some_and(|state| state.pending.is_none() && state.error.is_none() && state.filter_status == FilterStatus::Ready && state.visible_revision == drag.visible_revision && state.folder_items.as_ref().is_some_and(|items| items.location == drag.source && items.listing == drag.listing))
+    }
+    fn drop_candidate(&self, target: &DropTarget) -> Result<Location, DropRejection> {
+        let state = self.tab(target.browser(), target.tab()).ok_or(DropRejection::StaleTarget)?;
+        if state.pending.is_some() || state.error.is_some() || state.filter_status != FilterStatus::Ready {
+            return Err(DropRejection::DestinationUnavailable);
+        }
+        let items = state.folder_items.as_ref().ok_or(DropRejection::DestinationUnavailable)?;
+        match target {
+            DropTarget::BrowserFolder { browser, tab } => {
+                if self.active_tab(*browser) != *tab {
+                    return Err(DropRejection::StaleTarget);
+                }
+                Ok(items.location.clone())
+            }
+            DropTarget::BrowserTab { .. } => Ok(items.location.clone()),
+            DropTarget::FolderRow { browser, tab, visible_revision, name } => {
+                if self.active_tab(*browser) != *tab || state.visible_revision != *visible_revision {
+                    return Err(DropRejection::StaleTarget);
+                }
+                let entry = state.visible_entries().iter().find(|entry| entry.name() == name).ok_or(DropRejection::StaleTarget)?;
+                let eligible = match entry.kind() {
+                    EntryKind::Directory => !entry.is_package(),
+                    EntryKind::Symlink { points_to_directory } => points_to_directory,
+                    EntryKind::File | EntryKind::Other => false,
+                };
+                eligible.then(|| items.location.join(name)).ok_or(DropRejection::UnsupportedTarget)
+            }
+        }
+    }
+    fn preview_drop(&self, drag: DragId, source_browser: BrowserSide, target: &DropTarget, action: DropAction) -> Result<DropPreview, DropRejection> {
+        let current = self.current_drag.as_ref().filter(|current| current.id == drag).ok_or(DropRejection::UnknownDrag)?;
+        if current.browser != source_browser {
+            return Err(DropRejection::UnknownDrag);
+        }
+        if !self.drag_source_valid(current) {
+            return Err(DropRejection::StaleSource);
+        }
+        let candidate = self.drop_candidate(target)?;
+        let kind = match action {
+            DropAction::Move => OperationKind::Move,
+            DropAction::Copy => OperationKind::Copy,
+        };
+        OperationIntent::transfer(kind, current.roots.to_vec(), candidate).map_err(drop_operation_rejection)?;
+        if action == DropAction::Copy && !self.journal_available {
+            return Err(DropRejection::JournalUnavailable);
+        }
+        Ok(DropPreview { drag, browser: target.browser(), tab: target.tab(), action, count: current.roots.len() })
+    }
+    fn accept_drop(&mut self, drag: DragId, source_browser: BrowserSide, target: DropTarget, action: DropAction) -> Transition {
+        let browser = target.browser();
+        let tab = target.tab();
+        let preview = match self.preview_drop(drag, source_browser, &target, action) {
+            Ok(preview) => preview,
+            Err(reason) => {
+                self.current_drag.take_if(|current| current.id == drag);
+                return Transition::output(Output::DropRejected { browser, tab, reason });
+            }
+        };
+        let candidate = match self.drop_candidate(&target) {
+            Ok(candidate) => candidate,
+            Err(reason) => return Transition::output(Output::DropRejected { browser, tab, reason }),
+        };
+        let Some(captured) = self.current_drag.take_if(|current| current.id == drag) else {
+            return Transition::output(Output::DropRejected { browser, tab, reason: DropRejection::UnknownDrag });
+        };
+        self.next_drop_request = self.next_drop_request.wrapping_add(1).max(1);
+        let request = DropRequestId::new(self.next_drop_request);
+        let roots = Arc::clone(&captured.roots);
+        self.pending_drops.insert(request, PendingDrop { drag: captured, target, candidate: candidate.clone(), action });
+        Transition { outputs: vec![Output::DropChecking { request, browser: preview.browser, tab: preview.tab }], work: vec![WorkRequest::PreflightDrop { preflight: DropPreflight { request, candidate, roots } }] }
+    }
+    fn drop_preflighted(&mut self, request: DropRequestId, result: Result<ResolvedDropDestination, DropRejection>) -> Transition {
+        let Some(pending) = self.pending_drops.remove(&request) else { return Transition::default() };
+        if self.quitting {
+            return Transition::default();
+        }
+        let browser = pending.target.browser();
+        let tab = pending.target.tab();
+        let resolved = match result {
+            Ok(resolved) => resolved,
+            Err(reason) => return Transition::output(Output::DropRejected { browser, tab, reason }),
+        };
+        if !self.drag_source_valid(&pending.drag) {
+            return Transition::output(Output::DropRejected { browser, tab, reason: DropRejection::StaleSource });
+        }
+        if self.drop_candidate(&pending.target).as_ref() != Ok(&pending.candidate) {
+            return Transition::output(Output::DropRejected { browser, tab, reason: DropRejection::StaleTarget });
+        }
+        if resolved.canonical_roots.len() != pending.drag.roots.len() || resolved.canonical_roots.iter().zip(pending.drag.roots.iter()).any(|(resolved, captured)| resolved.kind != captured.kind) {
+            return Transition::output(Output::DropRejected { browser, tab, reason: DropRejection::StaleSource });
+        }
+        let kind = match pending.action {
+            DropAction::Move => OperationKind::Move,
+            DropAction::Copy => OperationKind::Copy,
+        };
+        if let Err(reason) = OperationIntent::transfer(kind.clone(), resolved.canonical_roots.to_vec(), resolved.canonical.clone()) {
+            return Transition::output(Output::DropRejected { browser, tab, reason: drop_operation_rejection(reason) });
+        }
+        let intent = match OperationIntent::transfer(kind, pending.drag.roots.to_vec(), resolved.canonical) {
+            Ok(intent) => intent,
+            Err(reason) => return Transition::output(Output::DropRejected { browser, tab, reason: drop_operation_rejection(reason) }),
+        };
+        if matches!(intent.kind(), OperationKind::Copy) && !self.journal_available {
+            return Transition::output(Output::DropRejected { browser, tab, reason: DropRejection::JournalUnavailable });
+        }
+        let (id, effects) = self.operations.start(intent);
+        self.operation_origins.insert(id, (pending.drag.browser, pending.drag.tab));
+        let mut transition = self.operation_output(id, effects);
+        transition.outputs.push(Output::DropStarted { browser, tab, action: pending.action });
+        transition
     }
     fn clipboard_roots(&self, browser: BrowserSide, tab: TabId) -> Result<Arc<[OperationRoot]>, ClipboardRejection> {
         if self.active_tab(browser) != tab {
@@ -1063,7 +1208,7 @@ impl Workspace {
             && let Some((browser, tab)) = origin
             && self.tab(browser, tab).and_then(|state| state.pending.as_ref().map(|pending| &pending.location).or(state.folder_items.as_ref().map(|items| &items.location))) == Some(job.intent().source())
         {
-            self.pending_selection = Some(PendingSelection { browser, tab, folder: job.intent().source().clone(), name: name.clone() });
+            self.pending_selections.insert((browser, tab), PendingSelection { folder: job.intent().source().clone(), name: name.clone() });
         }
         // Only completed entries change listings; this launch's temporaries,
         // even ones cleanup could not remove, are never listed.
@@ -1112,6 +1257,8 @@ impl Workspace {
             return Transition::output(Output::QuitConfirmationRequired { running });
         }
         self.quitting = true;
+        self.current_drag = None;
+        self.pending_drops.clear();
         let unfinished = self.operations.jobs().iter().filter(|job| !matches!(job.status(), OperationStatus::Finished(_))).map(OperationJob::id).collect::<Vec<_>>();
         let mut transition = unfinished.into_iter().fold(Transition::default(), |mut total, id| {
             total.append(self.operation_transition(id, |operations| operations.cancel(id)));
@@ -1242,7 +1389,7 @@ impl Workspace {
         let old_scroll = state.history.current().and_then(|visit| visit.state().scroll().cloned());
         let location = state.folder_items.as_ref().map(|items| items.location.clone());
         let result = result.and_then(|result| authoritative_filter_result(&request.entries, result));
-        let select = if result.is_ok() { self.pending_selection.take_if(|selection| selection.browser == *browser && selection.tab == *tab && location.as_ref() == Some(&selection.folder)) } else { None };
+        let select = if result.is_ok() { location.as_ref().and_then(|location| self.take_pending_selection(*browser, *tab, location)) } else { None };
         let Some(state) = self.tab_mut(*browser, *tab) else { return Transition::default() };
         match result {
             Ok(result) => {
@@ -1364,7 +1511,7 @@ impl Workspace {
         };
         transition.append(self.supersede_path_check(side, tab, true));
         if let Some(name) = select {
-            self.pending_selection = Some(PendingSelection { browser: side, tab, folder: folder.clone(), name });
+            self.pending_selections.insert((side, tab), PendingSelection { folder: folder.clone(), name });
             // A tab that already shows the folder rereads it so the file is selected as the listing arrives.
             if existing.is_some() && !redirected {
                 transition.append(self.refresh_tab(side, tab));
@@ -1381,9 +1528,7 @@ impl Workspace {
         let cancel_path = self.supersede_path_check(browser, tab, false);
         self.visibility_retries.remove(&(browser, tab));
         let final_tab = self.browser(browser).order.tabs().len() == 1;
-        if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab) {
-            self.pending_selection = None;
-        }
+        self.pending_selections.remove(&(browser, tab));
         let replacement = if final_tab {
             let id = TabId::new(self.next_tab);
             self.next_tab += 1;
@@ -1432,8 +1577,8 @@ impl Workspace {
     }
     fn start_read(&mut self, browser: BrowserSide, tab: TabId, location: Location, history_target: Option<usize>) -> Transition {
         // Navigating elsewhere forgets an Item still waiting to be selected.
-        if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab && pending.folder != location) {
-            self.pending_selection = None;
+        if self.pending_selections.get(&(browser, tab)).is_some_and(|pending| pending.folder != location) {
+            self.pending_selections.remove(&(browser, tab));
         }
         let token = self.next_token();
         let sort = self.settings.sort_for(&location);
@@ -2093,7 +2238,9 @@ impl Workspace {
         self.left = BrowserState::new(left);
         self.right = BrowserState::new(right);
         self.active_browser = BrowserSide::Left;
-        self.pending_selection = None;
+        self.current_drag = None;
+        self.pending_drops.clear();
+        self.pending_selections.clear();
         self.pending_open = None;
         self.layout = None;
         self.session_write_protected = false;
@@ -2323,9 +2470,10 @@ impl Workspace {
     /// A selection gesture replaces any selection still waiting for a
     /// refreshed listing.
     fn forget_pending_selection(&mut self, browser: BrowserSide, tab: TabId) {
-        if self.pending_selection.as_ref().is_some_and(|pending| pending.browser == browser && pending.tab == tab) {
-            self.pending_selection = None;
-        }
+        self.pending_selections.remove(&(browser, tab));
+    }
+    fn take_pending_selection(&mut self, browser: BrowserSide, tab: TabId, folder: &Location) -> Option<PendingSelection> {
+        if self.pending_selections.get(&(browser, tab)).is_some_and(|pending| pending.folder == *folder) { self.pending_selections.remove(&(browser, tab)) } else { None }
     }
     /// The shown entry at `row` if it is still `name`, with its location.
     fn shown_entry(&self, browser: BrowserSide, row: usize, name: &EntryName) -> Option<(Location, &Entry)> {
@@ -2436,7 +2584,7 @@ impl Workspace {
             projection.work.push(WorkRequest::WatchReadCompleted { location: location.clone(), succeeded: true });
             projection
         } else {
-            let select = self.pending_selection.take_if(|selection| selection.browser == browser && selection.tab == tab && selection.folder == location);
+            let select = self.take_pending_selection(browser, tab, &location);
             if let Some(select) = select
                 && let Some(row) = entries.iter().position(|entry| *entry.name() == select.name)
                 && let Some(visit) = self.tab_mut(browser, tab).and_then(|state| state.history.current_mut())
@@ -2511,6 +2659,20 @@ fn clipboard_operation_rejection(reason: OperationRejection) -> ClipboardRejecti
         OperationRejection::NoTargets => ClipboardRejection::NoSelection,
         OperationRejection::StaleSelection => ClipboardRejection::StaleObservation,
         OperationRejection::InvalidTargetCount | OperationRejection::InvalidName | OperationRejection::UnchangedName | OperationRejection::DestinationNotAllowed => ClipboardRejection::MalformedExternalContent,
+    }
+}
+
+fn drop_operation_rejection(reason: OperationRejection) -> DropRejection {
+    match reason {
+        OperationRejection::SameSourceAndDestination => DropRejection::SameSourceAndDestination,
+        OperationRejection::DestinationWithinSource => DropRejection::DestinationWithinSource,
+        OperationRejection::DuplicateTarget => DropRejection::DuplicateSource,
+        OperationRejection::JournalUnavailable => DropRejection::JournalUnavailable,
+        OperationRejection::StaleTab | OperationRejection::StaleSelection => DropRejection::StaleSource,
+        OperationRejection::NoTargets => DropRejection::NoSelection,
+        OperationRejection::DestinationUnavailable | OperationRejection::DestinationRequired => DropRejection::DestinationUnavailable,
+        OperationRejection::SourceUnavailable => DropRejection::UnsupportedSource,
+        OperationRejection::InvalidTargetCount | OperationRejection::InvalidName | OperationRejection::UnchangedName | OperationRejection::DestinationNotAllowed => DropRejection::UnsupportedAction,
     }
 }
 impl BrowserState {

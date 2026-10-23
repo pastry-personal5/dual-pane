@@ -66,7 +66,10 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
+    use std::sync::Arc;
 
+    use dual_pane_application::{Command, Event, PathSubmission, WorkRequest, Workspace};
+    use dual_pane_domain::{BrowserSide, Entry, EntryKind, SortDirection, SortField, SortSpec};
     use tempfile::tempdir;
 
     use super::*;
@@ -172,6 +175,51 @@ mod tests {
             assert_eq!(path_from_location(&resolved(&root.join(decomposed)).location), root.join(precomposed));
         }
         assert!(ignores_case || ignores_normalization || cfg!(not(target_os = "macos")), "the temporary volume should be APFS, which ignores at least normalization");
+    }
+
+    #[test]
+    fn typed_and_row_paths_share_history_sort_and_refresh_identity() {
+        let (_guard, root) = temporary();
+        fs::create_dir(root.join("Stored")).unwrap();
+        let parent = location_from_path(&root).unwrap();
+        let row_location = location_from_path(&root.join("Stored")).unwrap();
+        let typed = root.join("stored");
+        if fs::metadata(&typed).is_err() {
+            assert_eq!(failure(&typed), ListingErrorKind::ItemMissing);
+            return;
+        }
+        let resolved = resolved(&typed);
+        assert_eq!(resolved.location, row_location);
+
+        let mut workspace = Workspace::new();
+        let side = BrowserSide::Left;
+        let initial = workspace.handle(Command::Navigate { browser: side, location: parent.clone() }.into());
+        let (tab, token) = read_token(&initial.work);
+        workspace.handle(Event::FolderItemsLoaded { browser: side, tab, token, entries: Arc::from(vec![Entry::new(EntryName::new("Stored").unwrap(), EntryKind::Directory)]), changes: None }.into());
+        let row = workspace.handle(Command::OpenEntry { browser: side, tab, row: 0, name: EntryName::new("Stored").unwrap() }.into());
+        let (_, token) = read_token(&row.work);
+        workspace.handle(Event::FolderItemsLoaded { browser: side, tab, token, entries: Arc::from([]), changes: None }.into());
+        assert_eq!(workspace.location(side), Some(&row_location));
+        let sort = SortSpec::new(SortField::Size, SortDirection::Descending);
+        workspace.handle(Command::SetSort { browser: side, tab, location: row_location.clone(), sort }.into());
+        let back = workspace.handle(Command::GoBack { browser: side, tab }.into());
+        let (_, token) = read_token(&back.work);
+        workspace.handle(Event::FolderItemsLoaded { browser: side, tab, token, entries: Arc::from(vec![Entry::new(EntryName::new("Stored").unwrap(), EntryKind::Directory)]), changes: None }.into());
+
+        let submitted = workspace.handle(Command::SubmitPath { browser: side, tab, submission: PathSubmission::Typed(typed.to_string_lossy().into_owned()) }.into());
+        let resolve_token = submitted.work.iter().find_map(|work| if let WorkRequest::ResolvePath { token, .. } = work { Some(*token) } else { None }).unwrap();
+        let accepted = workspace.handle(Event::PathResolved { browser: side, tab, token: resolve_token, result: Ok(resolved) }.into());
+        let (_, token) = read_token(&accepted.work);
+        assert!(accepted.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { location, sort: requested, .. } if *location == row_location && *requested == sort)));
+        workspace.handle(Event::FolderItemsLoaded { browser: side, tab, token, entries: Arc::from([]), changes: None }.into());
+        assert_eq!(workspace.location(side), Some(&row_location));
+        assert!(workspace.browser_chrome(side).can_go_back);
+        let refresh = workspace.handle(Event::LocationInvalidated { location: row_location.clone() }.into());
+        assert!(refresh.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { location, .. } if *location == row_location)));
+    }
+
+    fn read_token(work: &[WorkRequest]) -> (dual_pane_domain::TabId, dual_pane_domain::RequestToken) {
+        work.iter().find_map(|work| if let WorkRequest::ReadDirectory { tab, token, .. } = work { Some((*tab, *token)) } else { None }).expect("directory read")
     }
 
     #[test]

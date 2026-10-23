@@ -131,9 +131,9 @@ The application ring coordinates the product's use cases. It owns the single `Wo
 |---|---|
 | Input boundary | Commands and externally observed facts: navigate, select, tab operations, file-operation requests, decisions, cancellation, Folder Items results, watcher invalidations, operation step results, and settings load/save results. |
 | Workspace use cases | Validate inputs, evolve the workspace state, issue work requests, reject stale results, and produce application output. |
-| Workspace state | Two Browsers of domain tabs; outstanding request tokens and loading state; file operations with their plans, progress, and pending decisions; and preferences required to carry out use cases. It has one serialized owner. |
+| Workspace state | Two Browsers of domain tabs; outstanding request tokens and loading state; one-use file-drag sessions and pending canonical-destination checks; file operations with their plans, progress, and pending decisions; and preferences required to carry out use cases. It has one serialized owner. |
 | Output models | Immutable, framework-neutral values describing Browsers, jobs, decisions, and recoverable errors. Folder Items changes are row deltas (insert, remove, update) against the previous Folder Items so that views keep scroll position, cursor, and selection; a listing with no applicable delta is marked as replacing every row. They state *what changed*, not how a widget redraws it. |
-| Work requests | Typed, purpose-specific descriptions of outside work the use cases need: read a directory, execute an operation step, start or stop watching a location, load or save settings, and open a file with its default application. |
+| Work requests | Typed, purpose-specific descriptions of outside work the use cases need: read a directory, resolve and canonicalize a drop destination, execute an operation step, start or stop watching a location, load or save settings, and open a file with its default application. |
 
 Use cases are a pure reducer. The application never calls outward, holds a callback, or waits:
 
@@ -226,6 +226,8 @@ File operations cross two boundaries: policy decides whether the operation may p
 8. When the operation finishes, the application requests affected listings to refresh.
 
 Product-level delete behavior, conflict choices, and confirmation policy are defined in [product-behavior.md](product-behavior.md); no driver may infer them from a menu label or platform default.
+
+An internal file drag carries only a version and opaque `DragId`; it never serializes a path. Qt additionally proves that the event source is a live Folder Items List and reports its Browser identity. The application repeats source and target validation for hover and acceptance, consumes the session once, then asks a worker to canonicalize the physical destination and roots. Only a revalidated result creates the ordinary Copy or Move intent described above.
 
 ### 4.4 Data-safety invariants
 

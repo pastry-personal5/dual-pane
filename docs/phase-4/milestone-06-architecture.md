@@ -1,6 +1,6 @@
 # P4-M6 architecture
 
-Status: Planned
+Status: Done
 
 Path entry becomes a submission addressed to one tab: the application parses it without I/O, a per-Browser read lane resolves it to the folder's stored spelling, and the ordinary navigation workflow commits it. The [overview checklist](milestone-06-overview.md#completion-checklist) defines acceptance. This plan implements the [owner decisions](milestone-06-overview.md#owner-decisions), cited below as decisions 1 to 14.
 

@@ -54,6 +54,22 @@ fn parse_failures_have_distinct_wording() {
 }
 
 #[test]
+fn resolver_failures_have_distinct_status_reasons() {
+    let mut texts = Vec::new();
+    for kind in [ListingErrorKind::ItemMissing, ListingErrorKind::NotADirectory, ListingErrorKind::PermissionDenied, ListingErrorKind::PrivacyRestricted, ListingErrorKind::Busy, ListingErrorKind::Internal] {
+        let mut presenter = showing(1);
+        submit(&mut presenter, 1, "/x");
+        presenter.apply(&Output::PathEntryRejected { browser: SIDE, tab: TabId::new(1), reason: PathEntryFailure::Listing(kind) });
+        let reason = presenter.view().path_entry().error().unwrap().to_owned();
+        assert_eq!(presenter.view().status_text(), reason);
+        texts.push(reason);
+    }
+    texts.sort();
+    texts.dedup();
+    assert_eq!(texts.len(), 6);
+}
+
+#[test]
 fn accepted_and_cancelled_end_the_state() {
     for end in [Output::PathEntryAccepted { browser: SIDE, tab: TabId::new(1) }, Output::PathEntryCancelled { browser: SIDE, tab: TabId::new(1) }] {
         let mut presenter = showing(1);

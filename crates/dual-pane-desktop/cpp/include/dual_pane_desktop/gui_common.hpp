@@ -26,6 +26,10 @@
 #include <QtGui/QColor>
 #include <QtGui/QCursor>
 #include <QtGui/QDrag>
+#include <QtGui/QDragEnterEvent>
+#include <QtGui/QDragLeaveEvent>
+#include <QtGui/QDragMoveEvent>
+#include <QtGui/QDropEvent>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetrics>
@@ -115,6 +119,7 @@ inline constexpr int icon_cache_size = 1024;
 inline constexpr int tab_limit = 8;
 inline constexpr auto favorite_item_mime = "application/x-dual-pane-favorite-item";
 inline constexpr auto operation_panel_mime = "application/x-dual-pane-operation-panel";
+inline constexpr auto file_drag_mime = "application/x-dual-pane-file-drag-v1";
 // File command codes of the Folder Items model.
 inline constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_new_folder = 3, command_trash = 4, command_delete = 5;
 inline constexpr int clipboard_copy = 0, clipboard_cut = 1, clipboard_paste = 2;
@@ -136,6 +141,33 @@ inline constexpr int favorite_row_vertical_padding = 4;
 inline constexpr unsigned toolbar_new_tab = 1U, toolbar_back = 2U, toolbar_forward = 4U, toolbar_up = 8U;
 
 constexpr auto has_flag(int state, unsigned flag) -> bool { return (static_cast<unsigned>(state) & flag) != 0U; }
+
+inline auto file_drag_payload(std::uint64_t drag) -> QByteArray {
+    QByteArray payload;
+    payload.reserve(9);
+    payload.append(1);
+    for (int byte = 0; byte < 8; ++byte)
+        payload.append(static_cast<char>((drag >> static_cast<unsigned>(byte * 8)) & 0xffU));
+    return payload;
+}
+
+inline auto decode_file_drag_payload(const QMimeData *mime) -> std::optional<std::uint64_t> {
+    if (mime == nullptr || !mime->hasFormat(QString::fromLatin1(file_drag_mime)))
+        return std::nullopt;
+    const auto payload = mime->data(QString::fromLatin1(file_drag_mime));
+    if (payload.size() != 9 || payload.at(0) != 1)
+        return std::nullopt;
+    std::uint64_t drag = 0;
+    for (int byte = 0; byte < 8; ++byte)
+        drag |= static_cast<std::uint64_t>(static_cast<unsigned char>(payload.at(byte + 1))) << static_cast<unsigned>(byte * 8);
+    return drag == 0 ? std::nullopt : std::optional<std::uint64_t>(drag);
+}
+
+inline auto internal_file_drag(const QDropEvent *event) -> std::optional<std::uint64_t> {
+    if (event == nullptr || event->source() == nullptr || !event->source()->property("dualPaneFolderItemsSource").toBool())
+        return std::nullopt;
+    return decode_file_drag_payload(event->mimeData());
+}
 
 enum class Movement : std::uint8_t { Previous,
                                      Next,
@@ -170,9 +202,20 @@ constexpr auto user_modifiers(Qt::KeyboardModifiers modifiers) -> Qt::KeyboardMo
     return modifiers & ~Qt::KeypadModifier;
 }
 
+constexpr auto drop_modifiers_supported(Qt::KeyboardModifiers modifiers) -> bool {
+    const auto relevant = user_modifiers(modifiers);
+    return relevant == Qt::NoModifier || relevant == Qt::AltModifier;
+}
+
+constexpr auto drop_is_copy(Qt::KeyboardModifiers modifiers) -> bool { return user_modifiers(modifiers) == Qt::AltModifier; }
+
 static_assert(movement_for(Qt::Key_Up) == Movement::Previous);
 static_assert(movement_for(Qt::Key_PageDown) == Movement::PageDown);
 static_assert(!movement_for(Qt::Key_Left).has_value());
+static_assert(drop_modifiers_supported(Qt::NoModifier));
+static_assert(drop_modifiers_supported(Qt::AltModifier));
+static_assert(!drop_modifiers_supported(Qt::ShiftModifier));
+static_assert(!drop_modifiers_supported(Qt::AltModifier | Qt::ControlModifier));
 static_assert(user_modifiers(Qt::KeypadModifier) == Qt::NoModifier);
 static_assert(user_modifiers(Qt::ShiftModifier | Qt::KeypadModifier) == Qt::ShiftModifier);
 

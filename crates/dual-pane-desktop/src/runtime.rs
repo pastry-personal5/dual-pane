@@ -216,6 +216,10 @@ impl WorkRunner for Runtime {
                 let job = ProbeJob::ClipboardPreflight { request, generation, sources };
                 self.probes.try_send(job).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| job.fail())
             }
+            WorkRequest::PreflightDrop { preflight } => {
+                let job = ProbeJob::DropPreflight { preflight };
+                self.probes.try_send(job).err().map(|(TrySendError::Full(job) | TrySendError::Disconnected(job))| job.fail())
+            }
             WorkRequest::ProjectFilter { request } => {
                 let index = preview_index(request.browser);
                 if self.filter_lanes.as_ref().is_some_and(|lanes| lanes[index].enqueue(request.clone())) { None } else { Some(Event::FilterProjected { request, result: Err(FilterFailure::WorkerUnavailable) }) }

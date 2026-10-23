@@ -419,6 +419,10 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         state.scheduler = &scheduler;
     }
     bridge.start(std::move(startup));
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_PATH_ENTRY_ROOT"))
+        schedule_path_entry_checks(window, bridge, browsers, left_model);
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT"))
+        schedule_file_drag_drop_checks(window, browsers, left_model, right_model);
     bool instance_exit_ok = false;
     const int instance_exit_ms = qEnvironmentVariableIntValue("DUAL_PANE_INTERNAL_INSTANCE_EXIT_MS", &instance_exit_ok);
     if (instance_exit_ok && instance_exit_ms > 0)

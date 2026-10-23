@@ -232,6 +232,19 @@ fn a_file_missing_from_its_folder_opens_it_with_nothing_selected() {
 }
 
 #[test]
+fn a_file_hidden_by_item_visibility_opens_its_folder_without_selection() {
+    let mut workspace = Workspace::new();
+    let tab = loaded(&mut workspace, LEFT, folder("a"), &[]);
+    let (_, token, candidate) = resolve_request(&submit(&mut workspace, tab, "/b/.hidden"));
+    let (browser, tab, read_token, location) = read(&resolved(&mut workspace, tab, token, candidate, PathTarget::File)).unwrap();
+    assert_eq!(location, folder("b"));
+    // The native reader applies Item Visibility before delivering entries.
+    let done = workspace.handle(Event::FolderItemsLoaded { browser, tab, token: read_token, entries: entries(&["visible"]), changes: None }.into());
+    assert!(has(&done, |output| matches!(output, Output::SelectionChanged { row: None, selection, .. } if selection.entries().is_empty())));
+    assert_eq!(workspace.browser_chrome(LEFT).location, Some(folder("b")));
+}
+
+#[test]
 fn a_background_file_result_selects_in_its_own_tab_after_another_writer_ran() {
     let mut workspace = Workspace::new();
     let first = loaded(&mut workspace, LEFT, folder("a"), &[]);
@@ -242,6 +255,27 @@ fn a_background_file_result_selects_in_its_own_tab_after_another_writer_ran() {
     assert_eq!(tab, first);
     let done = workspace.handle(Event::FolderItemsLoaded { browser, tab, token: read_token, entries: entries(&["wanted"]), changes: None }.into());
     assert!(has(&done, |output| matches!(output, Output::SelectionChanged { row: Some(0), .. })));
+}
+
+#[test]
+fn simultaneous_file_paths_keep_a_pending_selection_per_tab() {
+    let mut workspace = Workspace::new();
+    let left_tab = loaded(&mut workspace, BrowserSide::Left, folder("a"), &[]);
+    let right_tab = loaded(&mut workspace, BrowserSide::Right, folder("c"), &[]);
+    let left_submission = submit(&mut workspace, left_tab, "/b/left-file");
+    let (_, left_token, left_candidate) = resolve_request(&left_submission);
+    let right_submission = workspace.handle(Command::SubmitPath { browser: BrowserSide::Right, tab: right_tab, submission: PathSubmission::Typed("/d/right-file".into()) }.into());
+    let (_, right_token, right_candidate) = resolve_request(&right_submission);
+
+    let left_accepted = resolved(&mut workspace, left_tab, left_token, left_candidate, PathTarget::File);
+    let (_, _, left_read, _) = read(&left_accepted).unwrap();
+    let right_accepted = workspace.handle(Event::PathResolved { browser: BrowserSide::Right, tab: right_tab, token: right_token, result: Ok(ResolvedPath { location: right_candidate, target: PathTarget::File }) }.into());
+    let (_, _, right_read, _) = read(&right_accepted).unwrap();
+
+    let right_done = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Right, tab: right_tab, token: right_read, entries: entries(&["right-file"]), changes: None }.into());
+    let left_done = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: left_tab, token: left_read, entries: entries(&["left-file"]), changes: None }.into());
+    assert!(has(&right_done, |output| matches!(output, Output::SelectionChanged { row: Some(0), .. })));
+    assert!(has(&left_done, |output| matches!(output, Output::SelectionChanged { row: Some(0), .. })));
 }
 
 #[test]

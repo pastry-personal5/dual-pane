@@ -3,6 +3,28 @@
 use super::*;
 
 impl<R: WorkRunner> WorkspaceSession<R> {
+    pub fn begin_drag(&mut self, browser: BrowserSide, tab: TabId, visible_revision: u64) -> Option<dual_pane_application::DragId> {
+        self.handle_all(Command::BeginDrag { browser, tab, visible_revision }.into()).into_iter().find_map(|output| match output {
+            Output::DragStarted { drag, .. } => Some(drag),
+            _ => None,
+        })
+    }
+    pub fn preview_drop(&mut self, drag: dual_pane_application::DragId, source_browser: BrowserSide, target: dual_pane_application::DropTarget, action: dual_pane_application::DropAction) -> Result<dual_pane_application::DropPreview, dual_pane_application::DropRejection> {
+        self.handle_all(Command::PreviewDrop { drag, source_browser, target, action }.into())
+            .into_iter()
+            .find_map(|output| match output {
+                Output::DropPreviewed { preview } => Some(preview),
+                _ => None,
+            })
+            .unwrap_or(Err(dual_pane_application::DropRejection::UnknownDrag))
+    }
+    pub fn accept_drop(&mut self, drag: dual_pane_application::DragId, source_browser: BrowserSide, target: dual_pane_application::DropTarget, action: dual_pane_application::DropAction) -> bool {
+        let outputs = self.handle_all(Command::AcceptDrop { drag, source_browser, target, action }.into());
+        outputs.iter().any(|output| matches!(output, Output::DropChecking { .. }))
+    }
+    pub fn cancel_drag(&mut self, drag: dual_pane_application::DragId) {
+        self.submit(Command::CancelDrag { drag });
+    }
     /// Reveals and hides Operation Panels whose delay passed.
     pub fn tick_operations(&mut self) {
         self.operations.tick();

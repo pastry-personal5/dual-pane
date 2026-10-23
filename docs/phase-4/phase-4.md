@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, and command-line entry into the running workspace.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1, the Qt-free filtering model in P4-M2, text-filter delivery in P4-M3, the clipboard-transfer model in P4-M4, clipboard delivery in P4-M5, and independent single-instance command-line launch work in P4-M9. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and independent P4-M9 through P4-M11. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -43,7 +43,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestone IDs and entries remain in numeric order below. P4-M9 was independent and completed ahead of P4-M6 to P4-M8. P4-M11 is independent and, once P4-M10 finishes, runs ahead of P4-M6 through P4-M8 for the same reason. P4-M1 through P4-M5 and P4-M9 through P4-M11 are complete.
+Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M9 through P4-M11 are complete.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -77,13 +77,13 @@ Plan: [overview](milestone-05-overview.md), [architecture](milestone-05-architec
 
 ### P4-M6: Navigate by entered path
 
-Status: Planned
+Status: Done
 Goal: Make the Path Edit Control editable with safe validation, history integration, and clear failure feedback.
 Plan: [overview](milestone-06-overview.md), [architecture](milestone-06-architecture.md)
 
 ### P4-M7: Drag and drop file items
 
-Status: Planned
+Status: Active
 Goal: Add file drag and drop for approved sources and targets through the same safe operation workflow.
 Plan: [overview](milestone-07-overview.md), [architecture](milestone-07-architecture.md)
 
