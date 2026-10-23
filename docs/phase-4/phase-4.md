@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, arrange, and open files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, command-line entry, and configurable file associations.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and P4-M8 through P4-M11. P4-M7 still needs guided real-pointer macOS acceptance; P4-M12 has implemented the modified-press repair and visible refusal reasons, with physical-pointer acceptance still pending. P4-M14 is active to repair a reported physical secondary-gesture regression before those acceptance gates close. P4-M13 follows those gates. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and P4-M8 through P4-M11. P4-M7 and P4-M12 still need guided real-pointer macOS acceptance, and P4-M14 remains active for its physical secondary-gesture repair. The owner explicitly directed P4-M13 implementation on 2026-10-23, overriding its earlier wait for those manual gates without treating them as complete. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -45,7 +45,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M8 through P4-M11 are complete. P4-M12 is active before closing P4-M7's guided acceptance because it repairs that interaction. P4-M14 is active to restore physical secondary Context Menu gestures before closing those pointer-acceptance gates. P4-M13 implementation follows the gates and M14.
+Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M8 through P4-M11 are complete. P4-M12 is active before closing P4-M7's guided acceptance because it repairs that interaction. P4-M14 is active to restore physical secondary Context Menu gestures before closing those pointer-acceptance gates. P4-M13 is also active under the owner's explicit sequence override; that work does not close the older physical-acceptance gates.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -121,7 +121,7 @@ Plan: [overview](milestone-12-overview.md), [architecture](milestone-12-architec
 
 ### P4-M13: File associations and Open With
 
-Status: Planned
+Status: Active
 Goal: Let the user configure macOS-recommended Open With applications per content type and Context Menu variant, and confirm a type-wide default-app choice for the current macOS user.
 Plan: [overview](milestone-13-overview.md), [architecture](milestone-13-architecture.md)
 

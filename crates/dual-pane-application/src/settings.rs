@@ -40,6 +40,7 @@ pub enum ActionId {
     CutItems,
     PasteItems,
     EditPath,
+    ConfigureOpenWith,
 }
 
 /// The two persistent Folder Items Context Menu configurations.
@@ -502,6 +503,7 @@ pub struct SettingsSnapshot {
     pub skip_quit_confirmation: bool,
     pub visibility: VisibilityPolicy,
     pub context_menus: ContextMenuPreferences,
+    pub file_associations: crate::FileAssociationPreferences,
 }
 
 /// Global Folder Items visibility choices. An item that matches several rules
@@ -537,6 +539,7 @@ pub struct SettingsState {
     skip_quit_confirmation: bool,
     visibility: VisibilityPolicy,
     context_menus: ContextMenuPreferences,
+    file_associations: crate::FileAssociationPreferences,
     revision: u64,
     saved_revision: u64,
 }
@@ -634,7 +637,7 @@ impl SettingsState {
         let mut bindings = ActionId::ALL.into_iter().map(|action| ActionBinding { action, shortcut: self.binding(action) }).collect::<Vec<_>>();
         bindings.sort_by_key(|binding| binding.action.as_str());
         let folder_sorts = self.lru.iter().filter_map(|location| self.folder_sorts.get(location).copied().map(|sort| (location.clone(), sort))).collect();
-        SettingsSnapshot { bindings, shortcut_lists: self.shortcut_lists(), folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup, skip_quit_confirmation: self.skip_quit_confirmation, visibility: self.visibility, context_menus: self.context_menus.clone() }
+        SettingsSnapshot { bindings, shortcut_lists: self.shortcut_lists(), folder_sorts, favorites: self.favorites.clone(), hide_notices_at_startup: self.hide_notices_at_startup, skip_quit_confirmation: self.skip_quit_confirmation, visibility: self.visibility, context_menus: self.context_menus.clone(), file_associations: self.file_associations.clone() }
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -682,6 +685,7 @@ impl SettingsState {
         self.skip_quit_confirmation = snapshot.skip_quit_confirmation;
         self.visibility = snapshot.visibility;
         self.context_menus = snapshot.context_menus;
+        self.file_associations = snapshot.file_associations;
         self.revision += 1;
     }
     pub fn hide_notices_at_startup(&self) -> bool {
@@ -715,6 +719,34 @@ impl SettingsState {
     }
     pub fn context_menus(&self) -> &ContextMenuPreferences {
         &self.context_menus
+    }
+    pub fn file_associations(&self) -> &crate::FileAssociationPreferences {
+        &self.file_associations
+    }
+    pub fn pin_file_association(&mut self, content_type: &str) -> Result<bool, crate::FileAssociationPreferenceRejection> {
+        let changed = self.file_associations.pin(content_type)?;
+        self.revision += u64::from(changed);
+        Ok(changed)
+    }
+    pub fn set_file_association_selected(&mut self, content_type: &str, kind: ContextMenuKind, application: crate::ApplicationIdentity, selected: bool) -> Result<bool, crate::FileAssociationPreferenceRejection> {
+        let changed = self.file_associations.set_selected(content_type, kind, application, selected)?;
+        self.revision += u64::from(changed);
+        Ok(changed)
+    }
+    pub fn clear_file_association(&mut self, content_type: &str) -> Result<bool, crate::FileAssociationPreferenceRejection> {
+        let changed = self.file_associations.clear(content_type)?;
+        self.revision += u64::from(changed);
+        Ok(changed)
+    }
+    pub fn remove_file_association(&mut self, content_type: &str) -> bool {
+        let changed = self.file_associations.remove(content_type);
+        self.revision += u64::from(changed);
+        changed
+    }
+    pub fn remap_file_association_candidates(&mut self, content_type: &str, candidates: &[crate::ApplicationIdentity]) -> bool {
+        let changed = self.file_associations.remap_unambiguous_candidates(content_type, candidates);
+        self.revision += u64::from(changed);
+        changed
     }
     pub fn set_context_menu_visible(&mut self, kind: ContextMenuKind, action: ActionId, visible: bool) -> Result<bool, ContextMenuPreferenceRejection> {
         let changed = self.context_menus.set_visible(kind, action, visible)?;
@@ -837,14 +869,14 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::CutItems), shortcut(true, false, Key::Character('X')));
         assert_eq!(default_shortcut(ActionId::PasteItems), shortcut(true, false, Key::Character('V')));
         assert_eq!(default_shortcut(ActionId::EditPath), shortcut(true, false, Key::Character('L')));
-        assert_eq!(ActionId::ALL.last(), Some(&ActionId::EditPath), "Edit Path is appended last");
+        assert_eq!(ActionId::ALL.last(), Some(&ActionId::ConfigureOpenWith), "Configure Open With is appended last");
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
         assert_eq!(default_shortcut(ActionId::OpenInFinder), None);
-        assert_eq!(&ActionId::ALL[ActionId::ALL.len() - 4..ActionId::ALL.len() - 1], &[ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems], "clipboard IDs are appended");
+        assert!(ActionId::ALL.windows(3).any(|actions| actions == [ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems]), "clipboard IDs stay consecutive");
     }
     #[test]
     fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
-        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems];
+        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::ConfigureOpenWith];
         for action in ActionId::ALL {
             let expected = if list.contains(&action) {
                 ShortcutScope::FolderItemsList
@@ -860,7 +892,7 @@ mod tests {
     #[test]
     fn focus_filter_default_is_appended_and_respects_older_bindings() {
         let command_f = default_shortcut(ActionId::FocusFolderItemsFilter).unwrap();
-        assert_eq!(ActionId::ALL.get(ActionId::ALL.len() - 5), Some(&ActionId::FocusFolderItemsFilter));
+        assert_eq!(ActionId::ALL.get(ActionId::ALL.len() - 6), Some(&ActionId::FocusFolderItemsFilter));
         assert_eq!(ActionId::FocusFolderItemsFilter.scope(), ShortcutScope::Window);
         let mut old = SettingsState::new();
         old.apply(SettingsSnapshot { bindings: vec![ActionBinding { action: ActionId::FocusOtherBrowser, shortcut: Some(command_f) }], ..SettingsSnapshot::default() });
@@ -894,7 +926,7 @@ mod tests {
         let older = ActionId::ALL[..18].iter().map(|action| ActionBinding { action: *action, shortcut: default_shortcut(*action) }).collect::<Vec<_>>();
         let mut state = SettingsState::new();
         state.apply(SettingsSnapshot { bindings: older, ..SettingsSnapshot::default() });
-        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder] {
+        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::ConfigureOpenWith] {
             assert_eq!(state.binding(action), default_shortcut(action), "{action:?}");
         }
         let taken = ActionBinding { action: ActionId::NewTab, shortcut: default_shortcut(ActionId::RenameItem) };

@@ -46,7 +46,9 @@ fn stricter_visibility_clears_actions_then_reconciles_surviving_visit_state() {
 
     let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![entry("keep")]), changes: None }.into());
     assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("keep")]);
-    assert!(matches!(loaded.outputs.as_slice(), [Output::FolderItemsLoaded { scroll_hint: Some(scroll), .. }, Output::SelectionChanged { row: None, .. }] if scroll.entry() == &name("keep")));
+    assert!(matches!(loaded.outputs.first(), Some(Output::FolderItemsLoaded { scroll_hint: Some(scroll), .. }) if scroll.entry() == &name("keep")));
+    assert!(matches!(loaded.outputs.get(1), Some(Output::SelectionChanged { row: None, .. })));
+    assert!(loaded.outputs.iter().any(|output| matches!(output, Output::FileAssociationsChanged)));
 }
 
 #[test]

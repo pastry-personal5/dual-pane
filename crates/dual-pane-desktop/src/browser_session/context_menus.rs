@@ -31,6 +31,9 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     pub fn invoke_folder_items_menu(&mut self, token: dual_pane_application::FolderItemsMenuToken, action: dual_pane_application::ActionId) {
         self.submit(Command::InvokeFolderItemsMenu { token, action });
     }
+    pub fn invoke_open_with(&mut self, menu: dual_pane_application::FolderItemsMenuToken, token: dual_pane_application::OpenWithToken) {
+        self.submit(Command::InvokeOpenWith { menu, token });
+    }
     pub fn dismiss_folder_items_menu(&mut self, token: dual_pane_application::FolderItemsMenuToken) {
         self.submit(Command::DismissFolderItemsMenu { token });
     }

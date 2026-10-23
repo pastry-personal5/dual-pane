@@ -430,6 +430,8 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
         schedule_path_columns_checks(window, browsers, left_model, right_model);
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT"))
         schedule_file_drag_drop_checks(window, browsers, left_model, right_model);
+    if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_ASSOCIATIONS_ROOT"))
+        schedule_file_association_checks(window, *settings_controller, bridge, left_model);
     bool instance_exit_ok = false;
     const int instance_exit_ms = qEnvironmentVariableIntValue("DUAL_PANE_INTERNAL_INSTANCE_EXIT_MS", &instance_exit_ok);
     if (instance_exit_ok && instance_exit_ms > 0)

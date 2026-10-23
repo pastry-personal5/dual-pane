@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use dual_pane_adapters::{FavoritesEvent, GroupMotion, WorkspaceViewModel, action_label, context_menu_rejection_text, favorite_rejection_text, reader_start_failure_status};
-use dual_pane_application::{ActionId, Command, ContextMenuKind, ContextMenuPreferenceRejection, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, action_spec, default_shortcuts};
+use dual_pane_application::{ActionId, Command, ContextMenuKind, ContextMenuPreferenceRejection, FileAssociationTypeView, Key, Shortcut, ShortcutRejection, ShortcutScope, WindowFrame, WindowLayout, WindowState, action_spec, default_shortcuts};
 use dual_pane_domain::BrowserSide;
 
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
@@ -25,6 +25,7 @@ use crate::settings_storage::SettingsWorker;
 mod context_menus;
 mod desktop_session;
 mod favorites;
+mod file_associations;
 mod notices;
 mod settings;
 mod shortcuts;
@@ -104,6 +105,10 @@ pub mod ffi {
         #[qproperty(i32, bindings_revision, cxx_name = "bindingsRevision", READ, NOTIFY)]
         #[qproperty(i32, context_menus_revision, cxx_name = "contextMenusRevision", READ, NOTIFY)]
         #[qproperty(i32, context_menu_rejection_revision, cxx_name = "contextMenuRejectionRevision", READ, NOTIFY)]
+        #[qproperty(i32, file_associations_revision, cxx_name = "fileAssociationsRevision", READ, NOTIFY)]
+        #[qproperty(bool, file_associations_pending, cxx_name = "fileAssociationsPending", READ, NOTIFY)]
+        #[qproperty(QString, file_associations_error, cxx_name = "fileAssociationsError", READ, NOTIFY)]
+        #[qproperty(i32, file_association_open_requests, cxx_name = "fileAssociationOpenRequests", READ, NOTIFY)]
         #[qproperty(QString, startup_failure, cxx_name = "startupFailure", READ, NOTIFY)]
         type WorkspaceBridge = super::WorkspaceBridgeRust;
 
@@ -248,6 +253,45 @@ pub mod ffi {
         fn reset_context_menus(self: Pin<&mut WorkspaceBridge>);
         #[cxx_name = "contextMenuRejectionText"]
         fn context_menu_rejection_text(self: &WorkspaceBridge) -> QString;
+
+        #[cxx_name = "fileAssociationTypeCount"]
+        fn file_association_type_count(self: &WorkspaceBridge) -> i32;
+        #[cxx_name = "fileAssociationTypeIdentifier"]
+        fn file_association_type_identifier(self: &WorkspaceBridge, index: i32) -> QString;
+        #[cxx_name = "fileAssociationTypeKind"]
+        fn file_association_type_kind(self: &WorkspaceBridge, index: i32) -> QString;
+        #[cxx_name = "fileAssociationTypeExtension"]
+        fn file_association_type_extension(self: &WorkspaceBridge, index: i32) -> QString;
+        #[cxx_name = "fileAssociationTypePinned"]
+        fn file_association_type_pinned(self: &WorkspaceBridge, index: i32) -> bool;
+        #[cxx_name = "fileAssociationCandidateCount"]
+        fn file_association_candidate_count(self: &WorkspaceBridge, type_index: i32) -> i32;
+        #[cxx_name = "fileAssociationCandidateName"]
+        fn file_association_candidate_name(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> QString;
+        #[cxx_name = "fileAssociationCandidateLocation"]
+        fn file_association_candidate_location(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> QString;
+        #[cxx_name = "fileAssociationCandidateAvailable"]
+        fn file_association_candidate_available(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> bool;
+        #[cxx_name = "fileAssociationCandidateNormal"]
+        fn file_association_candidate_normal(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> bool;
+        #[cxx_name = "fileAssociationCandidateComprehensive"]
+        fn file_association_candidate_comprehensive(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> bool;
+        #[cxx_name = "fileAssociationCandidateDefault"]
+        fn file_association_candidate_default(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> bool;
+        #[cxx_name = "addFileAssociationSample"]
+        fn add_file_association_sample(self: Pin<&mut WorkspaceBridge>, path: &QByteArray);
+        #[cxx_name = "refreshFileAssociations"]
+        fn refresh_file_associations(self: Pin<&mut WorkspaceBridge>);
+        #[cxx_name = "changeFileAssociationSelection"]
+        fn change_file_association_selection(self: Pin<&mut WorkspaceBridge>, type_index: i32, app_index: i32, kind: i32, selected: bool);
+        #[cxx_name = "clearFileAssociation"]
+        fn clear_file_association(self: Pin<&mut WorkspaceBridge>, type_index: i32);
+        #[cxx_name = "removeFileAssociation"]
+        fn remove_file_association(self: Pin<&mut WorkspaceBridge>, type_index: i32);
+        #[cxx_name = "setDefaultApplication"]
+        fn set_default_application(self: Pin<&mut WorkspaceBridge>, type_index: i32, app_index: i32);
+        #[cxx_name = "takeFileAssociationType"]
+        fn take_file_association_type(self: Pin<&mut WorkspaceBridge>) -> QString;
     }
 }
 
@@ -284,6 +328,12 @@ pub struct WorkspaceBridgeRust {
     bindings_revision: i32,
     context_menus_revision: i32,
     context_menu_rejection_revision: i32,
+    file_associations_revision: i32,
+    file_associations_pending: bool,
+    file_associations_error: QString,
+    file_association_open_requests: i32,
+    file_association_types: Vec<FileAssociationTypeView>,
+    pending_file_association_types: VecDeque<Option<String>>,
     startup_failure: QString,
     shown: WorkspaceViewModel,
 }
@@ -346,7 +396,15 @@ impl ffi::WorkspaceBridge {
     }
 
     fn refresh(mut self: Pin<&mut Self>) {
-        let Some((view, layout)) = with_session(|session| (session.workspace_view().clone(), session.take_layout_request())) else { return };
+        let Some((view, layout, association_types, association_state, association_requests)) = with_session(|session| {
+            let mut requests = Vec::new();
+            while let Some(request) = session.take_association_settings_request() {
+                requests.push(request);
+            }
+            (session.workspace_view().clone(), session.take_layout_request(), session.file_association_types(), session.file_association_state(), requests)
+        }) else {
+            return;
+        };
         // The session lock is released, so Qt may call back into this binder
         // while the notifications below are delivered.
         let favorites = revision(view.favorites_revision());
@@ -355,6 +413,7 @@ impl ffi::WorkspaceBridge {
         let bindings = revision(view.bindings_revision());
         let context_menus = revision(view.context_menus_revision());
         let context_menu_rejection = revision(view.context_menu_rejection_revision());
+        let association_revision = revision(association_state.0);
         let active = i32::from(view.active_browser() == BrowserSide::Right);
         let ready = view.favorites_ready();
         let hide_notices = view.hide_notices_at_startup();
@@ -369,6 +428,16 @@ impl ffi::WorkspaceBridge {
         self.as_mut().set_bindings_revision(bindings);
         self.as_mut().set_context_menus_revision(context_menus);
         self.as_mut().set_context_menu_rejection_revision(context_menu_rejection);
+        self.as_mut().rust_mut().get_mut().file_association_types = association_types;
+        self.as_mut().set_file_associations_revision(association_revision);
+        self.as_mut().set_file_associations_pending(association_state.1);
+        self.as_mut().set_file_associations_error(QString::from(association_state.2.as_deref().unwrap_or_default()));
+        if !association_requests.is_empty() {
+            let bridge = self.as_mut().rust_mut().get_mut();
+            bridge.pending_file_association_types.extend(association_requests);
+            bridge.file_association_open_requests = bridge.file_association_open_requests.wrapping_add(1);
+            self.as_mut().file_association_open_requests_changed();
+        }
         self.as_mut().set_notices_revision(notices);
         self.as_mut().set_notices_open_requests(opened);
         self.as_mut().set_hide_notices_at_startup(hide_notices);

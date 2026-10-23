@@ -144,6 +144,10 @@ pub enum NoticeKind {
     OpenFailed {
         item: Location,
     },
+    FileAssociationFailed {
+        action: String,
+        reason: String,
+    },
     TabDiscarded {
         location: Location,
         reason: ListingErrorKind,

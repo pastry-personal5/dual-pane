@@ -104,7 +104,7 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 
 `Favorite Item` remains the entity name. `Favorite Item Alias` names only its displayed label.
 
-Planned P4-M13 menu rows read **Open with <App Name>**. They are dynamic choices for a content type and do not have separate shortcut-capable Action IDs.
+P4-M13 menu rows read **Open with <App Name>**. They are dynamic choices for a content type and do not have separate shortcut-capable Action IDs. **Configure Open With…** is the one catalogued setup action.
 
 Mapped legacy component terms are not used in source or tests. The product and crate namespace `dual-pane` / `dual_pane` is exempt, as are technical primitives that do not name a UX component, such as directory-reading errors and entry sort keys.
 
@@ -139,7 +139,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Delete Permanently | `DeletePermanently` | Catalogued; current command; `Option+Command+Delete` default |
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
 | Open Item | `OpenItem` | Catalogued; current command; `Command+Down` default |
-| Configure Open With… | `ConfigureOpenWith` | Planned ID; opens File Associations Settings for the selected type, no default shortcut |
+| Configure Open With… | `ConfigureOpenWith` | Catalogued; current command opens File Associations Settings for the selected type, no default shortcut |
 | Open in Finder | `OpenInFinder` | Catalogued; current command, no default shortcut |
 | Focus Folder Items Filter | `FocusFolderItemsFilter` | Planned ID; `Command+F` default |
 | Copy Items | `CopyItems` | P4-M5 ID; `Command+C` default with Folder Items List focus |

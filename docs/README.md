@@ -41,7 +41,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-4/milestone-11-architecture.md](phase-4/milestone-11-architecture.md) | P4-M11 C++ and Rust desktop module layout and the folder-item action catalogue table. |
 | [phase-4/milestone-12-overview.md](phase-4/milestone-12-overview.md) | P4-M12 owner decisions, scope, and checklist for modified-press drags, current-folder drop target, refusal feedback, and Move/Copy acceptance. |
 | [phase-4/milestone-12-architecture.md](phase-4/milestone-12-architecture.md) | P4-M12 press observation, Qt drop-event delivery, typed rejection routing, and verification sequence. |
-| [phase-4/milestone-13-overview.md](phase-4/milestone-13-overview.md) | Planned P4-M13 owner decisions, scope, interaction policy, and checklist for File Associations Settings and flat Open With actions. |
+| [phase-4/milestone-13-overview.md](phase-4/milestone-13-overview.md) | Active P4-M13 delivery and acceptance checklist for File Associations Settings and flat Open With actions. |
 | [phase-4/milestone-13-architecture.md](phase-4/milestone-13-architecture.md) | P4-M13 content-type discovery, macOS app integration, menu snapshots, persistence, and verification approach. |
 | [phase-4/milestone-14-overview.md](phase-4/milestone-14-overview.md) | Planned P4-M14 physical Context Menu gesture repair, evidence, scope, and completion checklist. |
 | [phase-4/milestone-14-architecture.md](phase-4/milestone-14-architecture.md) | P4-M14 native event root-cause analysis, repair sequence, and physical acceptance approach. |

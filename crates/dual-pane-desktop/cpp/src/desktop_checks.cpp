@@ -1286,6 +1286,147 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
     timer->start();
 }
 
+void schedule_file_association_checks(QMainWindow &window, SettingsWindowController &settings, WorkspaceBridge &bridge, FolderItemsListModel &left_model) {
+    auto *timer = new QTimer(&window);
+    timer->setInterval(20);
+    struct State {
+        int step = 0;
+        int type = -1;
+        int application = -1;
+        QString identifier;
+        QString application_name;
+        QElapsedTimer elapsed;
+    };
+    auto state = std::make_shared<State>();
+    state->elapsed.start();
+    const auto finish = [timer](bool passed, const char *reason) {
+        timer->stop();
+        if (!passed)
+            std::cerr << "File associations check failed: " << reason << '\n';
+        QApplication::exit(passed ? 0 : 1);
+    };
+    const auto action_index = [&left_model](const QString &label) {
+        for (int action = 0; action < left_model.contextMenuActionCount(); ++action)
+            if (left_model.contextMenuActionLabel(action) == label)
+                return action;
+        return -1;
+    };
+    const auto dynamic_index = [&left_model] {
+        for (int action = 0; action < left_model.contextMenuActionCount(); ++action)
+            if (left_model.contextMenuActionLabel(action).startsWith(QStringLiteral("Open with ")))
+                return action;
+        return -1;
+    };
+    QObject::connect(timer, &QTimer::timeout, &window, [=, &window, &settings, &bridge, &left_model] {
+        if (state->elapsed.elapsed() > 15000) {
+            finish(false, "timed out waiting for native discovery or settings persistence");
+            return;
+        }
+        switch (state->step) {
+        case 0: {
+            if (!window.isVisible() || left_model.getStatusText() == QStringLiteral("Loading…") || bridge.getFileAssociationsPending())
+                return;
+            for (int type = 0; type < bridge.fileAssociationTypeCount(); ++type) {
+                if (state->type < 0) {
+                    state->type = type;
+                    state->identifier = bridge.fileAssociationTypeIdentifier(type);
+                }
+                if (bridge.fileAssociationCandidateCount(type) > 0) {
+                    state->type = type;
+                    state->application = 0;
+                    state->identifier = bridge.fileAssociationTypeIdentifier(type);
+                    state->application_name = bridge.fileAssociationCandidateName(type, 0);
+                    break;
+                }
+            }
+            if (state->type < 0) {
+                finish(false, "macOS returned no content type for the temporary text files");
+                return;
+            }
+            left_model.selectRow(0);
+            QElapsedTimer menu_time;
+            menu_time.start();
+            if (!left_model.requestContextMenu(0, 0) || menu_time.elapsed() >= 100) {
+                finish(false, "initial Normal menu was unavailable or blocked on discovery");
+                return;
+            }
+            const int configure = action_index(QStringLiteral("Configure Open With…"));
+            if (configure < 0 || dynamic_index() >= 0) {
+                finish(false, "initial menu did not keep setup visible with an empty app choice set");
+                return;
+            }
+            left_model.invokeContextMenuAction(configure);
+            state->step = 1;
+            return;
+        }
+        case 1: {
+            auto *dialog = settings.dialog();
+            if (!dialog)
+                return;
+            auto *categories = dialog->findChild<QListWidget *>(QStringLiteral("settingsCategoryList"));
+            auto *types = dialog->findChild<QListWidget *>(QStringLiteral("fileAssociationTypeList"));
+            if (!categories || categories->currentRow() != 3 || !types || !types->currentItem() || types->currentItem()->data(Qt::UserRole).toString() != state->identifier) {
+                finish(false, "Configure Open With did not focus the captured type");
+                return;
+            }
+            if (dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationAddType"))->focusPolicy() == Qt::NoFocus || dialog->findChild<QLabel *>(QStringLiteral("fileAssociationStatus"))->accessibleName().isEmpty()) {
+                finish(false, "File Associations controls lack keyboard or accessible status exposure");
+                return;
+            }
+            dialog->reject();
+            if (state->application < 0) {
+                std::cerr << "File associations check: macOS returned no application candidate; verified discovery and the safe empty state.\n";
+                finish(true, "complete");
+                return;
+            }
+            bridge.changeFileAssociationSelection(state->type, state->application, 0, true);
+            state->step = 2;
+            return;
+        }
+        case 2: {
+            if (!bridge.fileAssociationCandidateNormal(state->type, state->application))
+                return;
+            left_model.selectRow(0);
+            if (!left_model.requestContextMenu(0, 0)) {
+                finish(false, "Normal menu was unavailable after selecting an application");
+                return;
+            }
+            const int open_with = dynamic_index();
+            const int configure = action_index(QStringLiteral("Configure Open With…"));
+            if (open_with < 0 || left_model.contextMenuActionLabel(open_with) != QStringLiteral("Open with ") + state->application_name || !left_model.contextMenuActionShortcut(open_with).isEmpty() || configure <= open_with) {
+                finish(false, "Normal menu did not show the selected flat app row before setup");
+                return;
+            }
+            left_model.dismissContextMenu();
+            if (!left_model.requestContextMenu(1, 0) || dynamic_index() >= 0 || action_index(QStringLiteral("Configure Open With…")) < 0) {
+                finish(false, "Comprehensive choices were not independent from Normal");
+                return;
+            }
+            left_model.dismissContextMenu();
+            bridge.changeFileAssociationSelection(state->type, state->application, 1, true);
+            state->step = 3;
+            return;
+        }
+        case 3:
+            if (!bridge.fileAssociationCandidateComprehensive(state->type, state->application))
+                return;
+            left_model.clearSelection();
+            left_model.selectRow(0);
+            left_model.toggleRow(1);
+            if (!left_model.requestContextMenu(1, 0) || dynamic_index() < 0) {
+                finish(false, "same-type multi-selection did not keep the common Comprehensive app row");
+                return;
+            }
+            left_model.dismissContextMenu();
+            finish(true, "complete");
+            return;
+        default:
+            finish(false, "invalid check step");
+        }
+    });
+    timer->start();
+}
+
 /// Exercises the owned non-blocking native menu lifecycle without starting a
 /// workspace or observing the global clipboard.
 auto run_folder_items_context_menu_checks(QApplication &app) -> int {
@@ -1494,9 +1635,9 @@ auto run_settings_window_checks(QApplication &app) -> int {
         auto *macos_invisible = dialog->findChild<QCheckBox *>(QStringLiteral("settingsShowMacosInvisible"));
         auto *reset = dialog->findChild<QPushButton *>(QStringLiteral("settingsReset"));
         check(categories && dialog->focusWidget() == categories && categories->currentRow() == 0, "initial category focus");
-        check(categories && categories->count() == 3 && pages && pages->count() == 3, "three Settings categories and pages");
-        if (categories && categories->count() == 3) {
-            check(categories->item(0)->text() == QStringLiteral("General") && categories->item(1)->text() == QStringLiteral("Keyboard Shortcuts") && categories->item(2)->text() == QStringLiteral("Context Menus"), "concise Settings sidebar labels");
+        check(categories && categories->count() == 4 && pages && pages->count() == 4, "four Settings categories and pages");
+        if (categories && categories->count() == 4) {
+            check(categories->item(0)->text() == QStringLiteral("General") && categories->item(1)->text() == QStringLiteral("Keyboard Shortcuts") && categories->item(2)->text() == QStringLiteral("Context Menus") && categories->item(3)->text() == QStringLiteral("File Associations"), "concise Settings sidebar labels");
             check(categories->font().pixelSize() == 16, "larger Settings sidebar font");
         }
         check(title_row && heading && heading->text() == QStringLiteral("Settings") && heading->parentWidget() == title_row && notices && reset, "General controls and title row");
@@ -1539,9 +1680,9 @@ auto run_settings_window_checks(QApplication &app) -> int {
         const auto context_groups = dialog->findChildren<QFrame *>(QStringLiteral("contextMenuGroup"));
         const auto normal_checks = dialog->findChildren<QCheckBox *>(QStringLiteral("contextMenuNormalCheck"));
         const auto comprehensive_checks = dialog->findChildren<QCheckBox *>(QStringLiteral("contextMenuComprehensiveCheck"));
-        check(context_rows.size() == 12 && context_groups.size() == 5, "all categorized Context Menu rows");
-        check(normal_checks.size() == 12 && comprehensive_checks.size() == 12, "independent Context Menu columns");
-        check(std::count_if(normal_checks.cbegin(), normal_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }) == 7, "Normal factory configuration");
+        check(context_rows.size() == 13 && context_groups.size() == 5, "all categorized Context Menu rows");
+        check(normal_checks.size() == 13 && comprehensive_checks.size() == 13, "independent Context Menu columns");
+        check(std::count_if(normal_checks.cbegin(), normal_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }) == 8, "Normal factory configuration");
         check(std::all_of(comprehensive_checks.cbegin(), comprehensive_checks.cend(), [](const QCheckBox *check) { return check->isChecked(); }), "Comprehensive factory configuration");
         check(!normal_checks.isEmpty() && normal_checks.first()->accessibleName().contains(QStringLiteral("Normal Context Menu")), "accessible Context Menu checkbox");
         const auto is_information = [](const QToolButton *button) { return button->accessibleName().endsWith(QStringLiteral(" information")); };
@@ -1616,6 +1757,16 @@ auto run_settings_window_checks(QApplication &app) -> int {
             categories->setCurrentRow(2);
             check(pages->currentIndex() == 2 && pages->currentWidget()->accessibleName() == QStringLiteral("Context Menus Settings"), "Context Menus category switching");
             check_category_tables(dialog->findChild<QScrollArea *>(QStringLiteral("settingsContextMenuScroll")), QStringLiteral("contextMenuGroup"), QStringLiteral("contextMenuGroupHeading"), QStringLiteral("contextMenuColumnHeading"), "Context Menu tables fill the page width", "Context Menu category names sit above their tables, aligned with Action", "Context Menu category names are 11px bold");
+            dialog->focus_file_association(QStringLiteral("public.plain-text"));
+            check(categories->currentRow() == 3 && pages->currentIndex() == 3 && pages->currentWidget()->accessibleName() == QStringLiteral("File Associations Settings"), "Configure Open With target opens File Associations Settings");
+            auto *add_type = dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationAddType"));
+            auto *refresh_apps = dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationRefresh"));
+            auto *type_list = dialog->findChild<QListWidget *>(QStringLiteral("fileAssociationTypeList"));
+            auto *detail = dialog->findChild<QWidget *>(QStringLiteral("fileAssociationDetail"));
+            auto *status = dialog->findChild<QLabel *>(QStringLiteral("fileAssociationStatus"));
+            check(add_type && add_type->focusPolicy() != Qt::NoFocus && add_type->accessibleName() == QStringLiteral("Add File Type from Sample File"), "accessible Add File Type control");
+            check(refresh_apps && refresh_apps->focusPolicy() != Qt::NoFocus && refresh_apps->accessibleName() == QStringLiteral("Refresh File Association Applications"), "accessible Refresh Applications control");
+            check(type_list && type_list->accessibleName() == QStringLiteral("File Types") && detail && status && status->accessibleName().contains(QStringLiteral("current default is read from macOS")), "accessible empty File Associations state and status");
         }
         if (!normal_checks.isEmpty()) {
             auto *focused_check = normal_checks.first();

@@ -48,6 +48,10 @@ pub enum Output {
     ContextMenuPreferenceRejected {
         reason: ContextMenuPreferenceRejection,
     },
+    OpenFileAssociations {
+        content_type: Option<String>,
+    },
+    FileAssociationsChanged,
     ClipboardPresentationChanged {
         offer: ClipboardOffer,
         pending_cut: Arc<[dual_pane_domain::OperationRoot]>,

@@ -227,6 +227,9 @@ fn context_menu_rows(bindings: &[ActionBinding], preferences: &ContextMenuPrefer
 }
 
 pub fn action_label(action: ActionId) -> String {
+    if action == ActionId::ConfigureOpenWith {
+        return "Configure Open With…".to_owned();
+    }
     let mut label = String::new();
     for character in action.as_str().chars() {
         if character.is_ascii_uppercase() && !label.is_empty() {
@@ -291,6 +294,7 @@ fn notice_text(notice: &Notice) -> String {
             format!("{removed}Couldn’t remove temporary items left by an earlier session in {folders}.")
         }
         NoticeKind::OpenFailed { item } => format!("Couldn’t open “{}”.", location_text(item)),
+        NoticeKind::FileAssociationFailed { action, reason } => format!("{action} failed: {reason}"),
         NoticeKind::TabDiscarded { location, reason } => format!("Couldn’t restore “{}”: {reason:?}.", location_text(location)),
         NoticeKind::SessionNotRestored => "The previous workspace could not be restored. Opened Home folders instead.".to_owned(),
         NoticeKind::SettingsLoadTimedOut => "Settings took too long to load. This launch’s tabs and window layout will not be saved; the previous workspace is protected.".to_owned(),
@@ -341,7 +345,7 @@ mod tests {
         presenter.apply_chrome(&chrome);
         let view = presenter.view();
         assert_eq!(view.context_menu_rows().len(), CONTEXT_MENU_ACTIONS.len());
-        assert_eq!(view.context_menu_rows().iter().filter(|row| row.normal).count(), 7);
+        assert_eq!(view.context_menu_rows().iter().filter(|row| row.normal).count(), 8);
         assert!(view.context_menu_rows().iter().all(|row| row.comprehensive));
         assert_eq!(view.context_menu_rows().iter().find(|row| row.action == ActionId::OpenItem).and_then(|row| row.shortcut), Some(shortcut));
         assert_eq!(view.context_menu_rows().first().map(|row| (row.label.as_str(), row.group_label)), Some(("Rename Item", "Rename and Create")));

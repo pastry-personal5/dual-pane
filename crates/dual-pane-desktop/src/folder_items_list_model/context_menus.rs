@@ -21,13 +21,25 @@ impl ffi::FolderItemsListModel {
         self.rust().context_menu.as_ref().map(|menu| menu.sections.iter().map(|section| section.actions.len()).sum::<usize>()).and_then(|count| i32::try_from(count).ok()).unwrap_or(0)
     }
     pub(super) fn context_menu_action_id(&self, index: i32) -> i32 {
-        context_menu_action(self.rust().context_menu.as_ref(), index).map_or(-1, |action| action.action as i32)
+        context_menu_action(self.rust().context_menu.as_ref(), index).map_or(-1, |action| match action {
+            FolderItemsMenuAction::Static { action, .. } => *action as i32,
+            FolderItemsMenuAction::OpenWith(_) => -2,
+        })
     }
     pub(super) fn context_menu_action_label(&self, index: i32) -> QString {
-        context_menu_action(self.rust().context_menu.as_ref(), index).map_or_else(QString::default, |action| QString::from(action_label(action.action).as_str()))
+        context_menu_action(self.rust().context_menu.as_ref(), index).map_or_else(QString::default, |action| match action {
+            FolderItemsMenuAction::Static { action, .. } => QString::from(action_label(*action).as_str()),
+            FolderItemsMenuAction::OpenWith(action) => QString::from(action.label.as_str()),
+        })
     }
     pub(super) fn context_menu_action_shortcut(&self, index: i32) -> QString {
-        context_menu_action(self.rust().context_menu.as_ref(), index).and_then(|action| action.shortcut).map(key_sequence).map_or_else(QString::default, |sequence| QString::from(sequence.as_str()))
+        context_menu_action(self.rust().context_menu.as_ref(), index)
+            .and_then(|action| match action {
+                FolderItemsMenuAction::Static { shortcut, .. } => *shortcut,
+                FolderItemsMenuAction::OpenWith(_) => None,
+            })
+            .map(key_sequence)
+            .map_or_else(QString::default, |sequence| QString::from(sequence.as_str()))
     }
     pub(super) fn context_menu_action_starts_section(&self, index: i32) -> bool {
         let Ok(index) = usize::try_from(index) else { return false };
@@ -46,11 +58,12 @@ impl ffi::FolderItemsListModel {
         self.rust().context_menu.as_ref().map_or(0, |menu| matches!(menu.kind, ContextMenuKind::Comprehensive) as i32)
     }
     pub(super) fn invoke_context_menu_action(mut self: Pin<&mut Self>, index: i32) {
-        let menu = self.rust().context_menu.as_ref().map(|menu| (menu.token, context_menu_action(Some(menu), index).map(|action| action.action)));
+        let menu = self.rust().context_menu.as_ref().map(|menu| (menu.token, context_menu_action(Some(menu), index).cloned()));
         self.as_mut().rust_mut().get_mut().context_menu = None;
         if let Some((token, action)) = menu {
             with_session(|session| match action {
-                Some(action) => session.invoke_folder_items_menu(token, action),
+                Some(FolderItemsMenuAction::Static { action, .. }) => session.invoke_folder_items_menu(token, action),
+                Some(FolderItemsMenuAction::OpenWith(action)) => session.invoke_open_with(token, action.token),
                 None => session.dismiss_folder_items_menu(token),
             });
         }

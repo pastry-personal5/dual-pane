@@ -5,6 +5,9 @@
 #include "dual_pane_desktop/gui_common.hpp"
 #include "dual_pane_desktop/shortcuts.hpp"
 
+#include <QtCore/QFile>
+#include <QtWidgets/QFileDialog>
+
 // Qt parent ownership and the compact native composition are explicit here.
 // NOLINTBEGIN(cppcoreguidelines-owning-memory,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,readability-braces-around-statements,readability-identifier-length,readability-isolate-declaration,readability-named-parameter,bugprone-easily-swappable-parameters,modernize-use-trailing-return-type,readability-function-cognitive-complexity,readability-convert-member-functions-to-static,cppcoreguidelines-special-member-functions,readability-implicit-bool-conversion)
 namespace dual_pane_desktop::gui {
@@ -168,15 +171,19 @@ class SettingsWindow final : public QDialog {
         categories_->addItem(QStringLiteral("General"));
         categories_->addItem(QStringLiteral("Keyboard Shortcuts"));
         categories_->addItem(QStringLiteral("Context Menus"));
+        categories_->addItem(QStringLiteral("File Associations"));
         categories_->setCurrentRow(0);
         sidebar_layout->addWidget(categories_, 1);
         pages_->setObjectName(QStringLiteral("settingsPages"));
         pages_->addWidget(general_page());
         pages_->addWidget(shortcut_page());
         pages_->addWidget(context_menu_page());
+        pages_->addWidget(file_association_page());
         QObject::connect(categories_, &QListWidget::currentRowChanged, this, [this](int index) {
             pages_->setCurrentIndex(index);
             clear_context_menu_feedback();
+            if (index == 3 && bridge_)
+                bridge_->refreshFileAssociations();
         });
         auto *content = new QWidget(this);
         content->setObjectName(QStringLiteral("settingsContent"));
@@ -194,7 +201,16 @@ class SettingsWindow final : public QDialog {
             QObject::connect(bridge_, &WorkspaceBridge::bindingsRevisionChanged, this, [this] { QTimer::singleShot(0, this, [this] { rebuild_shortcuts(); }); });
             QObject::connect(bridge_, &WorkspaceBridge::contextMenusRevisionChanged, this, [this] { sync_context_menus(); });
             QObject::connect(bridge_, &WorkspaceBridge::contextMenuRejectionRevisionChanged, this, [this] { QTimer::singleShot(0, this, [this] { show_context_menu_feedback(bridge_->contextMenuRejectionText()); }); });
+            QObject::connect(bridge_, &WorkspaceBridge::fileAssociationsRevisionChanged, this, [this] { rebuild_file_associations(); });
+            QObject::connect(bridge_, &WorkspaceBridge::fileAssociationsPendingChanged, this, [this] { sync_file_association_status(); });
+            QObject::connect(bridge_, &WorkspaceBridge::fileAssociationsErrorChanged, this, [this] { sync_file_association_status(); });
         }
+    }
+
+    void focus_file_association(const QString &content_type) {
+        pending_association_focus_ = content_type;
+        categories_->setCurrentRow(3);
+        rebuild_file_associations();
     }
 
   private:
@@ -203,6 +219,8 @@ class SettingsWindow final : public QDialog {
         categories_->setFocus();
     }
     static auto action_name(const QString &id) -> QString {
+        if (id == QStringLiteral("ConfigureOpenWith"))
+            return QStringLiteral("Configure Open With…");
         QString name;
         for (const QChar ch : id) {
             if (!name.isEmpty() && ch.isUpper())
@@ -347,7 +365,7 @@ class SettingsWindow final : public QDialog {
         reset->setAccessibleName(QStringLiteral("Reset Settings"));
         reset->setEnabled(bridge_ != nullptr);
         QObject::connect(reset, &QPushButton::clicked, this, [this] {
-            auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Reset Settings"), QStringLiteral("Reset Dual Pane’s settings?"), QMessageBox::NoButton, this);
+            auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Reset Settings"), QStringLiteral("Reset Dual Pane’s settings, including File Association pins and Open With choices?\n\nThis does not undo default-application changes already made in macOS."), QMessageBox::NoButton, this);
             box->setObjectName(QStringLiteral("settingsResetConfirmation"));
             box->setInformativeText(QStringLiteral("Your settings and Favorites, including changes made in this session, will be replaced with defaults. Open tabs will close and the workspace layout will return to its defaults. The current settings database is kept as a backup."));
             auto *confirm = box->addButton(QStringLiteral("Reset"), QMessageBox::DestructiveRole);
@@ -361,7 +379,7 @@ class SettingsWindow final : public QDialog {
         });
         reset_row->addWidget(reset);
         reset_row->addStretch();
-        reset_row->addWidget(info_button(page, QStringLiteral("Reset Settings"), QStringLiteral("Reset restores all compiled settings and shortcuts, removes Favorites, closes open tabs, and returns the workspace layout to its defaults. The current database is kept as a backup.")));
+        reset_row->addWidget(info_button(page, QStringLiteral("Reset Settings"), QStringLiteral("Reset restores all compiled settings and shortcuts, removes Favorites and Dual Pane’s File Association choices, closes open tabs, and returns the workspace layout to its defaults. It does not undo default-application changes already made in macOS. The current database is kept as a backup.")));
         reset_card->addLayout(reset_row);
         layout->addStretch();
         return page;
@@ -824,6 +842,241 @@ class SettingsWindow final : public QDialog {
         });
         box->open();
     }
+    auto file_association_page() -> QWidget * {
+        auto *page = new QWidget(pages_);
+        page->setObjectName(QStringLiteral("settingsFileAssociationsPage"));
+        page->setAccessibleName(QStringLiteral("File Associations Settings"));
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(16, 16, 16, 16);
+        layout->setSpacing(10);
+        auto *title = new QLabel(QStringLiteral("File Associations"), page);
+        title->setObjectName(QStringLiteral("settingsPageHeading"));
+        layout->addWidget(title);
+        auto *description = new QLabel(QStringLiteral("Choose which macOS applications appear as Open With actions in each Folder Items Context Menu. These choices are separate from the macOS default application."), page);
+        description->setWordWrap(true);
+        description->setAccessibleName(description->text());
+        layout->addWidget(description);
+        auto *tools = new QHBoxLayout();
+        auto *add = new QPushButton(QStringLiteral("Add File Type…"), page);
+        add->setObjectName(QStringLiteral("fileAssociationAddType"));
+        add->setAccessibleName(QStringLiteral("Add File Type from Sample File"));
+        auto *refresh = new QPushButton(QStringLiteral("Refresh Applications"), page);
+        refresh->setObjectName(QStringLiteral("fileAssociationRefresh"));
+        refresh->setAccessibleName(QStringLiteral("Refresh File Association Applications"));
+        add->setEnabled(bridge_ != nullptr);
+        refresh->setEnabled(bridge_ != nullptr);
+        QObject::connect(add, &QPushButton::clicked, this, [this] {
+            const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Choose a Sample File"));
+            if (!path.isEmpty() && bridge_)
+                bridge_->addFileAssociationSample(QFile::encodeName(path));
+        });
+        QObject::connect(refresh, &QPushButton::clicked, this, [this] { if (bridge_) bridge_->refreshFileAssociations(); });
+        tools->addWidget(add);
+        tools->addWidget(refresh);
+        tools->addStretch();
+        layout->addLayout(tools);
+        auto *split = new QSplitter(Qt::Horizontal, page);
+        split->setObjectName(QStringLiteral("fileAssociationSplitter"));
+        file_association_types_ = new QListWidget(split);
+        file_association_types_->setObjectName(QStringLiteral("fileAssociationTypeList"));
+        file_association_types_->setAccessibleName(QStringLiteral("File Types"));
+        file_association_types_->setMinimumWidth(340);
+        file_association_detail_scroll_ = new QScrollArea(split);
+        file_association_detail_scroll_->setWidgetResizable(true);
+        file_association_detail_scroll_->setObjectName(QStringLiteral("fileAssociationDetailScroll"));
+        file_association_detail_ = new QWidget(file_association_detail_scroll_);
+        file_association_detail_->setObjectName(QStringLiteral("fileAssociationDetail"));
+        file_association_detail_layout_ = new QVBoxLayout(file_association_detail_);
+        file_association_detail_layout_->setContentsMargins(12, 0, 0, 0);
+        file_association_detail_layout_->setSpacing(10);
+        file_association_detail_scroll_->setWidget(file_association_detail_);
+        split->addWidget(file_association_types_);
+        split->addWidget(file_association_detail_scroll_);
+        split->setStretchFactor(1, 1);
+        layout->addWidget(split, 1);
+        file_association_status_ = new QLabel(page);
+        file_association_status_->setObjectName(QStringLiteral("fileAssociationStatus"));
+        file_association_status_->setAccessibleName(QStringLiteral("File Associations Status"));
+        file_association_status_->setWordWrap(true);
+        layout->addWidget(file_association_status_);
+        QObject::connect(file_association_types_, &QListWidget::currentRowChanged, this, [this] { rebuild_file_association_detail(); });
+        rebuild_file_associations();
+        return page;
+    }
+    void rebuild_file_associations() {
+        if (!file_association_types_ || !bridge_)
+            return;
+        QString selected = pending_association_focus_;
+        if (selected.isEmpty() && file_association_types_->currentItem())
+            selected = file_association_types_->currentItem()->data(Qt::UserRole).toString();
+        pending_association_focus_.clear();
+        const QSignalBlocker block(file_association_types_);
+        file_association_types_->clear();
+        int selected_row = -1;
+        for (int index = 0; index < bridge_->fileAssociationTypeCount(); ++index) {
+            const QString kind = bridge_->fileAssociationTypeKind(index);
+            const QString extension = bridge_->fileAssociationTypeExtension(index);
+            const QString identifier = bridge_->fileAssociationTypeIdentifier(index);
+            QString label = kind;
+            if (!extension.isEmpty())
+                label += QStringLiteral(" (.") + extension + QStringLiteral(")");
+            auto *item = new QListWidgetItem(label, file_association_types_);
+            item->setData(Qt::UserRole, identifier);
+            item->setToolTip(identifier);
+            item->setData(Qt::AccessibleDescriptionRole, identifier);
+            if (identifier == selected)
+                selected_row = index;
+        }
+        if (selected_row < 0 && file_association_types_->count() > 0)
+            selected_row = 0;
+        file_association_types_->setCurrentRow(selected_row);
+        rebuild_file_association_detail();
+        sync_file_association_status();
+    }
+    void rebuild_file_association_detail() {
+        if (!file_association_detail_layout_)
+            return;
+        while (auto *item = file_association_detail_layout_->takeAt(0)) {
+            if (auto *widget = item->widget()) {
+                widget->hide();
+                widget->deleteLater();
+            }
+            delete item;
+        }
+        const int type_index = file_association_types_ ? file_association_types_->currentRow() : -1;
+        if (!bridge_ || type_index < 0) {
+            auto *empty = new QLabel(bridge_ && bridge_->getFileAssociationsPending() ? QStringLiteral("Identifying file types and applications…") : QStringLiteral("No file types are available. Open a folder containing files or choose Add File Type… with a sample file."), file_association_detail_);
+            empty->setWordWrap(true);
+            empty->setAccessibleName(empty->text());
+            file_association_detail_layout_->addWidget(empty);
+            file_association_detail_layout_->addStretch();
+            return;
+        }
+        const QString kind = bridge_->fileAssociationTypeKind(type_index);
+        const QString identifier = bridge_->fileAssociationTypeIdentifier(type_index);
+        const QString extension = bridge_->fileAssociationTypeExtension(type_index);
+        auto *heading = new QLabel(kind, file_association_detail_);
+        heading->setObjectName(QStringLiteral("fileAssociationKind"));
+        file_association_detail_layout_->addWidget(heading);
+        auto *identity = new QLabel(QStringLiteral("Content type: ") + identifier + (extension.isEmpty() ? QString() : QStringLiteral("\nPreferred extension: .") + extension), file_association_detail_);
+        identity->setObjectName(QStringLiteral("fileAssociationIdentity"));
+        identity->setTextInteractionFlags(Qt::TextSelectableByKeyboard | Qt::TextSelectableByMouse);
+        identity->setAccessibleName(identity->text());
+        file_association_detail_layout_->addWidget(identity);
+        QString default_name = QStringLiteral("None reported by macOS");
+        for (int app = 0; app < bridge_->fileAssociationCandidateCount(type_index); ++app) {
+            if (bridge_->fileAssociationCandidateDefault(type_index, app)) {
+                default_name = bridge_->fileAssociationCandidateName(type_index, app);
+                break;
+            }
+        }
+        auto *current_default = new QLabel(QStringLiteral("Current macOS default: ") + default_name, file_association_detail_);
+        current_default->setObjectName(QStringLiteral("fileAssociationDefault"));
+        current_default->setAccessibleName(current_default->text());
+        file_association_detail_layout_->addWidget(current_default);
+        auto *header = new QLabel(QStringLiteral("Applications                         Normal       Comprehensive       Default"), file_association_detail_);
+        header->setObjectName(QStringLiteral("fileAssociationApplicationsHeader"));
+        file_association_detail_layout_->addWidget(header);
+        const int count = bridge_->fileAssociationCandidateCount(type_index);
+        for (int app = 0; app < count; ++app) {
+            auto *row = new QFrame(file_association_detail_);
+            row->setObjectName(QStringLiteral("fileAssociationApplicationRow"));
+            auto *cells = new QHBoxLayout(row);
+            cells->setContentsMargins(8, 6, 8, 6);
+            cells->setSpacing(12);
+            const QString name = bridge_->fileAssociationCandidateName(type_index, app);
+            const QString location = bridge_->fileAssociationCandidateLocation(type_index, app);
+            const bool available = bridge_->fileAssociationCandidateAvailable(type_index, app);
+            auto *app_text = new QLabel(name + (available ? QStringLiteral("\n") : QStringLiteral(" — unavailable\n")) + location, row);
+            app_text->setWordWrap(true);
+            app_text->setMinimumWidth(320);
+            app_text->setAccessibleName(name + (available ? QString() : QStringLiteral(", unavailable")) + QStringLiteral(", ") + location);
+            cells->addWidget(app_text, 1);
+            auto add_choice = [this, row, cells, type_index, app, name, available](int menu_kind, bool checked) {
+                auto *choice = new ToggleSwitch(row);
+                const QString menu = menu_kind == 0 ? QStringLiteral("Normal") : QStringLiteral("Comprehensive");
+                choice->setObjectName(menu_kind == 0 ? QStringLiteral("fileAssociationNormal") : QStringLiteral("fileAssociationComprehensive"));
+                choice->setAccessibleName(QStringLiteral("Show Open with ") + name + QStringLiteral(" in ") + menu + QStringLiteral(" Context Menu"));
+                choice->setChecked(checked);
+                choice->setEnabled(available || checked);
+                QObject::connect(choice, &QCheckBox::toggled, this, [this, type_index, app, menu_kind](bool selected) { if (bridge_) bridge_->changeFileAssociationSelection(type_index, app, menu_kind, selected); });
+                cells->addWidget(choice);
+            };
+            add_choice(0, bridge_->fileAssociationCandidateNormal(type_index, app));
+            add_choice(1, bridge_->fileAssociationCandidateComprehensive(type_index, app));
+            auto *make_default = new QPushButton(bridge_->fileAssociationCandidateDefault(type_index, app) ? QStringLiteral("Current Default") : QStringLiteral("Set as Default…"), row);
+            make_default->setObjectName(QStringLiteral("fileAssociationSetDefault"));
+            make_default->setAccessibleName(bridge_->fileAssociationCandidateDefault(type_index, app) ? name + QStringLiteral(" is the current default") : QStringLiteral("Set ") + name + QStringLiteral(" as Default for ") + kind);
+            make_default->setEnabled(available && !bridge_->fileAssociationCandidateDefault(type_index, app) && !bridge_->getFileAssociationsPending());
+            QObject::connect(make_default, &QPushButton::clicked, this, [this, type_index, app, name, kind, default_name] { confirm_default_application(type_index, app, name, kind, default_name); });
+            cells->addWidget(make_default);
+            file_association_detail_layout_->addWidget(row);
+        }
+        if (count == 0) {
+            auto *none = new QLabel(QStringLiteral("macOS reports no available applications for this content type."), file_association_detail_);
+            none->setAccessibleName(none->text());
+            file_association_detail_layout_->addWidget(none);
+        }
+        auto *actions = new QHBoxLayout();
+        auto *clear = new QPushButton(QStringLiteral("Clear Open With Choices…"), file_association_detail_);
+        clear->setObjectName(QStringLiteral("fileAssociationClear"));
+        clear->setAccessibleName(QStringLiteral("Clear Open With Choices for ") + kind);
+        auto *remove = new QPushButton(QStringLiteral("Remove Type…"), file_association_detail_);
+        remove->setObjectName(QStringLiteral("fileAssociationRemove"));
+        remove->setAccessibleName(QStringLiteral("Remove File Type ") + kind);
+        remove->setEnabled(bridge_->fileAssociationTypePinned(type_index));
+        QObject::connect(clear, &QPushButton::clicked, this, [this, type_index, kind] { confirm_file_association_local_change(type_index, kind, false); });
+        QObject::connect(remove, &QPushButton::clicked, this, [this, type_index, kind] { confirm_file_association_local_change(type_index, kind, true); });
+        actions->addWidget(clear);
+        actions->addWidget(remove);
+        actions->addStretch();
+        file_association_detail_layout_->addLayout(actions);
+        file_association_detail_layout_->addStretch();
+    }
+    void confirm_default_application(int type_index, int app_index, const QString &application, const QString &kind, const QString &old_default) {
+        auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Set Default Application"), QStringLiteral("Change the macOS default for %1 from %2 to %3 for the current macOS user?\n\nThis type-wide choice can affect Finder and other applications. macOS may ask for additional consent.").arg(kind, old_default, application), QMessageBox::NoButton, this);
+        box->setObjectName(QStringLiteral("fileAssociationDefaultConfirmation"));
+        auto *confirm = box->addButton(QStringLiteral("Set as Default"), QMessageBox::AcceptRole);
+        auto *cancel = box->addButton(QMessageBox::Cancel);
+        box->setDefaultButton(cancel);
+        box->setEscapeButton(cancel);
+        box->setWindowModality(Qt::WindowModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QObject::connect(box, &QMessageBox::finished, this, [this, box, confirm, type_index, app_index] { if (box->clickedButton() == confirm && bridge_) bridge_->setDefaultApplication(type_index, app_index); });
+        box->open();
+    }
+    void confirm_file_association_local_change(int type_index, const QString &kind, bool remove) {
+        const QString action = remove ? QStringLiteral("Remove Type") : QStringLiteral("Clear Choices");
+        const QString question = remove ? QStringLiteral("Remove %1 from Dual Pane and clear its Normal and Comprehensive Open With choices?\n\nThis does not change the macOS default application.").arg(kind) : QStringLiteral("Clear the Normal and Comprehensive Open With choices for %1?\n\nThis does not change the macOS default application.").arg(kind);
+        auto *box = new QMessageBox(QMessageBox::Question, action, question, QMessageBox::NoButton, this);
+        box->setObjectName(remove ? QStringLiteral("fileAssociationRemoveConfirmation") : QStringLiteral("fileAssociationClearConfirmation"));
+        auto *confirm = box->addButton(action, QMessageBox::AcceptRole);
+        auto *cancel = box->addButton(QMessageBox::Cancel);
+        box->setDefaultButton(cancel);
+        box->setEscapeButton(cancel);
+        box->setWindowModality(Qt::WindowModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QObject::connect(box, &QMessageBox::finished, this, [this, box, confirm, type_index, remove] {
+            if (box->clickedButton() != confirm || !bridge_)
+                return;
+            if (remove)
+                bridge_->removeFileAssociation(type_index);
+            else
+                bridge_->clearFileAssociation(type_index);
+        });
+        box->open();
+    }
+    void sync_file_association_status() {
+        if (!file_association_status_ || !bridge_)
+            return;
+        QString text = bridge_->getFileAssociationsError();
+        if (text.isEmpty() && bridge_->getFileAssociationsPending())
+            text = QStringLiteral("Identifying file types and refreshing applications…");
+        if (text.isEmpty())
+            text = QStringLiteral("Application choices are saved by Dual Pane. The current default is read from macOS.");
+        file_association_status_->setText(text);
+        file_association_status_->setAccessibleName(text);
+    }
     WorkspaceBridge *bridge_;
     std::function<void(bool)> capture_;
     QListWidget *categories_;
@@ -839,6 +1092,12 @@ class SettingsWindow final : public QDialog {
     std::vector<QPointer<QCheckBox>> context_menu_normal_checks_;
     std::vector<QPointer<QCheckBox>> context_menu_comprehensive_checks_;
     std::vector<QPointer<QLabel>> context_menu_shortcuts_;
+    QListWidget *file_association_types_ = nullptr;
+    QScrollArea *file_association_detail_scroll_ = nullptr;
+    QWidget *file_association_detail_ = nullptr;
+    QVBoxLayout *file_association_detail_layout_ = nullptr;
+    QLabel *file_association_status_ = nullptr;
+    QString pending_association_focus_;
 };
 
 class SettingsWindowController final : public QObject {
@@ -847,6 +1106,8 @@ class SettingsWindowController final : public QObject {
         shortcut_->setContext(Qt::WindowShortcut);
         shortcut_->setEnabled(false);
         QObject::connect(shortcut_, &QShortcut::activated, this, [this] { present(); });
+        if (bridge_)
+            QObject::connect(bridge_, &WorkspaceBridge::fileAssociationOpenRequestsChanged, this, [this] { present_file_association(bridge_->takeFileAssociationType()); });
     }
     void set_capture_handler(std::function<void(bool)> handler) { capture_handler_ = std::move(handler); }
     void set_available(bool available) {
@@ -868,6 +1129,13 @@ class SettingsWindowController final : public QObject {
         dialog_ = dialog;
         QObject::connect(dialog, &QDialog::finished, this, [this] { dialog_.clear(); if (capture_handler_) capture_handler_(false); });
         dialog->show();
+    }
+    void present_file_association(const QString &content_type) {
+        if (!available_)
+            return;
+        present();
+        if (dialog_)
+            dialog_->focus_file_association(content_type);
     }
     [[nodiscard]] auto dialog() const -> SettingsWindow * { return dialog_; }
     [[nodiscard]] auto shortcut() const -> QShortcut * { return shortcut_; }

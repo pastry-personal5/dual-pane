@@ -86,7 +86,7 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
       - Reset Comprehensive Button
       - Reset Both Button
       - A separate confirmation for each reset, with Cancel as the default and Escape action
-    - File Associations (File Associations Settings page; planned P4-M13)
+    - File Associations (File Associations Settings page)
       - Type list from open-folder files, pinned sample-file types, and types with saved choices
       - Add File Type Button and Refresh Applications Button
       - Selected type's kind, extension when available, content-type identifier, and current macOS-user default app

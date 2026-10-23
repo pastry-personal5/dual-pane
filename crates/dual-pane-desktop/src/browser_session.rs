@@ -81,6 +81,7 @@ pub struct WorkspaceSession<R = Runtime> {
     /// option distinguishes no new output from a request for default layout.
     layout_request: Option<Option<WindowLayout>>,
     activation_requests: VecDeque<Option<BrowserSide>>,
+    association_settings_requests: VecDeque<Option<String>>,
 }
 
 impl<R: WorkRunner> WorkspaceSession<R> {
@@ -99,7 +100,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             worker.submit(SettingsJob::Load);
         }
         let missing_worker = settings_worker.is_none();
-        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, column_contexts: [None, None], column_results: HashMap::new(), next_column_request: 0, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), revealer: Box::new(|item| reveal_in_finder(&path_from_location(item))), layout_request: None, activation_requests: VecDeque::new() };
+        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, column_contexts: [None, None], column_results: HashMap::new(), next_column_request: 0, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), revealer: Box::new(|item| reveal_in_finder(&path_from_location(item))), layout_request: None, activation_requests: VecDeque::new(), association_settings_requests: VecDeque::new() };
         session.apply_chrome();
         if missing_worker {
             // Unit-test sessions intentionally use the legacy no-store event
@@ -154,6 +155,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
                     Output::SessionRestored { layout, .. } => self.layout_request = Some(*layout),
                     Output::LayoutReset => self.layout_request = Some(None),
                     Output::ActivateWindow { focus_browser } => self.activation_requests.push_back(*focus_browser),
+                    Output::OpenFileAssociations { content_type } => self.association_settings_requests.push_back(content_type.clone()),
                     _ => {}
                 }
                 // Opening is a GUI-thread request; a refusal returns as an event.
@@ -190,6 +192,33 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     /// raise-only; a Browser asks for its Folder Items List to take focus.
     pub fn take_activation_request(&mut self) -> Option<Option<BrowserSide>> {
         self.activation_requests.pop_front()
+    }
+    pub fn take_association_settings_request(&mut self) -> Option<Option<String>> {
+        self.association_settings_requests.pop_front()
+    }
+    pub fn file_association_types(&self) -> Vec<dual_pane_application::FileAssociationTypeView> {
+        self.workspace.file_association_types()
+    }
+    pub fn file_association_state(&self) -> (u64, bool, Option<String>) {
+        (self.workspace.file_association_revision(), self.workspace.file_association_pending(), self.workspace.file_association_error().map(str::to_owned))
+    }
+    pub fn add_file_association_sample(&mut self, file: Location) {
+        self.submit(Command::AddFileAssociationSample { file });
+    }
+    pub fn refresh_file_associations(&mut self) {
+        self.submit(Command::RefreshFileAssociations);
+    }
+    pub fn set_file_association_selected(&mut self, content_type: String, kind: ContextMenuKind, application: dual_pane_application::ApplicationIdentity, selected: bool) {
+        self.submit(Command::SetFileAssociationSelected { content_type, kind, application, selected });
+    }
+    pub fn clear_file_association(&mut self, content_type: String) {
+        self.submit(Command::ClearFileAssociation { content_type });
+    }
+    pub fn remove_file_association(&mut self, content_type: String) {
+        self.submit(Command::RemoveFileAssociation { content_type });
+    }
+    pub fn set_default_application(&mut self, request: dual_pane_application::DefaultApplicationRequest) {
+        self.submit(Command::SetDefaultApplication { request });
     }
 
     pub fn is_quitting(&self) -> bool {

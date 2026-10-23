@@ -57,6 +57,6 @@ for source in crates/dual-pane-desktop/cpp/include/dual_pane_desktop/desktop_win
     "$clang_tidy" --config-file="$repository_root/.clang-tidy" --warnings-as-errors='*' "$source" -- -std=c++17 -isysroot "$sdk_path" -I"$repository_root/crates/dual-pane-desktop/cpp/include" -isystem "$generated_headers" -isystem "$qt_headers" -isystem "$qt_core_headers" -F "$qt_libraries" -iframework "$qt_libraries"
 done
 
-for source in crates/dual-pane-desktop/cpp/src/quick_look_preview.mm crates/dual-pane-desktop/cpp/src/clipboard_adapter.mm; do
+for source in crates/dual-pane-desktop/cpp/src/quick_look_preview.mm crates/dual-pane-desktop/cpp/src/clipboard_adapter.mm crates/dual-pane-desktop/cpp/src/file_associations.mm; do
     "$clang_tidy" --config-file="$repository_root/.clang-tidy" --warnings-as-errors='*' "$source" -- -x objective-c++ -fobjc-arc -std=c++17 -isysroot "$sdk_path" -I"$repository_root/crates/dual-pane-desktop/cpp/include" -isystem "$generated_headers" -isystem "$qt_headers" -isystem "$qt_core_headers" -F "$qt_libraries" -iframework "$qt_libraries"
 done

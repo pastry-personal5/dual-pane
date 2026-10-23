@@ -12,6 +12,9 @@ namespace dual_pane_desktop {
 [[nodiscard]] auto is_bundle(::rust::Slice<const std::uint8_t> path) -> bool;
 [[nodiscard]] auto open_with_default_application(::rust::Slice<const std::uint8_t> path) -> bool;
 [[nodiscard]] auto reveal_in_finder(::rust::Slice<const std::uint8_t> path) -> bool;
+void file_associations(::rust::Slice<const std::uint8_t> request, ::rust::Vec<std::uint8_t> &response);
+void open_with_application(::rust::Slice<const std::uint8_t> request, ::rust::Vec<std::uint8_t> &response);
+void set_default_application(::rust::Slice<const std::uint8_t> request, ::rust::Vec<std::uint8_t> &response);
 
 } // namespace dual_pane_desktop
 

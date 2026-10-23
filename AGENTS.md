@@ -53,11 +53,12 @@ scripts/check-path-columns.sh             # breadcrumb and expanded-column navig
 scripts/check-application-title-row.sh    # Sidebar title row and close button
 scripts/check-folder-items-context-menu.sh # asynchronous Folder Items menu lifecycle
 scripts/check-file-drag-drop.sh            # internal file drag/drop safety and lifecycle
+scripts/check-file-associations.sh         # temporary-file discovery, Settings, and flat Open With menus
 scripts/check-single-instance.sh          # forwarding, isolation, races, socket cleanup
 scripts/clipboard-acceptance.sh           # opt-in guided Finder check; replaces the global clipboard; not in make check
 ```
 
-Debug builds accept `DUAL_PANE_TEST_PROFILE` (an existing absolute disposable directory) for isolated native verification; the settings, text-editor, path-entry, path-columns, title-row, file-drag-drop, single-instance, and clipboard scripts use it. Release builds use the real home directory.
+Debug builds accept `DUAL_PANE_TEST_PROFILE` (an existing absolute disposable directory) for isolated native verification; the settings, text-editor, path-entry, path-columns, title-row, file-drag-drop, file-associations, single-instance, and clipboard scripts use it. Release builds use the real home directory.
 
 Run `make check` before calling a change done. Formatting is fixed in `rustfmt.toml` and `.clang-format` (no line-length limit); Clippy and clang-tidy have no line-length diagnostic.
 

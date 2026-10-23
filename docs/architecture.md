@@ -378,6 +378,8 @@ Planned mounted remote-volume support also distinguishes slow, timed out, discon
 
 Settings and session values are application-owned value types. The application requests a save of a coalesced session snapshot shortly after any session-relevant change and once more on quit, so a crash loses at most the most recent changes. The file format, storage location, atomic-write mechanism, and corrupt-data handling belong to the settings driver. A failed or corrupt load becomes a recoverable application event; it never makes a serialization format part of domain policy.
 
+File-association policy is also application-owned. Exact content-type identifiers and application identities key sparse per-menu choices; macOS defaults are observed state and are never persisted as Dual Pane authority. One bounded runtime lane performs content-type and Launch Services reads, one-time opens, and confirmed default changes away from menu construction and painting. Menu snapshots capture one-use application tokens plus exact file, link-target, and file-system identities; the macOS adapter re-resolves and revalidates them before an open. Late discovery changes only a later menu request and never mutates an open native menu.
+
 An operation recovery record is separate from session settings. The runtime persists it locally and atomically before an ambiguity-prone remote mutation, restricts it to the context needed for reconciliation, and never stores credentials. Loading a record may request read-only reconciliation but never executes or resumes a mutation by itself.
 
 Logging is an outer concern. Structured operation context may be carried in application outputs and emitted by a driver, but domain and application decisions must not depend on a logging backend succeeding.

@@ -3,7 +3,7 @@
 use super::shortcuts::{binding_params, insert_shortcut, replace_shortcuts, stored_shortcuts};
 use super::*;
 
-pub(super) const SCHEMA_VERSION: i64 = 11;
+pub(super) const SCHEMA_VERSION: i64 = 12;
 
 /// Move to Trash factory lists as the migrations that introduced them wrote
 /// them, so a later default never changes what an earlier step writes.
@@ -118,6 +118,13 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<(), SettingsStorage
             for action in CONTEXT_MENU_ACTIONS {
                 tx.execute("INSERT INTO context_menu_action(menu_kind, action, visible) VALUES (?1, ?2, ?3)", params![kind.as_str(), action.as_str(), i64::from(defaults.visible(kind, action))])?;
             }
+        }
+    }
+    if version < 12 {
+        tx.execute_batch("CREATE TABLE file_association_type(content_type TEXT PRIMARY KEY NOT NULL, pinned INTEGER NOT NULL CHECK(pinned IN (0, 1))); CREATE TABLE file_association_app(content_type TEXT NOT NULL REFERENCES file_association_type(content_type) ON DELETE CASCADE, menu_kind TEXT NOT NULL CHECK(menu_kind IN ('Normal', 'Comprehensive')), bundle_identifier TEXT NOT NULL, bundle_url TEXT NOT NULL, position INTEGER NOT NULL CHECK(position >= 0), PRIMARY KEY(content_type, menu_kind, bundle_identifier, bundle_url), UNIQUE(content_type, menu_kind, position));")?;
+        let defaults = ContextMenuPreferences::default();
+        for kind in ContextMenuKind::ALL {
+            tx.execute("INSERT OR IGNORE INTO context_menu_action(menu_kind, action, visible) VALUES (?1, ?2, ?3)", params![kind.as_str(), ActionId::ConfigureOpenWith.as_str(), i64::from(defaults.visible(kind, ActionId::ConfigureOpenWith))])?;
         }
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;

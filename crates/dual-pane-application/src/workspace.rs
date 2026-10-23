@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::clipboard::CapturedTransfer;
 use crate::drag_drop::{CapturedDrag, PendingDrop};
 use crate::operations::OperationCoordinator;
-use crate::{ActionBinding, ActionId, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, DragId, DropAction, DropPreflight, DropPreview, DropRejection, DropRequestId, DropTarget, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MenuAvailability, MenuInvocation, MenuTarget, MonitoringStatus, Notice, NoticeKind, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PathEntryFailure, PathRejection, PathSubmission, PathTarget, PreviewRequest, PreviewResult, PreviewView, ResolvedDropDestination, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, folder_item_spec, fresh_profile_favorites, fresh_profile_screenshots, parse_path};
+use crate::{ActionBinding, ActionId, ApplicationIdentity, BrowserChrome, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, Command, ContextMenuKind, DefaultApplicationRequest, DragId, DropAction, DropPreflight, DropPreview, DropRejection, DropRequestId, DropTarget, Event, FavoriteEdit, FavoriteGroupRecord, FavoriteItemRecord, FavoriteProbeOutcome, FavoriteRejection, FavoritesRecords, FileAssociationLookup, FileAssociationRecord, FileAssociationRequest, FileAssociationRequestId, FileAssociationRequestPurpose, FilterFailure, FilterRequest, FilterResult, FilterStatus, FolderItemsMenuAction, FolderItemsMenuSection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, FolderItemsMenuToken, Input, MenuAvailability, MenuInvocation, MenuTarget, MonitoringStatus, Notice, NoticeKind, OpenWithMenuAction, OpenWithRequest, OpenWithToken, OperationEffect, OperationJob, OperationOutcome, OperationStatus, Output, PathEntryFailure, PathRejection, PathSubmission, PathTarget, PreviewRequest, PreviewResult, PreviewView, ResolvedDropDestination, ResolvedFileAssociation, ResolvedTarget, RowChange, SessionSnapshot, SettingsFailure, SettingsState, SettingsStatus, TabSnapshot, TabSummary, TransferId, VisibilityPolicy, WindowLayout, WorkRequest, WorkspaceChrome, WorkspaceSnapshot, context_menu_group, folder_item_spec, fresh_profile_favorites, fresh_profile_screenshots, parse_path};
 use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, EntryName, ListingError, ListingErrorKind, Location, OperationCommand, OperationId, OperationIntent, OperationKind, OperationRejection, OperationRoot, OperationTarget, RequestToken, ScrollAnchor, Selection, SortSpec, TabHistory, TabId, Visit, VisitState, starts_with, valid_favorite_name};
 
 /// The most Notices a session keeps; older ones are dropped first.
@@ -76,6 +76,15 @@ pub struct Workspace {
     next_transfer: u64,
     next_menu_token: u64,
     live_menu: Option<LiveFolderItemsMenu>,
+    association_files: HashMap<Location, ResolvedFileAssociation>,
+    association_catalog: HashMap<String, FileAssociationRecord>,
+    observed_associations: HashMap<Location, HashSet<String>>,
+    association_observations: HashMap<Location, FileAssociationRequestId>,
+    association_error: Option<String>,
+    association_revision: u64,
+    association_pending: usize,
+    next_association_request: u64,
+    next_open_with_token: u64,
     current_drag: Option<CapturedDrag>,
     pending_drops: HashMap<DropRequestId, PendingDrop>,
     next_drag: u64,
@@ -158,6 +167,13 @@ struct LiveFolderItemsMenu {
     selection: Vec<EntryName>,
     destination: Option<(BrowserSide, TabId, Location, u64)>,
     actions: Vec<ActionId>,
+    open_with: Vec<CapturedOpenWith>,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedOpenWith {
+    token: OpenWithToken,
+    request: OpenWithRequest,
 }
 /// One Browser: the domain's ordered tab identities and active tab, plus the
 /// application's per-tab state, which is stored in no particular order.
@@ -228,13 +244,17 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, current_drag: None, pending_drops: HashMap::new(), next_drag: 0, next_drop_request: 0, journal_available: true, pending_selections: HashMap::new(), launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, association_files: HashMap::new(), association_catalog: HashMap::new(), observed_associations: HashMap::new(), association_observations: HashMap::new(), association_error: None, association_revision: 0, association_pending: 0, next_association_request: 0, next_open_with_token: 0, current_drag: None, pending_drops: HashMap::new(), next_drag: 0, next_drop_request: 0, journal_available: true, pending_selections: HashMap::new(), launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn is_quitting(&self) -> bool {
         self.quitting
     }
     pub fn handle(&mut self, input: Input) -> Transition {
-        let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::OpenLaunchTarget { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
+        let save_session = match &input {
+            Input::Command(Command::ActivateBrowser { .. } | Command::OpenLaunchTarget { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) => true,
+            Input::Event(event) => matches!(event.as_ref(), Event::FolderItemsLoaded { .. }),
+            _ => false,
+        };
         let observed_path = matches!(&input, Input::Command(Command::NavigateObservedPath { .. }));
         let mut transition = match input {
             Input::Command(command) => {
@@ -255,7 +275,7 @@ impl Workspace {
                     Transition::default()
                 }
             }
-            Input::Event(event) => self.event(event),
+            Input::Event(event) => self.event(*event),
         };
         if save_session || (observed_path && transition.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { .. }))) {
             self.session_revision = self.session_revision.wrapping_add(1);
@@ -382,6 +402,7 @@ impl Workspace {
             Command::CancelPathEntry { browser, tab } => self.supersede_path_check(browser, tab, true),
             Command::RequestFolderItemsMenu { browser, tab, visible_revision, kind, target } => self.request_folder_items_menu(browser, tab, visible_revision, kind, target),
             Command::InvokeFolderItemsMenu { token, action } => self.invoke_folder_items_menu(token, action),
+            Command::InvokeOpenWith { menu, token } => self.invoke_open_with(menu, token),
             Command::DismissFolderItemsMenu { token } => {
                 self.live_menu.take_if(|menu| menu.token == token);
                 Transition::default()
@@ -429,6 +450,12 @@ impl Workspace {
             Command::SetContextMenuVisibility { kind, action, visible } => self.set_context_menu_visibility(kind, action, visible),
             Command::ResetContextMenu { kind } => self.reset_context_menu(kind),
             Command::ResetContextMenus => self.reset_context_menus(),
+            Command::AddFileAssociationSample { file } => self.resolve_file_associations(vec![file], FileAssociationRequestPurpose::PinSample),
+            Command::RefreshFileAssociations => self.refresh_file_associations(),
+            Command::SetFileAssociationSelected { content_type, kind, application, selected } => self.set_file_association_selected(content_type, kind, application, selected),
+            Command::ClearFileAssociation { content_type } => self.clear_file_association(&content_type),
+            Command::RemoveFileAssociation { content_type } => self.remove_file_association(&content_type),
+            Command::SetDefaultApplication { request } => self.set_default_application(request),
             Command::UpdateWindowLayout { layout } => self.update_window_layout(layout),
             Command::SetPreviewTarget { browser, tab, width, height } => self.set_preview_target(browser, tab, width, height),
             Command::GoBack { browser, tab } => self.on_active(browser, tab, |workspace| workspace.travel(browser, false)),
@@ -449,6 +476,9 @@ impl Workspace {
     }
     fn event(&mut self, event: Event) -> Transition {
         match event {
+            Event::FileAssociationsResolved { request, outcome } => self.file_associations_resolved(request, outcome),
+            Event::OpenWithFinished { request: _, result } => self.association_effect_finished(result, "Open With"),
+            Event::DefaultApplicationFinished { request, result } => self.default_application_finished(request, result),
             Event::DropPreflighted { request, result } => self.drop_preflighted(request, result),
             Event::ClipboardPublished { request, transfer, generation, succeeded } => self.clipboard_published(request, transfer, generation, succeeded),
             Event::ClipboardChanged { generation, offer } => self.clipboard_changed(generation, offer),
@@ -592,13 +622,29 @@ impl Workspace {
         let selection = state.history.current().map(|visit| visit.state().selection().entries().to_vec()).unwrap_or_default();
         let row_invocation = matches!(target, FolderItemsMenuTarget::Row { .. });
         let actions = CONTEXT_MENU_ACTIONS.into_iter().filter(|action| self.settings.context_menus().visible(kind, *action) && self.context_menu_action_available(browser, tab, *action, row_invocation)).collect::<Vec<_>>();
-        if actions.is_empty() {
+        let open_with = self.open_with_actions(&source, &selection, kind);
+        if actions.is_empty() && open_with.is_empty() {
             transition.outputs.push(Output::FolderItemsMenuReady { snapshot: None });
             return transition;
         }
         let mut sections = Vec::new();
         for group in crate::ContextMenuGroup::ALL {
-            let rows = actions.iter().copied().filter(|action| context_menu_group(*action) == Some(group)).map(|action| FolderItemsMenuAction { action, shortcut: self.settings.binding(action) }).collect::<Vec<_>>();
+            let mut rows = Vec::new();
+            let mut inserted_open_with = false;
+            for action in actions.iter().copied().filter(|action| context_menu_group(*action) == Some(group)) {
+                if group == crate::ContextMenuGroup::Open && action == ActionId::ConfigureOpenWith && !inserted_open_with {
+                    rows.extend(open_with.iter().map(|captured| FolderItemsMenuAction::OpenWith(OpenWithMenuAction { token: captured.token, application: captured.request.application.clone(), label: self.open_with_label(&captured.request.application) })));
+                    inserted_open_with = true;
+                }
+                rows.push(FolderItemsMenuAction::Static { action, shortcut: self.settings.binding(action) });
+                if action == ActionId::OpenItem {
+                    rows.extend(open_with.iter().map(|captured| FolderItemsMenuAction::OpenWith(OpenWithMenuAction { token: captured.token, application: captured.request.application.clone(), label: self.open_with_label(&captured.request.application) })));
+                    inserted_open_with = true;
+                }
+            }
+            if group == crate::ContextMenuGroup::Open && !inserted_open_with {
+                rows.extend(open_with.iter().map(|captured| FolderItemsMenuAction::OpenWith(OpenWithMenuAction { token: captured.token, application: captured.request.application.clone(), label: self.open_with_label(&captured.request.application) })));
+            }
             if !rows.is_empty() {
                 sections.push(FolderItemsMenuSection { group, actions: rows });
             }
@@ -615,7 +661,7 @@ impl Workspace {
         } else {
             None
         };
-        self.live_menu = Some(LiveFolderItemsMenu { token, browser, tab, visible_revision, source, selection, destination: other, actions: actions.clone() });
+        self.live_menu = Some(LiveFolderItemsMenu { token, browser, tab, visible_revision, source, selection, destination: other, actions: actions.clone(), open_with });
         transition.outputs.push(Output::FolderItemsMenuReady { snapshot: Some(FolderItemsMenuSnapshot { token, kind, sections }) });
         transition
     }
@@ -631,6 +677,7 @@ impl Workspace {
             MenuAvailability::OpenableItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.activation() != Activation::None),
             MenuAvailability::PackageItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.is_package()),
             MenuAvailability::SingleItem => self.single_selected_entry(browser, tab).is_some(),
+            MenuAvailability::AssociationItems => self.association_selection_locations(browser, tab).is_some(),
         }
     }
     fn single_selected_entry(&self, browser: BrowserSide, tab: TabId) -> Option<(usize, &Entry)> {
@@ -676,7 +723,71 @@ impl Workspace {
             MenuInvocation::OpenItem => self.command_for_single_item(browser, tab, |row, name| Command::OpenEntry { browser, tab, row, name }),
             MenuInvocation::ShowPackageContents => self.command_for_single_item(browser, tab, |row, name| Command::ShowPackageContents { browser, tab, row, name }),
             MenuInvocation::RevealInFinder => self.command_for_single_item(browser, tab, |row, name| Command::RevealEntryInFinder { browser, tab, row, name }),
+            MenuInvocation::ConfigureOpenWith => {
+                let files = menu.selection.iter().map(|name| menu.source.join(name)).collect();
+                self.resolve_file_associations(files, FileAssociationRequestPurpose::FocusSettings)
+            }
         }
+    }
+
+    fn association_selection_locations(&self, browser: BrowserSide, tab: TabId) -> Option<Vec<Location>> {
+        let state = self.tab(browser, tab)?;
+        if state.pending.is_some() || state.error.is_some() || state.filter_status != FilterStatus::Ready {
+            return None;
+        }
+        let folder = &state.folder_items.as_ref()?.location;
+        let selected = state.history.current()?.state().selection().entries();
+        if selected.is_empty() {
+            return None;
+        }
+        selected
+            .iter()
+            .map(|name| {
+                let entry = state.visible_entries().iter().find(|entry| entry.name() == name)?;
+                match entry.kind() {
+                    EntryKind::File if !entry.is_package() => Some(folder.join(name)),
+                    EntryKind::Symlink { points_to_directory: false } if !entry.is_package() => Some(folder.join(name)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    fn open_with_actions(&mut self, source: &Location, selection: &[EntryName], kind: ContextMenuKind) -> Vec<CapturedOpenWith> {
+        let resolved = selection.iter().map(|name| self.association_files.get(&source.join(name))).collect::<Option<Vec<_>>>();
+        let Some(resolved) = resolved.filter(|resolved| !resolved.is_empty()) else { return Vec::new() };
+        let content_type = &resolved[0].record.content_type.identifier;
+        if resolved.iter().any(|file| file.record.content_type.identifier != *content_type) {
+            return Vec::new();
+        }
+        let Some(preferences) = self.settings.file_associations().get(content_type) else { return Vec::new() };
+        let Some(ranked) = self.association_catalog.get(content_type).map(|record| &record.candidates) else { return Vec::new() };
+        let mut captured = Vec::new();
+        for candidate in ranked {
+            if !preferences.selected(kind, &candidate.identity) || resolved.iter().any(|file| !file.record.candidates.iter().any(|other| other.identity == candidate.identity)) {
+                continue;
+            }
+            self.next_open_with_token = self.next_open_with_token.wrapping_add(1).max(1);
+            captured.push(CapturedOpenWith { token: OpenWithToken(self.next_open_with_token), request: OpenWithRequest { files: resolved.iter().map(|file| crate::OpenWithFile { source: file.source.clone(), target: file.target.clone(), source_identity: file.source_identity, target_identity: file.target_identity }).collect(), content_type: content_type.clone(), application: candidate.identity.clone() } });
+        }
+        captured
+    }
+
+    fn open_with_label(&self, application: &ApplicationIdentity) -> String {
+        self.association_catalog.values().flat_map(|record| &record.candidates).find(|candidate| candidate.identity == *application).map_or_else(|| format!("Open with {}", application.bundle_identifier), |candidate| format!("Open with {}", candidate.display_name))
+    }
+
+    fn invoke_open_with(&mut self, menu: FolderItemsMenuToken, token: OpenWithToken) -> Transition {
+        let Some(live) = self.live_menu.take_if(|live| live.token == menu) else { return Transition::default() };
+        if self.active_browser != live.browser || self.active_tab(live.browser) != live.tab {
+            return Transition::default();
+        }
+        let Some(state) = self.tab(live.browser, live.tab) else { return Transition::default() };
+        if state.visible_revision != live.visible_revision || state.folder_items.as_ref().map(|items| &items.location) != Some(&live.source) || state.history.current().map(|visit| visit.state().selection().entries()) != Some(live.selection.as_slice()) {
+            return Transition::default();
+        }
+        let Some(captured) = live.open_with.into_iter().find(|captured| captured.token == token) else { return Transition::default() };
+        Transition { outputs: vec![], work: vec![WorkRequest::OpenWithApplication { request: captured.request }] }
     }
     fn command_for_single_item(&mut self, browser: BrowserSide, tab: TabId, build: impl FnOnce(usize, EntryName) -> Command) -> Transition {
         let Some((row, entry)) = self.single_selected_entry(browser, tab) else { return Transition::default() };
@@ -1301,6 +1412,62 @@ impl Workspace {
     pub fn context_menu_preferences(&self) -> &crate::ContextMenuPreferences {
         self.settings.context_menus()
     }
+    pub fn file_association_revision(&self) -> u64 {
+        self.association_revision
+    }
+    pub fn file_association_pending(&self) -> bool {
+        self.association_pending > 0
+    }
+    pub fn file_association_error(&self) -> Option<&str> {
+        self.association_error.as_deref()
+    }
+    pub fn file_association_types(&self) -> Vec<crate::FileAssociationTypeView> {
+        let open_folders = [&self.left, &self.right].into_iter().flat_map(|browser| &browser.tabs).filter_map(|tab| tab.folder_items.as_ref().map(|items| items.location.clone())).collect::<HashSet<_>>();
+        let mut visible = self.settings.file_associations().entries().iter().map(|entry| entry.content_type.clone()).collect::<HashSet<_>>();
+        for folder in open_folders {
+            if let Some(observed) = self.observed_associations.get(&folder) {
+                visible.extend(observed.iter().cloned());
+            }
+        }
+        let mut rows = visible
+            .into_iter()
+            .filter_map(|identifier| {
+                let preferences = self.settings.file_associations().get(&identifier);
+                let record = self.association_catalog.get(&identifier);
+                // A saved type can outlive the application that registered a
+                // dynamic UTType. Keep its local choices visible so they can
+                // be removed, rather than making the type impossible to
+                // manage until that application is reinstalled.
+                if record.is_none() && preferences.is_none() {
+                    return None;
+                }
+                let content_type = record.map_or_else(|| crate::ContentTypeDescription { identifier: identifier.clone(), localized_kind: "Unavailable file type".to_owned(), preferred_extension: None }, |record| record.content_type.clone());
+                let mut identities = record.into_iter().flat_map(|record| record.candidates.iter().map(|candidate| candidate.identity.clone())).collect::<Vec<_>>();
+                if let Some(default) = record.and_then(|record| record.default_application.as_ref())
+                    && !identities.contains(default)
+                {
+                    identities.push(default.clone());
+                }
+                if let Some(preferences) = preferences {
+                    for identity in preferences.normal.iter().chain(&preferences.comprehensive) {
+                        if !identities.contains(identity) {
+                            identities.push(identity.clone());
+                        }
+                    }
+                }
+                let candidates = identities
+                    .into_iter()
+                    .map(|identity| {
+                        let available = record.and_then(|record| record.candidates.iter().find(|candidate| candidate.identity == identity));
+                        crate::FileAssociationCandidateView { display_name: available.map_or_else(|| identity.bundle_identifier.clone(), |candidate| candidate.display_name.clone()), location_hint: available.map_or_else(|| identity.bundle_url.clone(), |candidate| candidate.location_hint.clone()), available: available.is_some(), normal: preferences.is_some_and(|preferences| preferences.normal.contains(&identity)), comprehensive: preferences.is_some_and(|preferences| preferences.comprehensive.contains(&identity)), is_default: record.is_some_and(|record| record.default_application.as_ref() == Some(&identity)), identity }
+                    })
+                    .collect();
+                Some(crate::FileAssociationTypeView { content_type, pinned: preferences.is_some_and(|preferences| preferences.pinned), candidates })
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.content_type.localized_kind.cmp(&right.content_type.localized_kind).then(left.content_type.identifier.cmp(&right.content_type.identifier)));
+        rows
+    }
     pub fn notices(&self) -> &[Notice] {
         &self.notices
     }
@@ -1532,7 +1699,7 @@ impl Workspace {
         transition
     }
     fn close_tab(&mut self, browser: BrowserSide, tab: TabId) -> Transition {
-        let Some(pending) = self.tab(browser, tab).map(|state| state.pending.as_ref().map(|p| p.token)) else {
+        let Some((pending, closed_folder)) = self.tab(browser, tab).map(|state| (state.pending.as_ref().map(|pending| pending.token), state.folder_items.as_ref().map(|items| items.location.clone()))) else {
             return Transition::default();
         };
         let was_active = self.active_tab(browser) == tab;
@@ -1556,6 +1723,10 @@ impl Workspace {
             }
         };
         let mut transition = Transition { outputs: vec![Output::TabsChanged { browser, active_tab: replacement }], work: pending.into_iter().map(|token| WorkRequest::Cancel { browser, tab, token }).chain(std::iter::once(WorkRequest::CancelFilter { browser, tab })).collect() };
+        if closed_folder.as_ref().is_some_and(|folder| self.forget_associations_for_closed_folder(folder)) {
+            self.association_revision = self.association_revision.wrapping_add(1);
+            transition.outputs.push(Output::FileAssociationsChanged);
+        }
         transition.append(cancel_path);
         if was_active {
             if let Some(state) = self.tab_mut(browser, replacement) {
@@ -1842,6 +2013,8 @@ impl Workspace {
                 transition.append(self.refresh_tab(side, tab));
             }
         }
+        let saved_types = self.settings.file_associations().entries().iter().map(|entry| entry.content_type.clone()).collect::<Vec<_>>();
+        transition.append(self.resolve_file_associations_for(Vec::new(), saved_types, FileAssociationRequestPurpose::Refresh));
         transition
     }
     /// Seeds the fresh-profile Favorites once the matching Screenshots probe
@@ -2084,6 +2257,163 @@ impl Workspace {
         }
         Transition { outputs: vec![], work: self.save_settings().into_iter().collect() }
     }
+    fn resolve_file_associations(&mut self, files: Vec<Location>, purpose: FileAssociationRequestPurpose) -> Transition {
+        self.resolve_file_associations_for(files, Vec::new(), purpose)
+    }
+    /// An observation only belongs to a folder while at least one tab still
+    /// lists that folder. Keeping a request marker after its last tab closes
+    /// would let its late result repopulate the cache and Settings page.
+    fn forget_associations_for_closed_folder(&mut self, folder: &Location) -> bool {
+        if [&self.left, &self.right].into_iter().flat_map(|browser| &browser.tabs).any(|tab| tab.folder_items.as_ref().is_some_and(|items| &items.location == folder)) {
+            return false;
+        }
+        let files_before = self.association_files.len();
+        self.association_files.retain(|file, _| file.parent().as_ref() != Some(folder));
+        let observed = self.observed_associations.remove(folder).is_some();
+        let request = self.association_observations.remove(folder).is_some();
+        observed || request || self.association_files.len() != files_before
+    }
+    fn resolve_file_associations_for(&mut self, mut files: Vec<Location>, mut content_types: Vec<String>, purpose: FileAssociationRequestPurpose) -> Transition {
+        files.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+        files.dedup();
+        content_types.sort();
+        content_types.dedup();
+        if files.is_empty() && content_types.is_empty() {
+            return if matches!(purpose, FileAssociationRequestPurpose::FocusSettings) { Transition::output(Output::OpenFileAssociations { content_type: None }) } else { Transition::default() };
+        }
+        self.next_association_request = self.next_association_request.wrapping_add(1).max(1);
+        self.association_pending = self.association_pending.saturating_add(1);
+        let request = FileAssociationRequest { id: FileAssociationRequestId(self.next_association_request), files, content_types, purpose };
+        if matches!(request.purpose, FileAssociationRequestPurpose::Observe) {
+            for folder in request.files.iter().filter_map(Location::parent) {
+                self.association_observations.insert(folder, request.id);
+            }
+        }
+        Transition { outputs: vec![Output::FileAssociationsChanged], work: vec![WorkRequest::ResolveFileAssociations { request }] }
+    }
+    fn refresh_file_associations(&mut self) -> Transition {
+        let files = self.open_file_locations();
+        let content_types = self.settings.file_associations().entries().iter().map(|entry| entry.content_type.clone()).collect();
+        self.resolve_file_associations_for(files, content_types, FileAssociationRequestPurpose::Refresh)
+    }
+    fn set_file_association_selected(&mut self, content_type: String, kind: ContextMenuKind, application: ApplicationIdentity, selected: bool) -> Transition {
+        let available = self.association_catalog.get(&content_type).is_some_and(|record| record.candidates.iter().any(|candidate| candidate.identity == application));
+        let currently_selected = self.settings.file_associations().get(&content_type).is_some_and(|preferences| preferences.selected(kind, &application));
+        if !self.settings_interaction_available || (!available && (selected || !currently_selected)) {
+            return Transition::default();
+        }
+        match self.settings.set_file_association_selected(&content_type, kind, application, selected) {
+            Ok(true) => {
+                self.association_revision = self.association_revision.wrapping_add(1);
+                Transition { outputs: vec![Output::FileAssociationsChanged], work: self.save_settings().into_iter().collect() }
+            }
+            _ => Transition::default(),
+        }
+    }
+    fn clear_file_association(&mut self, content_type: &str) -> Transition {
+        if !self.settings_interaction_available || self.settings.clear_file_association(content_type).ok() != Some(true) {
+            return Transition::default();
+        }
+        self.association_revision = self.association_revision.wrapping_add(1);
+        Transition { outputs: vec![Output::FileAssociationsChanged], work: self.save_settings().into_iter().collect() }
+    }
+    fn remove_file_association(&mut self, content_type: &str) -> Transition {
+        if !self.settings_interaction_available || !self.settings.remove_file_association(content_type) {
+            return Transition::default();
+        }
+        self.association_revision = self.association_revision.wrapping_add(1);
+        Transition { outputs: vec![Output::FileAssociationsChanged], work: self.save_settings().into_iter().collect() }
+    }
+    fn set_default_application(&mut self, request: DefaultApplicationRequest) -> Transition {
+        if !self.settings_interaction_available || self.association_catalog.get(&request.content_type).is_none_or(|record| !record.candidates.iter().any(|candidate| candidate.identity == request.application) || record.default_application.as_ref() == Some(&request.application)) {
+            return Transition::default();
+        }
+        self.association_error = None;
+        self.association_pending = self.association_pending.saturating_add(1);
+        self.association_revision = self.association_revision.wrapping_add(1);
+        Transition { outputs: vec![Output::FileAssociationsChanged], work: vec![WorkRequest::SetDefaultApplication { request }] }
+    }
+    fn file_associations_resolved(&mut self, request: FileAssociationRequest, outcome: FileAssociationLookup) -> Transition {
+        self.association_pending = self.association_pending.saturating_sub(1);
+        if matches!(request.purpose, FileAssociationRequestPurpose::Observe) && request.files.iter().filter_map(Location::parent).any(|folder| self.association_observations.get(&folder) != Some(&request.id)) {
+            self.association_revision = self.association_revision.wrapping_add(1);
+            return Transition::output(Output::FileAssociationsChanged);
+        }
+        let mut transition = Transition::default();
+        match outcome {
+            FileAssociationLookup::Rejected(reason) => {
+                self.association_error = Some(reason.clone());
+                if matches!(request.purpose, FileAssociationRequestPurpose::FocusSettings) {
+                    transition.outputs.push(Output::OpenFileAssociations { content_type: None });
+                }
+            }
+            FileAssociationLookup::Resolved { files: resolved, records } => {
+                let exact_type = resolved.first().map(|file| file.record.content_type.identifier.clone()).filter(|identifier| resolved.iter().all(|file| file.record.content_type.identifier == *identifier));
+                let mut remapped = false;
+                for file in &resolved {
+                    self.association_files.insert(file.source.clone(), file.clone());
+                    self.association_catalog.insert(file.record.content_type.identifier.clone(), file.record.clone());
+                    if let Some(folder) = file.source.parent() {
+                        self.observed_associations.entry(folder).or_default().insert(file.record.content_type.identifier.clone());
+                    }
+                }
+                for record in records {
+                    remapped |= self.settings.remap_file_association_candidates(&record.content_type.identifier, &record.candidates.iter().map(|candidate| candidate.identity.clone()).collect::<Vec<_>>());
+                    self.association_catalog.insert(record.content_type.identifier.clone(), record);
+                }
+                if remapped {
+                    transition.work.extend(self.save_settings());
+                }
+                if matches!(request.purpose, FileAssociationRequestPurpose::PinSample)
+                    && let Some(content_type) = exact_type.as_deref()
+                    && self.settings.pin_file_association(content_type).ok() == Some(true)
+                {
+                    transition.work.extend(self.save_settings());
+                }
+                if matches!(request.purpose, FileAssociationRequestPurpose::FocusSettings | FileAssociationRequestPurpose::PinSample) {
+                    transition.outputs.push(Output::OpenFileAssociations { content_type: exact_type });
+                }
+                self.association_error = None;
+            }
+        }
+        self.association_revision = self.association_revision.wrapping_add(1);
+        transition.outputs.push(Output::FileAssociationsChanged);
+        transition
+    }
+    fn association_effect_finished(&mut self, result: Result<(), String>, action: &str) -> Transition {
+        match result {
+            Ok(()) => Transition::default(),
+            Err(reason) => {
+                self.association_error = Some(reason.clone());
+                self.association_revision = self.association_revision.wrapping_add(1);
+                let mut transition = self.add_notice(NoticeKind::FileAssociationFailed { action: action.to_owned(), reason });
+                transition.outputs.push(Output::FileAssociationsChanged);
+                transition
+            }
+        }
+    }
+    fn default_application_finished(&mut self, request: DefaultApplicationRequest, result: Result<(), String>) -> Transition {
+        self.association_pending = self.association_pending.saturating_sub(1);
+        match result {
+            Ok(()) => self.resolve_file_associations_for(Vec::new(), vec![request.content_type], FileAssociationRequestPurpose::Refresh),
+            Err(reason) => self.association_effect_finished(Err(reason), "Set as Default"),
+        }
+    }
+    fn open_file_locations(&self) -> Vec<Location> {
+        [&self.left, &self.right]
+            .into_iter()
+            .flat_map(|browser| &browser.tabs)
+            .filter_map(|tab| tab.folder_items.as_ref())
+            .flat_map(|items| {
+                items.entries.iter().filter_map(|entry| match entry.kind() {
+                    EntryKind::File if !entry.is_package() => Some(items.location.join(entry.name())),
+                    EntryKind::Symlink { points_to_directory: false } if !entry.is_package() => Some(items.location.join(entry.name())),
+                    _ => None,
+                })
+            })
+            .take(512)
+            .collect()
+    }
     fn update_window_layout(&mut self, layout: WindowLayout) -> Transition {
         if !layout.valid() {
             return Transition::default();
@@ -2253,6 +2583,14 @@ impl Workspace {
         self.pending_drops.clear();
         self.pending_selections.clear();
         self.pending_open = None;
+        self.live_menu = None;
+        self.association_files.clear();
+        self.association_catalog.clear();
+        self.observed_associations.clear();
+        self.association_observations.clear();
+        self.association_error = None;
+        self.association_pending = 0;
+        self.association_revision = self.association_revision.wrapping_add(1);
         self.layout = None;
         self.session_write_protected = false;
         let mut transition = Transition { outputs: vec![Output::TabsChanged { browser: BrowserSide::Left, active_tab: left }, Output::TabsChanged { browser: BrowserSide::Right, active_tab: right }, Output::ActiveBrowserChanged { browser: BrowserSide::Left }, Output::LayoutReset], work: cancelled };
@@ -2558,6 +2896,7 @@ impl Workspace {
     fn loaded(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>>) -> Transition {
         let Some(pending) = self.take_pending(browser, tab, token) else { return Transition::default() };
         let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
+        let previous_location = state.folder_items.as_ref().map(|items| items.location.clone());
         let different_folder = state.history.current().is_none_or(|visit| visit.location() != &pending.location);
         if different_folder {
             state.filter_text.clear();
@@ -2606,6 +2945,24 @@ impl Workspace {
             let visit = state.history.current().map(Visit::state);
             Transition { outputs: vec![Output::FolderItemsLoaded { browser, tab, location: pending.location, scroll_hint: visit.and_then(|visit| visit.scroll().cloned()), changes, entries: Arc::clone(&entries), visible_revision: state.visible_revision }, Output::SelectionChanged { browser, tab, selection: visit.map_or_else(Selection::default, |visit| visit.selection().clone()), row: visit.and_then(|visit| visit.cursor_row(&entries)) }], work: vec![WorkRequest::WatchReadCompleted { location: location.clone(), succeeded: true }] }
         };
+        let association_files = entries
+            .iter()
+            .filter_map(|entry| match entry.kind() {
+                EntryKind::File if !entry.is_package() => Some(location.join(entry.name())),
+                EntryKind::Symlink { points_to_directory: false } if !entry.is_package() => Some(location.join(entry.name())),
+                _ => None,
+            })
+            .take(256)
+            .collect::<Vec<_>>();
+        if previous_location.as_ref().filter(|previous| *previous != &location).is_some_and(|previous| self.forget_associations_for_closed_folder(previous)) {
+            self.association_revision = self.association_revision.wrapping_add(1);
+        }
+        self.association_files.retain(|file, _| file.parent().as_ref() != Some(&location));
+        self.observed_associations.remove(&location);
+        // An empty replacement listing starts no new lookup, but it still
+        // supersedes any earlier result for this folder.
+        self.association_observations.remove(&location);
+        transition.append(self.resolve_file_associations(association_files, FileAssociationRequestPurpose::Observe));
         if dirty && self.tab(browser, tab).and_then(TabState::requested_location).as_ref() == Some(&location) {
             transition.append(self.start_read(browser, tab, location, None));
         }

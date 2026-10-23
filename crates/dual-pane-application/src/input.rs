@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{ActionId, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, ContextMenuKind, DragId, DropAction, DropRejection, DropRequestId, DropTarget, FavoriteProbeOutcome, FilterFailure, FilterRequest, FilterResult, FinalizeResult, FolderItemsMenuTarget, FolderItemsMenuToken, MonitoringStatus, PathSubmission, PlannedItem, PreviewRequest, PreviewResult, ResolvedDropDestination, ResolvedPath, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
+use crate::{ActionId, ApplicationIdentity, ByteProgress, CleanupResult, ClipboardAction, ClipboardGeneration, ClipboardOffer, ClipboardRejection, ClipboardRequestId, ClipboardSnapshot, ContextMenuKind, DefaultApplicationRequest, DragId, DropAction, DropRejection, DropRequestId, DropTarget, FavoriteProbeOutcome, FileAssociationLookup, FileAssociationRequest, FilterFailure, FilterRequest, FilterResult, FinalizeResult, FolderItemsMenuTarget, FolderItemsMenuToken, MonitoringStatus, OpenWithRequest, OpenWithToken, PathSubmission, PlannedItem, PreviewRequest, PreviewResult, ResolvedDropDestination, ResolvedPath, RowChange, ScanFailure, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, StepResult, TransferId, VisibilityPolicy, WindowLayout};
 use dual_pane_domain::{BrowserSide, DecisionToken, Entry, EntryName, ListingErrorKind, Location, OperationChoice, OperationCommand, OperationId, OperationKind, OperationRoot, RequestToken, ScrollAnchor, SortSpec, TabId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,7 +13,7 @@ pub enum Input {
         tab: TabId,
         visible_revision: u64,
     },
-    Event(Event),
+    Event(Box<Event>),
 }
 
 /// UI-neutral workspace requests. A gesture on a Browser's visible content
@@ -57,6 +57,10 @@ pub enum Command {
     InvokeFolderItemsMenu {
         token: FolderItemsMenuToken,
         action: ActionId,
+    },
+    InvokeOpenWith {
+        menu: FolderItemsMenuToken,
+        token: OpenWithToken,
     },
     DismissFolderItemsMenu {
         token: FolderItemsMenuToken,
@@ -328,6 +332,25 @@ pub enum Command {
         kind: ContextMenuKind,
     },
     ResetContextMenus,
+    AddFileAssociationSample {
+        file: dual_pane_domain::Location,
+    },
+    RefreshFileAssociations,
+    SetFileAssociationSelected {
+        content_type: String,
+        kind: ContextMenuKind,
+        application: ApplicationIdentity,
+        selected: bool,
+    },
+    ClearFileAssociation {
+        content_type: String,
+    },
+    RemoveFileAssociation {
+        content_type: String,
+    },
+    SetDefaultApplication {
+        request: DefaultApplicationRequest,
+    },
     UpdateWindowLayout {
         layout: WindowLayout,
     },
@@ -370,6 +393,18 @@ impl Command {
 /// sweep of temporaries left by earlier launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    FileAssociationsResolved {
+        request: FileAssociationRequest,
+        outcome: FileAssociationLookup,
+    },
+    OpenWithFinished {
+        request: OpenWithRequest,
+        result: Result<(), String>,
+    },
+    DefaultApplicationFinished {
+        request: DefaultApplicationRequest,
+        result: Result<(), String>,
+    },
     DropPreflighted {
         request: DropRequestId,
         result: Result<ResolvedDropDestination, DropRejection>,
@@ -561,6 +596,6 @@ impl From<Command> for Input {
 }
 impl From<Event> for Input {
     fn from(value: Event) -> Self {
-        Self::Event(value)
+        Self::Event(Box::new(value))
     }
 }

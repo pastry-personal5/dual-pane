@@ -16,6 +16,9 @@ fn drop_preview_height_columns(connection: &Connection) {
 /// Removes structures a database at `version` did not have before a test
 /// asks the production migrator to upgrade it again.
 fn remove_newer_schema(connection: &Connection, version: i64) {
+    if version < 12 {
+        connection.execute_batch("DROP TABLE file_association_app; DROP TABLE file_association_type;").unwrap();
+    }
     if version < 11 {
         connection.execute("DROP TABLE context_menu_action", []).unwrap();
     }
@@ -66,17 +69,71 @@ fn context_menu_loading_rejects_unknown_duplicate_invalid_and_empty_configuratio
 fn version_ten_migration_seeds_context_menu_defaults() {
     let (_directory, path) = temp_database();
     let database = SettingsDatabase::open(&path).unwrap();
-    database.connection.execute("DROP TABLE context_menu_action", []).unwrap();
+    remove_newer_schema(&database.connection, 10);
     database.connection.pragma_update(None, "user_version", 10).unwrap();
     drop(database);
     let database = SettingsDatabase::open(&path).unwrap();
     assert_eq!(database.load().unwrap().context_menus, ContextMenuPreferences::default());
 }
 #[test]
+fn file_association_choices_round_trip_and_malformed_rows_are_rejected() {
+    let (_directory, path) = temp_database();
+    let mut database = SettingsDatabase::open(&path).unwrap();
+    let editor = ApplicationIdentity { bundle_identifier: "com.example.Editor".into(), bundle_url: "file:///Applications/Editor.app".into() };
+    let mut snapshot = database.load().unwrap();
+    snapshot.file_associations.pin("public.plain-text").unwrap();
+    snapshot.file_associations.set_selected("public.plain-text", ContextMenuKind::Normal, editor.clone(), true).unwrap();
+    database.save(&snapshot).unwrap();
+    drop(database);
+    let mut database = SettingsDatabase::open(&path).unwrap();
+    assert_eq!(database.load().unwrap().file_associations, snapshot.file_associations, "choices survive a database relaunch");
+
+    database.connection.execute_batch("CREATE TRIGGER reject_file_association_app BEFORE INSERT ON file_association_app BEGIN SELECT RAISE(ABORT, 'stop'); END;").unwrap();
+    let viewer = ApplicationIdentity { bundle_identifier: "com.example.Viewer".into(), bundle_url: "file:///Applications/Viewer.app".into() };
+    let mut replacement = snapshot.clone();
+    replacement.file_associations.set_selected("public.plain-text", ContextMenuKind::Comprehensive, viewer, true).unwrap();
+    assert!(database.save(&replacement).is_err());
+    database.connection.execute("DROP TRIGGER reject_file_association_app", []).unwrap();
+    assert_eq!(database.load().unwrap().file_associations, snapshot.file_associations, "a failed transactional save preserves every prior association row");
+
+    database.connection.execute("UPDATE file_association_app SET bundle_url = 'not-a-file-url'", []).unwrap();
+    assert!(matches!(database.load(), Err(SettingsStorageError::InvalidData("file association configuration"))));
+}
+
+#[test]
+fn reset_removes_local_file_associations_and_preserves_them_in_the_backup() {
+    let (_directory, path) = temp_database();
+    let mut database = SettingsDatabase::open(&path).unwrap();
+    let editor = ApplicationIdentity { bundle_identifier: "com.example.Editor".into(), bundle_url: "file:///Applications/Editor.app".into() };
+    let mut snapshot = database.load().unwrap();
+    snapshot.file_associations.set_selected("public.plain-text", ContextMenuKind::Normal, editor, true).unwrap();
+    database.save(&snapshot).unwrap();
+    let (replacement, result) = reset_database(&path, Some(database));
+    let backup = result.unwrap().unwrap();
+    assert_eq!(SettingsDatabase::open(&backup).unwrap().load().unwrap().file_associations, snapshot.file_associations);
+    assert!(replacement.unwrap().load().unwrap().file_associations.entries().is_empty());
+}
+
+#[test]
+fn version_eleven_migration_adds_empty_associations_and_setup_action_rows() {
+    let (_directory, path) = temp_database();
+    let database = SettingsDatabase::open(&path).unwrap();
+    database.connection.execute_batch("DELETE FROM context_menu_action WHERE action = 'ConfigureOpenWith'; DROP TABLE file_association_app; DROP TABLE file_association_type;").unwrap();
+    database.connection.pragma_update(None, "user_version", 11).unwrap();
+    drop(database);
+    let database = SettingsDatabase::open(&path).unwrap();
+    let loaded = database.load().unwrap();
+    assert!(loaded.file_associations.entries().is_empty());
+    assert!(loaded.context_menus.visible(ContextMenuKind::Normal, ActionId::ConfigureOpenWith));
+    assert!(loaded.context_menus.visible(ContextMenuKind::Comprehensive, ActionId::ConfigureOpenWith));
+}
+#[test]
 fn every_supported_older_schema_seeds_context_menu_defaults() {
     for version in 1..=2 {
         let (_directory, path) = legacy_database(version, "");
-        assert_eq!(SettingsDatabase::open(&path).unwrap().load().unwrap().context_menus, ContextMenuPreferences::default(), "version {version}");
+        let loaded = SettingsDatabase::open(&path).unwrap().load().unwrap();
+        assert_eq!(loaded.context_menus, ContextMenuPreferences::default(), "version {version}");
+        assert!(loaded.file_associations.entries().is_empty(), "version {version}");
     }
     for version in 3..=10 {
         let (_directory, path) = temp_database();
@@ -88,7 +145,9 @@ fn every_supported_older_schema_seeds_context_menu_defaults() {
         }
         connection.pragma_update(None, "user_version", version).unwrap();
         drop(connection);
-        assert_eq!(SettingsDatabase::open(&path).unwrap().load().unwrap().context_menus, ContextMenuPreferences::default(), "version {version}");
+        let loaded = SettingsDatabase::open(&path).unwrap().load().unwrap();
+        assert_eq!(loaded.context_menus, ContextMenuPreferences::default(), "version {version}");
+        assert!(loaded.file_associations.entries().is_empty(), "version {version}");
     }
 }
 #[test]

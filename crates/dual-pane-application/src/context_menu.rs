@@ -1,4 +1,4 @@
-use crate::{ActionId, ContextMenuGroup, ContextMenuKind, Shortcut};
+use crate::{ActionId, ContextMenuGroup, ContextMenuKind, OpenWithMenuAction, Shortcut};
 use dual_pane_domain::EntryName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,9 +11,18 @@ pub enum FolderItemsMenuTarget {
 pub struct FolderItemsMenuToken(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FolderItemsMenuAction {
-    pub action: ActionId,
-    pub shortcut: Option<Shortcut>,
+pub enum FolderItemsMenuAction {
+    Static { action: ActionId, shortcut: Option<Shortcut> },
+    OpenWith(OpenWithMenuAction),
+}
+
+impl FolderItemsMenuAction {
+    pub fn static_action(&self) -> Option<ActionId> {
+        match self {
+            Self::Static { action, .. } => Some(*action),
+            Self::OpenWith(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -11,6 +11,7 @@ class FolderItemsListModel;
 } // namespace dual_pane_desktop
 namespace dual_pane_desktop::gui {
 class Browser;
+class SettingsWindowController;
 
 /// Exercises the owned non-blocking native menu lifecycle without starting a
 /// workspace or observing the global clipboard.
@@ -35,6 +36,10 @@ void schedule_path_columns_checks(QMainWindow &window, const std::array<Browser 
 /// Exercises the private payload, typed target routing, one-use acceptance,
 /// stale-state rejection, and real Copy/Move completion with temporary files.
 void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browser *, 2> &browsers, FolderItemsListModel &left_model, FolderItemsListModel &right_model);
+
+/// Exercises real macOS type/app discovery and the File Associations settings
+/// and menu projections without launching an app or changing a system default.
+void schedule_file_association_checks(QMainWindow &window, SettingsWindowController &settings, WorkspaceBridge &bridge, FolderItemsListModel &left_model);
 
 /// Exercises the Application Title Row and its close button with real widgets
 /// and no display.

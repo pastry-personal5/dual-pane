@@ -7,13 +7,14 @@ use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
 
-use dual_pane_application::{ClipboardAction, ClipboardRejection, ClipboardRequestId, Event, FavoriteProbeOutcome, FilterFailure, FilterRequest, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes, project_filter};
+use dual_pane_application::{ClipboardAction, ClipboardRejection, ClipboardRequestId, DefaultApplicationRequest, Event, FavoriteProbeOutcome, FileAssociationLookup, FileAssociationRequest, FilterFailure, FilterRequest, OpenWithRequest, PreviewRequest, PreviewResult, ResolvedTarget, RowChange, SettingsFailure, VisibilityPolicy, WorkRequest, listing_changes, project_filter};
 use dual_pane_domain::{BrowserSide, BrowserTabs, Entry, EntryKind, ListingErrorKind, Location, OperationId, OperationRoot, RequestToken, SortSpec, TabId};
 
 use crate::clipboard_native;
 use crate::location_probe::resolve_item;
 use crate::location_watcher::WatcherHandle;
 use crate::native_location::path_from_location;
+use crate::native_shell::{change_default_application, open_with_application, resolve_file_associations};
 use crate::operation_lane::{OperationLane, Publisher, Services};
 use crate::operation_scan::{NativeKind, native_kind};
 use crate::preview_reader::read_preview;
@@ -72,6 +73,7 @@ pub struct Runtime {
     /// One serialized lane for short location probes, separate from reads.
     probes: SyncSender<ProbeJob>,
     clipboard: SyncSender<ClipboardJob>,
+    associations: SyncSender<AssociationJob>,
     events: Receiver<Event>,
     next_event: Option<Event>,
     wake_pending: Arc<AtomicBool>,
@@ -111,6 +113,12 @@ struct Job {
 struct PreviewJob {
     request: PreviewRequest,
     cancelled: Arc<AtomicBool>,
+}
+
+enum AssociationJob {
+    Resolve(FileAssociationRequest),
+    Open(OpenWithRequest),
+    SetDefault(DefaultApplicationRequest),
 }
 
 struct JobState {
@@ -154,6 +162,27 @@ impl Runtime {
         let (clipboard, clipboard_jobs) = mpsc::sync_channel(8);
         let clipboard_delivery = delivery.clone();
         thread::Builder::new().name(CLIPBOARD_THREAD_NAME.to_owned()).spawn(move || run_clipboard(clipboard_jobs, clipboard_delivery))?;
+        let (associations, association_jobs) = mpsc::sync_channel(32);
+        let association_delivery = delivery.clone();
+        thread::Builder::new().name("file-association-worker".to_owned()).spawn(move || {
+            for job in association_jobs {
+                let event = match job {
+                    AssociationJob::Resolve(request) => {
+                        let outcome = panic::catch_unwind(AssertUnwindSafe(|| resolve_file_associations(&request))).unwrap_or_else(|_| FileAssociationLookup::Rejected("The file-association service stopped unexpectedly.".to_owned()));
+                        Event::FileAssociationsResolved { request, outcome }
+                    }
+                    AssociationJob::Open(request) => {
+                        let result = panic::catch_unwind(AssertUnwindSafe(|| open_with_application(&request))).unwrap_or_else(|_| Err("The Open With service stopped unexpectedly.".to_owned()));
+                        Event::OpenWithFinished { request, result }
+                    }
+                    AssociationJob::SetDefault(request) => {
+                        let result = panic::catch_unwind(AssertUnwindSafe(|| change_default_application(&request))).unwrap_or_else(|_| Err("The default-application service stopped unexpectedly.".to_owned()));
+                        Event::DefaultApplicationFinished { request, result }
+                    }
+                };
+                deliver_event(&association_delivery, event);
+            }
+        })?;
         let watcher_delivery = delivery.clone();
         let watcher = WatcherHandle::start(Arc::new(move |event| deliver_event(&watcher_delivery, event))).unwrap_or_else(|_| WatcherHandle::unavailable());
         let mut preview_senders = Vec::with_capacity(2);
@@ -171,7 +200,7 @@ impl Runtime {
         let preview_jobs: [SyncSender<PreviewJob>; 2] = preview_senders.try_into().map_err(|_| io::Error::from(io::ErrorKind::Other))?;
         let filter_lanes = Some([FilterLane::start(BrowserSide::Left, delivery.clone())?, FilterLane::start(BrowserSide::Right, delivery.clone())?]);
         let (column_senders, column_results) = start_column_lanes(delivery.clone())?;
-        Ok(Self { left_jobs, right_jobs, probes, clipboard, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), column_senders, column_results, column_outstanding: HashMap::new(), filter_lanes, read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
+        Ok(Self { left_jobs, right_jobs, probes, clipboard, associations, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), column_senders, column_results, column_outstanding: HashMap::new(), filter_lanes, read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
     }
 
     /// Starts the file-operation lane, which reports through this runtime.
@@ -256,6 +285,18 @@ impl WorkRunner for Runtime {
     }
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
+            WorkRequest::ResolveFileAssociations { request } => self.associations.try_send(AssociationJob::Resolve(request)).err().map(|error| match error {
+                TrySendError::Full(AssociationJob::Resolve(request)) | TrySendError::Disconnected(AssociationJob::Resolve(request)) => Event::FileAssociationsResolved { request, outcome: FileAssociationLookup::Rejected("The file-association service is busy or unavailable.".to_owned()) },
+                _ => unreachable!("association queue preserves the job variant"),
+            }),
+            WorkRequest::OpenWithApplication { request } => self.associations.try_send(AssociationJob::Open(request)).err().map(|error| match error {
+                TrySendError::Full(AssociationJob::Open(request)) | TrySendError::Disconnected(AssociationJob::Open(request)) => Event::OpenWithFinished { request, result: Err("The Open With service is busy or unavailable.".to_owned()) },
+                _ => unreachable!("association queue preserves the job variant"),
+            }),
+            WorkRequest::SetDefaultApplication { request } => self.associations.try_send(AssociationJob::SetDefault(request)).err().map(|error| match error {
+                TrySendError::Full(AssociationJob::SetDefault(request)) | TrySendError::Disconnected(AssociationJob::SetDefault(request)) => Event::DefaultApplicationFinished { request, result: Err("The default-application service is busy or unavailable.".to_owned()) },
+                _ => unreachable!("association queue preserves the job variant"),
+            }),
             WorkRequest::PublishClipboard { request, transfer, action, finder_roots } => match self.clipboard.try_send(ClipboardJob::Publish { request, transfer, action, roots: finder_roots }) {
                 Ok(()) => None,
                 Err(TrySendError::Full(ClipboardJob::Publish { request, transfer, .. }) | TrySendError::Disconnected(ClipboardJob::Publish { request, transfer, .. })) => Some(Event::ClipboardPublished { request, transfer, generation: clipboard_native::generation_and_offer().0, succeeded: false }),

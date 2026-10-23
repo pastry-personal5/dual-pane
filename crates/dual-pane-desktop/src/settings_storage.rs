@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ContextMenuKind, ContextMenuPreference, ContextMenuPreferences, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, VisibilityPolicy, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot, default_shortcuts};
+use dual_pane_application::{ActionBinding, ActionId, ActionShortcuts, ApplicationIdentity, BrowserSnapshot, CONTEXT_MENU_ACTIONS, ContextMenuKind, ContextMenuPreference, ContextMenuPreferences, FavoriteGroupRecord, FavoriteItemRecord, FavoritesRecords, FileAssociationPreference, FileAssociationPreferences, Key, LoadedSettings, SessionSnapshot, SettingsFailure, SettingsSnapshot, Shortcut, VisibilityPolicy, WindowFrame, WindowLayout, WindowState, WorkspaceSnapshot, default_shortcuts};
 use dual_pane_domain::{BrowserSide, EntryName, Location, SortDirection, SortField, SortSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
 
@@ -16,6 +16,7 @@ mod codec;
 mod context_menus;
 mod error;
 mod favorites;
+mod file_associations;
 mod folder_sorts;
 mod markers;
 mod migration;
@@ -73,14 +74,16 @@ impl SettingsDatabase {
         let visibility = VisibilityPolicy { show_macos_items: marker_bool(connection, "show_macos_items", false)?, show_dotfiles: marker_bool(connection, "show_dotfiles", true)?, show_macos_invisible: marker_bool(connection, "show_macos_invisible", false)? };
         let favorites = favorites::load(connection, initialized)?;
         let context_menus = context_menus::load(connection)?;
+        let file_associations = file_associations::load(connection)?;
         let shortcut_lists = shortcuts::load_lists(connection, &bindings)?;
-        let snapshot = SettingsSnapshot { bindings, shortcut_lists, folder_sorts, favorites, hide_notices_at_startup, skip_quit_confirmation, visibility, context_menus };
+        let snapshot = SettingsSnapshot { bindings, shortcut_lists, folder_sorts, favorites, hide_notices_at_startup, skip_quit_confirmation, visibility, context_menus, file_associations };
         let session = read_session(connection)?;
         Ok(LoadedSettings { snapshot, session })
     }
     pub fn save(&mut self, snapshot: &SettingsSnapshot) -> Result<(), SettingsStorageError> {
         snapshot.favorites.hierarchy().map_err(|_| SettingsStorageError::InvalidData("Favorites hierarchy"))?;
         let context_menus = ContextMenuPreferences::from_entries(snapshot.context_menus.entries().to_vec()).map_err(|_| SettingsStorageError::InvalidData("context menu configuration"))?;
+        let file_associations = FileAssociationPreferences::from_entries(snapshot.file_associations.entries().to_vec()).map_err(|_| SettingsStorageError::InvalidData("file association configuration"))?;
         let tx = self.connection.transaction()?;
         shortcuts::save(&tx, snapshot)?;
         folder_sorts::save(&tx, snapshot)?;
@@ -88,6 +91,7 @@ impl SettingsDatabase {
         markers::save(&tx, snapshot)?;
         favorites::insert(&tx, snapshot)?;
         context_menus::save(&tx, &context_menus)?;
+        file_associations::save(&tx, &file_associations)?;
         tx.commit()?;
         Ok(())
     }
