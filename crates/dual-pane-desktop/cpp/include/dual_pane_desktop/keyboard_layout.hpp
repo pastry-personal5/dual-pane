@@ -18,8 +18,18 @@ enum class NativeMouseEvent {
     SecondaryRelease,
 };
 
+struct NativeEventSnapshot {
+    NativeMouseEvent mouse = NativeMouseEvent::Unknown;
+    int type = -1;
+    int button_number = -1;
+    std::uint64_t modifiers = 0;
+    std::int64_t event_number = -1;
+};
+
 // Reports the physical AppKit button for the event currently being delivered.
 // Synthetic Qt events and unrelated native events return Unknown.
 auto current_native_mouse_event() -> NativeMouseEvent;
+// Path-free diagnostic details for correlating AppKit and Qt pointer delivery.
+auto current_native_event_snapshot() -> NativeEventSnapshot;
 
 }

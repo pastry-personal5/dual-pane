@@ -15,26 +15,41 @@ auto unshifted_key_character(std::uint32_t native_virtual_key) -> int {
     return character <= 0x7f ? character : 0;
 }
 
-auto current_native_mouse_event() -> NativeMouseEvent {
+auto current_native_event_snapshot() -> NativeEventSnapshot {
     NSEvent *event = [NSApp currentEvent];
     if (event == nil)
-        return NativeMouseEvent::Unknown;
+        return {};
+    NativeEventSnapshot snapshot;
+    snapshot.type = static_cast<int>(event.type);
+    snapshot.modifiers = static_cast<std::uint64_t>(event.modifierFlags);
+    snapshot.event_number = static_cast<std::int64_t>(event.eventNumber);
     switch (event.type) {
     case NSEventTypeLeftMouseDown:
-        return NativeMouseEvent::PrimaryPress;
+        snapshot.mouse = NativeMouseEvent::PrimaryPress;
+        break;
     case NSEventTypeLeftMouseDragged:
-        return NativeMouseEvent::PrimaryDrag;
+        snapshot.mouse = NativeMouseEvent::PrimaryDrag;
+        break;
     case NSEventTypeLeftMouseUp:
-        return NativeMouseEvent::PrimaryRelease;
+        snapshot.mouse = NativeMouseEvent::PrimaryRelease;
+        break;
     case NSEventTypeRightMouseDown:
-        return NativeMouseEvent::SecondaryPress;
+        snapshot.mouse = NativeMouseEvent::SecondaryPress;
+        break;
     case NSEventTypeRightMouseDragged:
-        return NativeMouseEvent::SecondaryDrag;
+        snapshot.mouse = NativeMouseEvent::SecondaryDrag;
+        break;
     case NSEventTypeRightMouseUp:
-        return NativeMouseEvent::SecondaryRelease;
+        snapshot.mouse = NativeMouseEvent::SecondaryRelease;
+        break;
     default:
-        return NativeMouseEvent::Unknown;
+        break;
     }
+    if (snapshot.mouse != NativeMouseEvent::Unknown)
+        snapshot.button_number = static_cast<int>(event.buttonNumber);
+    return snapshot;
 }
+
+auto current_native_mouse_event() -> NativeMouseEvent { return current_native_event_snapshot().mouse; }
 
 }

@@ -30,6 +30,12 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Shortcut Capture Control | `shortcut_capture_control` |
 | Settings Information Button | `settings_information_button` |
 | Settings Information Overlay | `settings_information_overlay` |
+| File Associations Settings | `file_associations_settings` |
+| Add File Type Button | `add_file_type_button` |
+| Refresh Applications Button | `refresh_applications_button` |
+| Remove Type Button | `remove_type_button` |
+| Set as Default Button | `set_as_default_button` |
+| Clear Open With Choices Button | `clear_open_with_choices_button` |
 | Favorites Groups | `favorites_groups` |
 | Favorite Group | `favorite_group` |
 | Favorite Group Name | `favorite_group_name` |
@@ -98,6 +104,8 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 
 `Favorite Item` remains the entity name. `Favorite Item Alias` names only its displayed label.
 
+Planned P4-M13 menu rows read **Open with <App Name>**. They are dynamic choices for a content type and do not have separate shortcut-capable Action IDs.
+
 Mapped legacy component terms are not used in source or tests. The product and crate namespace `dual-pane` / `dual_pane` is exempt, as are technical primitives that do not name a UX component, such as directory-reading errors and entry sort keys.
 
 ## Canonical actions
@@ -131,6 +139,7 @@ Action IDs are stable UpperCamelCase compatibility keys for shortcut-capable com
 | Delete Permanently | `DeletePermanently` | Catalogued; current command; `Option+Command+Delete` default |
 | Show Package Contents | `ShowPackageContents` | Catalogued; current command, no default shortcut |
 | Open Item | `OpenItem` | Catalogued; current command; `Command+Down` default |
+| Configure Open With… | `ConfigureOpenWith` | Planned ID; opens File Associations Settings for the selected type, no default shortcut |
 | Open in Finder | `OpenInFinder` | Catalogued; current command, no default shortcut |
 | Focus Folder Items Filter | `FocusFolderItemsFilter` | Planned ID; `Command+F` default |
 | Copy Items | `CopyItems` | P4-M5 ID; `Command+C` default with Folder Items List focus |

@@ -1,9 +1,9 @@
 # Phase 4: Everyday File Workflows
 
 Status: Active
-Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, and command-line entry into the running workspace.
+Goal: Help people find, navigate to, arrange, and open files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, command-line entry, and configurable file associations.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and P4-M8 through P4-M11. P4-M7 still needs guided real-pointer macOS acceptance; P4-M12 has implemented the modified-press repair and visible refusal reasons, with physical-pointer acceptance still pending. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and P4-M8 through P4-M11. P4-M7 still needs guided real-pointer macOS acceptance; P4-M12 has implemented the modified-press repair and visible refusal reasons, with physical-pointer acceptance still pending. P4-M14 is active to repair a reported physical secondary-gesture regression before those acceptance gates close. P4-M13 follows those gates. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -18,6 +18,7 @@ The intended feature set is:
 - Drag selected Folder Items to supported targets in the workspace, using the same copy/move decisions, progress, cancellation, and data-safety rules as menu or keyboard commands.
 - Open a command-line target in the running instance, reusing an existing tab in either Browser when possible and bringing the workspace forward.
 - Provide fast Normal and exact-Shift Comprehensive Folder Items Context Menus, with persistent visibility controls for their existing file actions.
+- Configure which macOS-recommended applications appear as flat Open With actions for each file content type in either Context Menu, and let the current macOS user confirm a type-wide default-application change in File Associations Settings.
 
 Phase 4 supports file Copy between Dual Pane and Finder in both directions. Finder-sourced Paste into Dual Pane is a Copy through the existing safeguarded operation workflow, never a move of Finder's source. This does not export Cut as a Finder move or support drags to or from Finder. Unsupported or malformed clipboard content, and external drag payloads, must not start a Dual Pane operation.
 
@@ -29,6 +30,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 - Drag and drop uses explicit supported source and target types and a visible copy or move outcome; a rejected drop explains why and changes no files, and a cancelled drag changes no files.
 - A command-line launch forwards one resolved target to the registered instance for that profile, or raises it without changing tabs when no target is given. An explicit new-instance launch remains available, and concurrent instances cannot sweep one another's live operation temporaries.
 - Normal and Comprehensive Folder Items Context Menus use the approved configuration, grouping, availability, shortcut annotation, platform access, and stale-target rules without adding a separate file-operation path.
+- File Associations Settings discovers types in open folders or from a selected sample file, persists independent menu choices for the two Context Menus, and can request a confirmed default-app change for the current macOS user. New types have no Open With app rows until the user chooses apps; both menus enable a configurable Configure Open With… entry by default to reach that type's Settings page. Flat Open With actions open only the captured eligible files through a chosen available app, and no menu request waits for application discovery.
 - The new controls and commands work by pointer and keyboard where appropriate, have accessible names and feedback, and preserve the existing shortcut editor's conflict rules.
 - All milestone checklists and the full repository gate pass. Native checks use a disposable profile and temporary file data.
 
@@ -43,7 +45,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M8 through P4-M11 are complete. P4-M12 is active before closing P4-M7's guided acceptance because it repairs that interaction.
+Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M8 through P4-M11 are complete. P4-M12 is active before closing P4-M7's guided acceptance because it repairs that interaction. P4-M14 is active to restore physical secondary Context Menu gestures before closing those pointer-acceptance gates. P4-M13 implementation follows the gates and M14.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -116,3 +118,15 @@ Plan: [overview](milestone-11-overview.md), [architecture](milestone-11-architec
 Status: Active
 Goal: Allow a file drag after a press with any modifier, explain refused drops, show an easy-to-hit current-folder target, and prove that accepted drops perform the advertised Move or Copy.
 Plan: [overview](milestone-12-overview.md), [architecture](milestone-12-architecture.md)
+
+### P4-M13: File associations and Open With
+
+Status: Planned
+Goal: Let the user configure macOS-recommended Open With applications per content type and Context Menu variant, and confirm a type-wide default-app choice for the current macOS user.
+Plan: [overview](milestone-13-overview.md), [architecture](milestone-13-architecture.md)
+
+### P4-M14: Repair Folder Items Context Menu gestures
+
+Status: Active
+Goal: Restore Normal and Comprehensive menus for physical macOS secondary gestures while retaining Control-primary drag behavior.
+Plan: [overview](milestone-14-overview.md), [architecture](milestone-14-architecture.md)

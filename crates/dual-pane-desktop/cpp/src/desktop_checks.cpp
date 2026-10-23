@@ -740,6 +740,51 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
                 finish(false, "secondary-click changed drag roots or began a file drag");
                 return;
             }
+            const int right_row = row_named(right_model, QStringLiteral("source-link"));
+            if (right_row < 0) {
+                finish(false, "right Browser row missing for secondary gesture check");
+                return;
+            }
+            std::vector<std::pair<int, bool>> left_menus, right_menus;
+            list->setMenuHandler([&left_menus](const QPoint &, int row, bool comprehensive) { left_menus.emplace_back(row, comprehensive); });
+            auto *right_list = browsers.at(1)->view();
+            right_list->setMenuHandler([&right_menus](const QPoint &, int row, bool comprehensive) { right_menus.emplace_back(row, comprehensive); });
+            for (auto *source_list : {list, right_list}) {
+                auto *source_viewport = source_list->viewport();
+                const int row = source_list == list ? copy_row : right_row;
+                const QPoint row_point = source_list->visualRect(source_list->model()->index(row, 0)).center();
+                const QPoint empty(source_viewport->width() / 2, source_viewport->height() - 5);
+                if (source_list->indexAt(empty).isValid()) {
+                    finish(false, "secondary gesture check has no empty list surface");
+                    return;
+                }
+                for (const auto point : {row_point, empty}) {
+                    for (const auto modifier : {Qt::NoModifier, Qt::ShiftModifier}) {
+                        source_list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryPress);
+                        QMouseEvent press(QEvent::MouseButtonPress, QPointF(point), QPointF(source_viewport->mapToGlobal(point)), Qt::RightButton, Qt::RightButton, modifier);
+                        QApplication::sendEvent(source_viewport, &press);
+                        // The context callback must survive an unrelated ambient primary event.
+                        source_list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryPress);
+                        QContextMenuEvent context(QContextMenuEvent::Mouse, point, source_viewport->mapToGlobal(point), modifier);
+                        QApplication::sendEvent(source_viewport, &context);
+                        source_list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryRelease);
+                        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(point), QPointF(source_viewport->mapToGlobal(point)), Qt::RightButton, Qt::NoButton, modifier);
+                        QApplication::sendEvent(source_viewport, &release);
+                    }
+                }
+                source_list->setNativeCheckMouseEvent(NativeMouseEvent::Unknown);
+                const auto &menus = source_list == list ? left_menus : right_menus;
+                if (menus != std::vector<std::pair<int, bool>>({{row, false}, {row, true}, {-1, false}, {-1, true}})) {
+                    finish(false, "secondary row and empty-space gestures did not route once per variant");
+                    return;
+                }
+            }
+            if (starts != static_cast<int>(modifiers.size()) + 1 || !left_model.rowIsSelected(copy_row)) {
+                finish(false, "secondary context gestures changed drag roots or began a file drag");
+                return;
+            }
+            list->setMenuHandler({});
+            right_list->setMenuHandler({});
             list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryPress);
             send_mouse(QEvent::MouseButtonPress, selected_point, Qt::RightButton, Qt::RightButton, Qt::MetaModifier);
             QContextMenuEvent remapped_menu(QContextMenuEvent::Mouse, selected_point, viewport->mapToGlobal(selected_point), Qt::MetaModifier);
@@ -1277,6 +1322,58 @@ auto run_folder_items_context_menu_checks(QApplication &app) -> int {
     QContextMenuEvent accessibility(QContextMenuEvent::Other, local, right.viewport()->mapToGlobal(local), Qt::ShiftModifier);
     QApplication::sendEvent(right.viewport(), &accessibility);
     check(invocations == std::vector<std::pair<int, bool>>({{-1, true}, {-1, false}, {-1, false}, {-1, true}}), "exact modifier, empty-space, keyboard, accessibility, and both-Browser routing");
+    const auto send_mouse = [](FolderItemsList &list, QEvent::Type type, Qt::MouseButton button, Qt::MouseButtons buttons, Qt::KeyboardModifiers modifiers) {
+        const QPoint point(4, 4);
+        QMouseEvent event(type, QPointF(point), QPointF(list.viewport()->mapToGlobal(point)), button, buttons, modifiers);
+        QApplication::sendEvent(list.viewport(), &event);
+    };
+    const auto send_context = [](FolderItemsList &list, Qt::KeyboardModifiers modifiers) {
+        const QPoint point(4, 4);
+        QContextMenuEvent event(QContextMenuEvent::Mouse, point, list.viewport()->mapToGlobal(point), modifiers);
+        QApplication::sendEvent(list.viewport(), &event);
+    };
+    for (auto *list : {&left, &right}) {
+        list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryPress);
+        send_mouse(*list, QEvent::MouseButtonPress, Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        // The unrelated ambient primary event used to discard a genuine menu.
+        list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryPress);
+        send_context(*list, Qt::NoModifier);
+        list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryRelease);
+        send_mouse(*list, QEvent::MouseButtonRelease, Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+        list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryPress);
+        send_mouse(*list, QEvent::MouseButtonPress, Qt::RightButton, Qt::RightButton, Qt::ShiftModifier);
+        list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryRelease);
+        send_mouse(*list, QEvent::MouseButtonRelease, Qt::RightButton, Qt::NoButton, Qt::ShiftModifier);
+        list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryRelease);
+        send_context(*list, Qt::ShiftModifier);
+        list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryPress);
+        send_mouse(*list, QEvent::MouseButtonPress, Qt::RightButton, Qt::RightButton, Qt::ShiftModifier | Qt::ControlModifier);
+        send_context(*list, Qt::ShiftModifier | Qt::ControlModifier);
+        list->setNativeCheckMouseEvent(NativeMouseEvent::SecondaryRelease);
+        send_mouse(*list, QEvent::MouseButtonRelease, Qt::RightButton, Qt::NoButton, Qt::ShiftModifier | Qt::ControlModifier);
+    }
+    check(invocations == std::vector<std::pair<int, bool>>({{-1, true}, {-1, false}, {-1, false}, {-1, true}, {-1, false}, {-1, true}, {-1, false}, {-1, false}, {-1, true}, {-1, false}}), "secondary press/context/release in both Browsers routes each variant exactly once despite ambient primary events");
+    left.setNativeCheckMouseEvent(NativeMouseEvent::PrimaryPress);
+    send_mouse(left, QEvent::MouseButtonPress, Qt::RightButton, Qt::RightButton, Qt::MetaModifier);
+    send_context(left, Qt::MetaModifier);
+    left.setNativeCheckMouseEvent(NativeMouseEvent::PrimaryRelease);
+    send_mouse(left, QEvent::MouseButtonRelease, Qt::RightButton, Qt::NoButton, Qt::MetaModifier);
+    send_context(left, Qt::MetaModifier);
+    check(invocations.size() == 10, "Control-primary context requests before and after release stay suppressed");
+    left.setNativeCheckMouseEvent(NativeMouseEvent::SecondaryPress);
+    send_mouse(left, QEvent::MouseButtonPress, Qt::RightButton, Qt::RightButton, Qt::MetaModifier);
+    send_context(left, Qt::MetaModifier);
+    left.setNativeCheckMouseEvent(NativeMouseEvent::SecondaryRelease);
+    send_mouse(left, QEvent::MouseButtonRelease, Qt::RightButton, Qt::NoButton, Qt::MetaModifier);
+    left.setNativeCheckMouseEvent(NativeMouseEvent::Unknown);
+    right.setNativeCheckMouseEvent(NativeMouseEvent::Unknown);
+    check(invocations.size() == 11 && invocations.back() == std::pair<int, bool>(-1, false), "a new true secondary press retires Control-primary suppression");
+    left.setNativeCheckMouseEvent(NativeMouseEvent::PrimaryPress);
+    send_mouse(left, QEvent::MouseButtonPress, Qt::RightButton, Qt::RightButton, Qt::MetaModifier);
+    left.setNativeCheckMouseEvent(NativeMouseEvent::Unknown);
+    send_mouse(left, QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    send_context(left, Qt::NoModifier);
+    check(invocations.size() == 12 && invocations.back() == std::pair<int, bool>(-1, false), "an unrelated primary press retires Control-primary suppression");
     const auto check_context_rows = [&owner, &check](const std::vector<FolderItemsMenuSession::Row> &context_rows, const QStringList &expected, const char *name) {
         int completion_count = 0;
         auto *session = new FolderItemsMenuSession(QStringLiteral("Comprehensive Folder Items Context Menu"), context_rows, [&completion_count](std::optional<int>) { ++completion_count; }, &owner);

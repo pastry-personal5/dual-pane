@@ -6,6 +6,7 @@
 #include "dual_pane_desktop/keyboard_layout.hpp"
 #include "dual_pane_desktop/quick_look_preview.hpp"
 #include "dual_pane_desktop/tabs_strip.hpp"
+#include <QtCore/QDebug>
 #include <QtCore/QPropertyAnimation>
 
 // Qt parent ownership and the compact native composition are explicit here.
@@ -353,7 +354,7 @@ class FolderItemsList final : public QTreeView {
             native_check_drag_source_ = source;
     }
     void setNativeCheckMouseEvent(NativeMouseEvent event) {
-        if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT") && qEnvironmentVariableIsSet("DUAL_PANE_TEST_PROFILE"))
+        if ((qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT") || qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FOLDER_ITEMS_CONTEXT_MENU_CHECK")) && qEnvironmentVariableIsSet("DUAL_PANE_TEST_PROFILE"))
             native_check_mouse_event_ = event;
     }
     void setTypeToFilterHandler(std::function<void(const QString &)> handler) { type_to_filter_handler_ = std::move(handler); }
@@ -398,7 +399,14 @@ class FolderItemsList final : public QTreeView {
     void mousePressEvent(QMouseEvent *event) override {
         event->accept();
         const auto index = indexAt(event->position().toPoint());
-        const bool remapped_primary = event->button() == Qt::RightButton && native_mouse_event() == NativeMouseEvent::PrimaryPress;
+        // A new press ends the preceding gesture's context-event opportunity.
+        suppress_remapped_context_ = false;
+        const bool remapped_primary = event->button() == Qt::RightButton && user_modifiers(event->modifiers()).testFlag(Qt::MetaModifier) && native_mouse_event() == NativeMouseEvent::PrimaryPress;
+        if (remapped_primary) {
+            suppress_remapped_context_ = true;
+            remapped_context_position_ = event->globalPosition().toPoint();
+        }
+        trace_gesture("press", static_cast<int>(event->button()), event->modifiers(), -1, pointer_branch(event->button(), remapped_primary), index.isValid());
         if (event->button() == Qt::LeftButton || remapped_primary) {
             focusList();
             remapped_primary_press_ = remapped_primary;
@@ -420,6 +428,7 @@ class FolderItemsList final : public QTreeView {
         }
     }
     void mouseReleaseEvent(QMouseEvent *event) override {
+        trace_gesture("release", static_cast<int>(event->button()), event->modifiers(), -1, pointer_branch(event->button(), remapped_primary_press_), indexAt(event->position().toPoint()).isValid());
         if ((event->button() == Qt::LeftButton || (remapped_primary_press_ && event->button() == Qt::RightButton)) && press_pending_)
             apply_press_click();
         drag_candidate_ = false;
@@ -501,11 +510,19 @@ class FolderItemsList final : public QTreeView {
     }
     void contextMenuEvent(QContextMenuEvent *event) override {
         event->accept();
+        const auto index = indexAt(event->pos());
         const auto native = native_mouse_event();
-        if (event->reason() == QContextMenuEvent::Mouse && (native == NativeMouseEvent::PrimaryPress || native == NativeMouseEvent::PrimaryRelease || remapped_primary_press_))
+        // AppKit's currentEvent is ambient here. Only a right-button press that
+        // we observed as a physical Control-primary press may suppress its own
+        // context request, including one delivered just after release.
+        const bool native_secondary = native == NativeMouseEvent::SecondaryPress || native == NativeMouseEvent::SecondaryRelease;
+        if (event->reason() == QContextMenuEvent::Mouse && native_secondary)
+            suppress_remapped_context_ = false;
+        const bool remapped_context = event->reason() == QContextMenuEvent::Mouse && !native_secondary && suppress_remapped_context_ && (remapped_primary_press_ || (event->globalPos() - remapped_context_position_).manhattanLength() <= QApplication::startDragDistance());
+        trace_gesture("context", 0, event->modifiers(), static_cast<int>(event->reason()), remapped_context ? "suppress-control-primary" : "deliver-menu", index.isValid());
+        if (remapped_context)
             return;
         focusList();
-        const auto index = indexAt(event->pos());
         const auto modifiers = user_modifiers(event->modifiers());
         const bool comprehensive = modifiers == Qt::ShiftModifier;
         QPoint at = event->globalPos();
@@ -577,6 +594,7 @@ class FolderItemsList final : public QTreeView {
             quick_look_->dismiss();
     }
     void focusOutEvent(QFocusEvent *event) override {
+        suppress_remapped_context_ = false;
         if (quick_look_timer_ != nullptr && quick_look_gesture_.held()) {
             quick_look_gesture_.interrupted(quick_look_gesture_.generation());
             stop_quick_look_timer();
@@ -591,6 +609,30 @@ class FolderItemsList final : public QTreeView {
 
   private:
     [[nodiscard]] auto native_mouse_event() const -> NativeMouseEvent { return native_check_mouse_event_ == NativeMouseEvent::Unknown ? current_native_mouse_event() : native_check_mouse_event_; }
+    static auto pointer_branch(Qt::MouseButton button, bool remapped_primary) -> const char * {
+        if (remapped_primary)
+            return "control-primary";
+        if (button == Qt::RightButton)
+            return "secondary";
+        return "primary";
+    }
+    void trace_gesture(const char *stage, int qt_button, Qt::KeyboardModifiers modifiers, int context_reason, const char *branch, bool row) const {
+        if (!qEnvironmentVariableIsSet("DUAL_PANE_TEST_PROFILE") || !qEnvironmentVariableIsSet("DUAL_PANE_GESTURE_TRACE"))
+            return;
+        const auto native = current_native_event_snapshot();
+        qInfo().noquote() << "folder-items"
+                          << QStringLiteral("gesture=%1").arg(QLatin1StringView(stage))
+                          << QStringLiteral("browser=%1").arg(model_->browserSide())
+                          << QStringLiteral("target=%1").arg(row ? QStringLiteral("row") : QStringLiteral("empty"))
+                          << QStringLiteral("qt_button=%1").arg(qt_button)
+                          << QStringLiteral("qt_modifiers=%1").arg(modifiers.toInt())
+                          << QStringLiteral("context_reason=%1").arg(context_reason)
+                          << QStringLiteral("native_type=%1").arg(native.type)
+                          << QStringLiteral("native_button=%1").arg(native.button_number)
+                          << QStringLiteral("native_modifiers=%1").arg(native.modifiers)
+                          << QStringLiteral("native_event=%1").arg(native.event_number)
+                          << QStringLiteral("branch=%1").arg(QLatin1StringView(branch));
+    }
     void apply_press_click() {
         if (model_->activeTabId() != drag_tab_ || model_->visibleRevision() != drag_revision_ || model_->getSelectionRevision() != drag_selection_revision_ || (drag_row_ >= 0 && model_->rowDragIdentity(drag_row_) != drag_identity_))
             return;
@@ -778,6 +820,8 @@ class FolderItemsList final : public QTreeView {
     bool drag_candidate_ = false;
     bool press_pending_ = false;
     bool remapped_primary_press_ = false;
+    bool suppress_remapped_context_ = false;
+    QPoint remapped_context_position_;
     QPoint drag_press_;
     Qt::KeyboardModifiers drag_modifiers_ = Qt::NoModifier;
     QByteArray drag_identity_;
