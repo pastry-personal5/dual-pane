@@ -42,6 +42,11 @@ pub enum Command {
     CancelDrag {
         drag: DragId,
     },
+    RejectDrop {
+        browser: BrowserSide,
+        tab: TabId,
+        reason: DropRejection,
+    },
     RequestFolderItemsMenu {
         browser: BrowserSide,
         tab: TabId,

@@ -6,9 +6,12 @@ test_home=$(mktemp -d "${TMPDIR:-/tmp}/dual-pane-file-drag-drop.XXXXXX")
 trap 'rm -rf "$test_home"' EXIT
 test_home=$(CDPATH= cd -- "$test_home" && pwd -P)
 mkdir "$test_home/Source" "$test_home/Destination" "$test_home/Destination/Folder"
+ln -s "$test_home/Source" "$test_home/Destination/source-link"
 : > "$test_home/Source/copy-me"
 : > "$test_home/Source/move-me"
 : > "$test_home/Source/row-target"
+: > "$test_home/Source/inactive-target"
+: > "$test_home/Destination/tab-target"
 
 cd "$repo_root"
 cargo test -q -p dual-pane-application --test drag_drop

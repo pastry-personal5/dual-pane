@@ -102,6 +102,11 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     auto *right_browser = new Browser(&right_model, &icons, folder_items_menus, split);
     const std::array<Browser *, 2> browsers = {left_browser, right_browser};
     const std::array<FolderItemsListModel *, 2> models = {&left_model, &right_model};
+    for (auto *browser : browsers)
+        browser->view()->setDragSessionHandler([browsers](bool active) {
+            for (auto *target : browsers)
+                target->folder()->set_file_drag_active(active);
+        });
     const auto focus_active_list = [&bridge, browsers] { browsers.at(bridge.getActiveBrowser() == 0 ? 0 : 1)->view()->focusList(); };
     coordinator.addListener([&bridge, &window, waiting, browsers] {
         for (int request = bridge.takeActivationRequest(); request != -2; request = bridge.takeActivationRequest()) {

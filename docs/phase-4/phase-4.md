@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, and command-line entry into the running workspace.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and P4-M8 through P4-M11. P4-M7 still needs guided real-pointer macOS acceptance. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and P4-M8 through P4-M11. P4-M7 still needs guided real-pointer macOS acceptance; P4-M12 has implemented the modified-press repair and visible refusal reasons, with physical-pointer acceptance still pending. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -26,7 +26,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 - Each Browser Tab can show and clear a text-filtered view of its current Folder Items; sort, selection, cursor, count, refresh, and tab switching remain coherent. Selection-based commands capture only explicitly selected visible targets when invoked; a previously captured clipboard intent or running operation keeps its frozen targets.
 - Copy in Dual Pane can be pasted into Finder while the clipboard is unchanged, including after Dual Pane quits or relaunches; Finder performs the resulting copy and the source remains intact. Files copied in Finder can be pasted into Dual Pane as a safe Copy with unchanged sources. Paste within Dual Pane initiates safe file operations with a frozen source and destination at command start. Conflicts, progress, cancellation, partial results, and refresh use the existing operation workflow and [data-safety invariants](../architecture.md#44-data-safety-invariants).
 - The Path Edit Control accepts a folder path, navigates when a confirmed breadcrumb component is activated, and expands into a bounded-height column browser for available folders. It gives clear validation and navigation feedback without replacing the last successful Folder Items when navigation fails.
-- Drag and drop uses explicit supported source and target types and a visible copy or move outcome; a rejected or cancelled drop changes no files.
+- Drag and drop uses explicit supported source and target types and a visible copy or move outcome; a rejected drop explains why and changes no files, and a cancelled drag changes no files.
 - A command-line launch forwards one resolved target to the registered instance for that profile, or raises it without changing tabs when no target is given. An explicit new-instance launch remains available, and concurrent instances cannot sweep one another's live operation temporaries.
 - Normal and Comprehensive Folder Items Context Menus use the approved configuration, grouping, availability, shortcut annotation, platform access, and stale-target rules without adding a separate file-operation path.
 - The new controls and commands work by pointer and keyboard where appropriate, have accessible names and feedback, and preserve the existing shortcut editor's conflict rules.
@@ -43,7 +43,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M8 through P4-M11 are complete.
+Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M8 through P4-M11 are complete. P4-M12 is active before closing P4-M7's guided acceptance because it repairs that interaction.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -110,3 +110,9 @@ Plan: [overview](milestone-10-overview.md), [architecture](milestone-10-architec
 Status: Done
 Goal: Split the oversized `desktop_window.cpp` and its matching large Rust bridge/model files into feature-area modules, and put every per-action fact of the folder-item action pattern in one catalogue table so adding an action no longer means editing a parallel list in each layer.
 Plan: [overview](milestone-11-overview.md), [architecture](milestone-11-architecture.md)
+
+### P4-M12: Repair file drag and drop interaction
+
+Status: Active
+Goal: Allow a file drag after a press with any modifier, explain refused drops, show an easy-to-hit current-folder target, and prove that accepted drops perform the advertised Move or Copy.
+Plan: [overview](milestone-12-overview.md), [architecture](milestone-12-architecture.md)

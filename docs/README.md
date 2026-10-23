@@ -39,6 +39,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-4/milestone-10-architecture.md](phase-4/milestone-10-architecture.md) | P4-M10 settings model, schema migration, typed menu projection, observed dispatch, and native verification approach. |
 | [phase-4/milestone-11-overview.md](phase-4/milestone-11-overview.md) | P4-M11 scope, evidence, owner decisions, checklist, and acceptance evidence for splitting the desktop GUI code into smaller modules. |
 | [phase-4/milestone-11-architecture.md](phase-4/milestone-11-architecture.md) | P4-M11 C++ and Rust desktop module layout and the folder-item action catalogue table. |
+| [phase-4/milestone-12-overview.md](phase-4/milestone-12-overview.md) | P4-M12 owner decisions, scope, and checklist for modified-press drags, current-folder drop target, refusal feedback, and Move/Copy acceptance. |
+| [phase-4/milestone-12-architecture.md](phase-4/milestone-12-architecture.md) | P4-M12 press observation, Qt drop-event delivery, typed rejection routing, and verification sequence. |
 | [phase-4/changelog.md](phase-4/changelog.md) | Phase 4 planning and later owner or design decisions. |
 | [archive/phases/](archive/phases/) | Completed Phases 1–3: `phase-N/phase-N.md` (goal, exit criteria, milestones), `milestone-NN-overview.md` (scope, checklist), `milestone-NN-architecture.md` (approach), `changelog.md`; Phase 3 also has `open-items.md`. |
 | [release-notes/1.0.0.md](release-notes/1.0.0.md) | Concise release notes for version 1.0.0. |

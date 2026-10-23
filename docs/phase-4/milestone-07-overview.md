@@ -39,6 +39,8 @@ P4-M1 already fixes these rules, and this milestone does not reopen them:
 
 The owner accepted these decisions on 2026-10-23. They refine the fixed P4-M1 rules without adding external drag interchange or spring-loaded navigation.
 
+P4-M12 implements a later owner-directed change to decision 2: a modified primary press may become a file drag, preserving the pre-press selection when the pressed row was selected and dragging only the pressed row otherwise. Other modifiers at drop select Move, while Option with any combination selects Copy. An attempted drop reaches a decision and shows its rejection reason after release, even when hover found the target ineligible. The rules and earlier native evidence below remain the P4-M7 baseline; the [P4-M12 plan](milestone-12-overview.md) holds the updated rules and still requires guided physical-pointer acceptance.
+
 | # | Topic | Accepted behavior |
 |---|---|---|
 | 1 | Dragged selection | Pressing an already selected row preserves the current multi-selection, and crossing the platform drag threshold drags that exact selection. Pressing an unselected row first selects only that row; if the pointer then crosses the threshold, only that row is dragged. Empty space never begins a drag. |
@@ -76,3 +78,5 @@ The owner accepted these decisions on 2026-10-23. They refine the fixed P4-M1 ru
 ## Acceptance evidence
 
 Owner decisions were recorded on 2026-10-23. On 2026-10-23, direct `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` passed. After implementation review fixes, `make check` passed the complete formatter, linter, and test gate; `scripts/check-path-entry.sh` passed; and `scripts/check-file-drag-drop.sh` passed with eight focused application tests and completed temporary-file transfers in both Browser directions. The offscreen check covers token-only payload encoding, Move/Option-Copy preview, Browser-folder and folder-row targets, an inactive tab, stale and cancelled sessions, replay, and completed Copy/Move semantics. The guided real-pointer macOS acceptance remains pending because the real platform drag threshold and action badge cannot be proved by synthetic `QDropEvent` delivery.
+
+P4-M12 later expanded the offscreen check to deliver press, move, release, drag-enter, and drop events through the widgets and to complete more target classes. That evidence does not check this milestone's guided physical-pointer item; it stays unchecked until the [M12 guided run](milestone-12-overview.md#guided-real-pointer-acceptance) is recorded.

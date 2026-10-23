@@ -42,6 +42,8 @@ impl DropTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropRejection {
+    ExternalSource,
+    InvalidPayload,
     UnknownDrag,
     StaleSource,
     StaleTarget,
@@ -99,6 +101,7 @@ pub(crate) struct CapturedDrag {
     pub listing: dual_pane_domain::RequestToken,
     pub visible_revision: u64,
     pub roots: Arc<[OperationRoot]>,
+    pub unsupported_source: bool,
 }
 
 #[derive(Debug)]

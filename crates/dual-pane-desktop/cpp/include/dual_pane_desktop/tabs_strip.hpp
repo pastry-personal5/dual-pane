@@ -70,6 +70,10 @@ class BrowserTabButton final : public QAbstractButton {
             painter.drawText(rect().adjusted(4, 0, -4, 0), Qt::AlignCenter, QStringLiteral("%1 %2").arg(action).arg(drop_count));
             return;
         }
+        if (property("fileDropIneligible").toBool()) {
+            painter.setPen(QPen(QColor(QString::fromLatin1(error_color)), 2, Qt::DashLine));
+            painter.drawRect(rect().adjusted(2, 2, -3, -3));
+        }
         painter.setPen(QColor(QString::fromLatin1(browser_active ? text_color : inactive_text_color)));
         const auto text_rect = rect().adjusted(8, 0, -22, 0);
         painter.drawText(text_rect, Qt::AlignVCenter | Qt::AlignLeft, fontMetrics().elidedText(label_, Qt::ElideRight, text_rect.width()));
@@ -147,11 +151,17 @@ class BrowserTabsStrip final : public QWidget {
         QObject::connect(model_, &FolderItemsListModel::toolbarStateChanged, this, [this] { update_new_tab(); });
         rebuild();
     }
+    // Only the disposable native check sets this. Normal drops use Qt's source().
+    void setNativeCheckDragSource(const QObject *source) {
+        if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT") && qEnvironmentVariableIsSet("DUAL_PANE_TEST_PROFILE"))
+            native_check_drag_source_ = source;
+    }
 
   private:
     static void clear_file_drop(BrowserTabButton *button) {
         button->setProperty("fileDropCount", 0);
         button->setProperty("fileDropCopy", false);
+        button->setProperty("fileDropIneligible", false);
         button->setAccessibleDescription(button->toolTip());
         button->update();
     }
@@ -218,27 +228,48 @@ class BrowserTabsStrip final : public QWidget {
         }
         if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove || event->type() == QEvent::Drop) {
             auto *drop = dynamic_cast<QDropEvent *>(event);
-            const auto drag = internal_file_drag(drop);
-            const int source_browser = drop == nullptr || drop->source() == nullptr ? -1 : drop->source()->property("dualPaneBrowser").toInt();
-            const bool supported = drop != nullptr && drop_modifiers_supported(drop->modifiers());
-            const bool copy = supported && drop_is_copy(drop->modifiers());
-            const int count = drag && supported ? model_->previewFileDrop(*drag, source_browser, 2, button->id(), -1, copy) : -1;
+            const QObject *source = drop == nullptr ? nullptr : drop->source();
+            if (native_check_drag_source_ != nullptr)
+                source = native_check_drag_source_;
+            const auto drag = internal_file_drag(drop, source);
+            const int source_browser = file_drag_source_browser(source);
+            const bool copy = drop != nullptr && drop_is_copy(drop->modifiers());
+            const int count = drag && drop->possibleActions().testFlag(file_drop_action(drop->modifiers())) ? model_->previewFileDrop(*drag, source_browser, 2, button->id(), -1, copy) : -1;
             if (event->type() == QEvent::Drop) {
                 clear_file_drop(button);
-                if (drag && count > 0 && model_->acceptFileDrop(*drag, source_browser, 2, button->id(), -1, copy)) {
+                if (drop == nullptr)
+                    return true;
+                if (!drag) {
+                    model_->rejectFileDrop(button->id(), source_browser < 0 ? 0 : 1);
+                    drop->ignore();
+                } else if (!drop->possibleActions().testFlag(file_drop_action(drop->modifiers()))) {
+                    model_->rejectFileDrop(button->id(), 2);
+                    drop->ignore();
+                } else if (model_->acceptFileDrop(*drag, source_browser, 2, button->id(), -1, copy)) {
                     drop->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
                     drop->accept();
-                } else if (drop != nullptr) {
+                } else {
                     drop->ignore();
                 }
                 return true;
             }
             if (drop == nullptr || count <= 0) {
                 clear_file_drop(button);
-                if (drop != nullptr)
-                    drop->ignore();
+                button->setProperty("fileDropIneligible", true);
+                button->setAccessibleDescription(QStringLiteral("Cannot drop here"));
+                button->update();
+                if (drop != nullptr) {
+                    const auto action = admission_action(drop);
+                    if (action == Qt::IgnoreAction) {
+                        drop->ignore();
+                    } else {
+                        drop->setDropAction(action);
+                        drop->accept();
+                    }
+                }
                 return true;
             }
+            button->setProperty("fileDropIneligible", false);
             button->setProperty("fileDropCount", count);
             button->setProperty("fileDropCopy", copy);
             const auto description = QStringLiteral("%1 %2 %3 into %4").arg(copy ? QStringLiteral("Copy") : QStringLiteral("Move")).arg(count).arg(count == 1 ? QStringLiteral("Item") : QStringLiteral("Items")).arg(button->toolTip());
@@ -249,7 +280,7 @@ class BrowserTabsStrip final : public QWidget {
                 QAccessible::updateAccessibility(&announcement);
             }
             button->update();
-            drop->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+            drop->setDropAction(admission_action(drop));
             drop->accept();
             return true;
         }
@@ -299,6 +330,7 @@ class BrowserTabsStrip final : public QWidget {
     QHBoxLayout *tabs_;
     QToolButton *new_tab_;
     QWidget *indicator_;
+    const QObject *native_check_drag_source_ = nullptr;
     std::vector<BrowserTabButton *> buttons_;
     BrowserTabButton *pressed_ = nullptr;
     QPoint press_position_;

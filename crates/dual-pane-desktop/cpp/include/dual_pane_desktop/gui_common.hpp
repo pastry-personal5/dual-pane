@@ -18,6 +18,7 @@
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
+#include <QtCore/QUrl>
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractFileIconProvider>
 #include <QtGui/QAccessible>
@@ -120,6 +121,13 @@ inline constexpr int tab_limit = 8;
 inline constexpr auto favorite_item_mime = "application/x-dual-pane-favorite-item";
 inline constexpr auto operation_panel_mime = "application/x-dual-pane-operation-panel";
 inline constexpr auto file_drag_mime = "application/x-dual-pane-file-drag-v1";
+
+inline auto file_drag_sources() -> QHash<const QObject *, int> & {
+    static QHash<const QObject *, int> sources;
+    return sources;
+}
+inline void register_file_drag_source(const QObject *source, int browser) { file_drag_sources().insert(source, browser); }
+inline void unregister_file_drag_source(const QObject *source) { file_drag_sources().remove(source); }
 // File command codes of the Folder Items model.
 inline constexpr int command_copy = 0, command_move = 1, command_rename = 2, command_new_folder = 3, command_trash = 4, command_delete = 5;
 inline constexpr int clipboard_copy = 0, clipboard_cut = 1, clipboard_paste = 2;
@@ -163,11 +171,13 @@ inline auto decode_file_drag_payload(const QMimeData *mime) -> std::optional<std
     return drag == 0 ? std::nullopt : std::optional<std::uint64_t>(drag);
 }
 
-inline auto internal_file_drag(const QDropEvent *event) -> std::optional<std::uint64_t> {
-    if (event == nullptr || event->source() == nullptr || !event->source()->property("dualPaneFolderItemsSource").toBool())
+inline auto internal_file_drag(const QDropEvent *event, const QObject *source) -> std::optional<std::uint64_t> {
+    if (event == nullptr || !file_drag_sources().contains(source))
         return std::nullopt;
     return decode_file_drag_payload(event->mimeData());
 }
+
+inline auto file_drag_source_browser(const QObject *source) -> int { return file_drag_sources().value(source, -1); }
 
 enum class Movement : std::uint8_t { Previous,
                                      Next,
@@ -202,20 +212,25 @@ constexpr auto user_modifiers(Qt::KeyboardModifiers modifiers) -> Qt::KeyboardMo
     return modifiers & ~Qt::KeypadModifier;
 }
 
-constexpr auto drop_modifiers_supported(Qt::KeyboardModifiers modifiers) -> bool {
-    const auto relevant = user_modifiers(modifiers);
-    return relevant == Qt::NoModifier || relevant == Qt::AltModifier;
+constexpr auto drop_is_copy(Qt::KeyboardModifiers modifiers) -> bool { return user_modifiers(modifiers).testFlag(Qt::AltModifier); }
+constexpr auto file_drop_action(Qt::KeyboardModifiers modifiers) -> Qt::DropAction { return drop_is_copy(modifiers) ? Qt::CopyAction : Qt::MoveAction; }
+inline auto admission_action(const QDropEvent *event) -> Qt::DropAction {
+    const auto desired = file_drop_action(event->modifiers());
+    if (event->possibleActions().testFlag(desired))
+        return desired;
+    if (event->possibleActions().testFlag(Qt::CopyAction))
+        return Qt::CopyAction;
+    if (event->possibleActions().testFlag(Qt::MoveAction))
+        return Qt::MoveAction;
+    return Qt::IgnoreAction;
 }
-
-constexpr auto drop_is_copy(Qt::KeyboardModifiers modifiers) -> bool { return user_modifiers(modifiers) == Qt::AltModifier; }
 
 static_assert(movement_for(Qt::Key_Up) == Movement::Previous);
 static_assert(movement_for(Qt::Key_PageDown) == Movement::PageDown);
 static_assert(!movement_for(Qt::Key_Left).has_value());
-static_assert(drop_modifiers_supported(Qt::NoModifier));
-static_assert(drop_modifiers_supported(Qt::AltModifier));
-static_assert(!drop_modifiers_supported(Qt::ShiftModifier));
-static_assert(!drop_modifiers_supported(Qt::AltModifier | Qt::ControlModifier));
+static_assert(file_drop_action(Qt::NoModifier) == Qt::MoveAction);
+static_assert(file_drop_action(Qt::ShiftModifier | Qt::ControlModifier) == Qt::MoveAction);
+static_assert(file_drop_action(Qt::AltModifier | Qt::ControlModifier) == Qt::CopyAction);
 static_assert(user_modifiers(Qt::KeypadModifier) == Qt::NoModifier);
 static_assert(user_modifiers(Qt::ShiftModifier | Qt::KeypadModifier) == Qt::ShiftModifier);
 

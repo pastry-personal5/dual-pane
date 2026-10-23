@@ -15,4 +15,26 @@ auto unshifted_key_character(std::uint32_t native_virtual_key) -> int {
     return character <= 0x7f ? character : 0;
 }
 
+auto current_native_mouse_event() -> NativeMouseEvent {
+    NSEvent *event = [NSApp currentEvent];
+    if (event == nil)
+        return NativeMouseEvent::Unknown;
+    switch (event.type) {
+    case NSEventTypeLeftMouseDown:
+        return NativeMouseEvent::PrimaryPress;
+    case NSEventTypeLeftMouseDragged:
+        return NativeMouseEvent::PrimaryDrag;
+    case NSEventTypeLeftMouseUp:
+        return NativeMouseEvent::PrimaryRelease;
+    case NSEventTypeRightMouseDown:
+        return NativeMouseEvent::SecondaryPress;
+    case NSEventTypeRightMouseDragged:
+        return NativeMouseEvent::SecondaryDrag;
+    case NSEventTypeRightMouseUp:
+        return NativeMouseEvent::SecondaryRelease;
+    default:
+        return NativeMouseEvent::Unknown;
+    }
+}
+
 }

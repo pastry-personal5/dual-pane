@@ -377,6 +377,7 @@ impl Workspace {
                 self.current_drag.take_if(|current| current.id == drag);
                 Transition::default()
             }
+            Command::RejectDrop { browser, tab, reason } => Transition::output(Output::DropRejected { browser, tab, reason }),
             Command::SubmitPath { browser, tab, submission } => self.submit_path(browser, tab, submission),
             Command::CancelPathEntry { browser, tab } => self.supersede_path_check(browser, tab, true),
             Command::RequestFolderItemsMenu { browser, tab, visible_revision, kind, target } => self.request_folder_items_menu(browser, tab, visible_revision, kind, target),
@@ -692,15 +693,13 @@ impl Workspace {
             Err(ClipboardRejection::StaleTab | ClipboardRejection::StaleObservation) => return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::StaleSource) }),
             Err(_) => return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::UnsupportedSource) }),
         };
-        if roots.iter().any(|root| root.kind == EntryKind::Other) {
-            return Transition::output(Output::DropPreviewed { preview: Err(DropRejection::UnsupportedSource) });
-        }
+        let unsupported_source = roots.iter().any(|root| root.kind == EntryKind::Other);
         let Some(items) = self.tab(browser, tab).and_then(|state| state.folder_items.as_ref()) else { return Transition::default() };
         let (source, listing) = (items.location.clone(), items.listing);
         self.next_drag = self.next_drag.wrapping_add(1).max(1);
         let id = DragId::new(self.next_drag);
         let count = roots.len();
-        self.current_drag = Some(CapturedDrag { id, browser, tab, source, listing, visible_revision, roots });
+        self.current_drag = Some(CapturedDrag { id, browser, tab, source, listing, visible_revision, roots, unsupported_source });
         Transition::output(Output::DragStarted { drag: id, browser, tab, count })
     }
     fn drag_source_valid(&self, drag: &CapturedDrag) -> bool {
@@ -741,6 +740,9 @@ impl Workspace {
         }
         if !self.drag_source_valid(current) {
             return Err(DropRejection::StaleSource);
+        }
+        if current.unsupported_source {
+            return Err(DropRejection::UnsupportedSource);
         }
         let candidate = self.drop_candidate(target)?;
         let kind = match action {

@@ -25,6 +25,9 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     pub fn cancel_drag(&mut self, drag: dual_pane_application::DragId) {
         self.submit(Command::CancelDrag { drag });
     }
+    pub fn reject_drop(&mut self, browser: BrowserSide, tab: TabId, reason: dual_pane_application::DropRejection) {
+        self.submit(Command::RejectDrop { browser, tab, reason });
+    }
     /// Reveals and hides Operation Panels whose delay passed.
     pub fn tick_operations(&mut self) {
         self.operations.tick();

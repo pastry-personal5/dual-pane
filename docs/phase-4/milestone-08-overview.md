@@ -77,6 +77,14 @@ The blank path was caused by breadcrumb widgets being created under the outer di
 
 The Row #1 follow-up keeps the confirmed breadcrumb path, Expand, Edit, and the typed editor inside Folder Pane Toolbar Row #1, with ancestor columns immediately below it. The native path-columns check verifies the full-path tooltip and Row #1 widget containment; the path-entry and text-editor-focus checks also pass. On 2026-10-23, `make check` passed Rust and C++ formatting, lint, and the full test suite after this change.
 
+## Empty path space editing follow-up checklist
+
+- [x] Clicking the empty space to the right of the confirmed path enters the existing editor and selects its text; breadcrumb clicks still navigate.
+- [x] Cover the pointer transition in the native path-columns check and update user-facing interaction docs.
+- [x] Pass the repository gate after the change.
+
+The breadcrumb background now opens the existing editor when clicked after the final path component. The path-columns check confirms text selection and Escape restoration, then navigates by breadcrumb. On 2026-10-23, `scripts/check-path-columns.sh`, `scripts/check-path-entry.sh`, and `make check` passed; `git diff --check` passed before this checklist update.
+
 ## Completion checklist
 
 - [x] Before implementation, the owner decides every [P4-M8 deferred detail](milestone-01-overview.md#deferred-owner-decisions), including column semantics, expansion ownership, collapse timing, folder choices, focus, and feedback; record decisions in product behavior, UX GUI, and information architecture.

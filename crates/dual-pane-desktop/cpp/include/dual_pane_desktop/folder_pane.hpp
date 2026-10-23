@@ -3,6 +3,7 @@
 
 #include "dual-pane-desktop/src/folder_items_list_model.cxxqt.h"
 #include "dual_pane_desktop/gui_common.hpp"
+#include "dual_pane_desktop/keyboard_layout.hpp"
 #include "dual_pane_desktop/quick_look_preview.hpp"
 #include "dual_pane_desktop/tabs_strip.hpp"
 #include <QtCore/QPropertyAnimation>
@@ -299,8 +300,7 @@ class FolderItemsList final : public QTreeView {
         setMouseTracking(true);
         setAcceptDrops(true);
         viewport()->setAcceptDrops(true);
-        setProperty("dualPaneFolderItemsSource", true);
-        setProperty("dualPaneBrowser", model_->browserSide());
+        register_file_drag_source(this, model_->browserSide());
         viewport()->setMouseTracking(true);
         setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         setUniformRowHeights(true);
@@ -337,6 +337,7 @@ class FolderItemsList final : public QTreeView {
         });
         connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { report_scroll(); });
     }
+    ~FolderItemsList() override { unregister_file_drag_source(this); }
 
     void setColumnsHandler(std::function<void(const std::array<bool, column_count> &)> handler) { columns_handler_ = std::move(handler); }
     /// Shows the Folder Items Context Menu at a global point for `row`, or
@@ -344,6 +345,17 @@ class FolderItemsList final : public QTreeView {
     /// exact Shift invocation.
     void setMenuHandler(std::function<void(const QPoint &, int, bool)> handler) { menu_handler_ = std::move(handler); }
     void setQuickLookFailureHandler(std::function<void()> handler) { quick_look_failure_handler_ = std::move(handler); }
+    void setDragStartedHandler(std::function<void(std::uint64_t)> handler) { drag_started_handler_ = std::move(handler); }
+    void setDragSessionHandler(std::function<void(bool)> handler) { drag_session_handler_ = std::move(handler); }
+    // Only the disposable native check sets this. Normal drops use Qt's source().
+    void setNativeCheckDragSource(const QObject *source) {
+        if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT") && qEnvironmentVariableIsSet("DUAL_PANE_TEST_PROFILE"))
+            native_check_drag_source_ = source;
+    }
+    void setNativeCheckMouseEvent(NativeMouseEvent event) {
+        if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT") && qEnvironmentVariableIsSet("DUAL_PANE_TEST_PROFILE"))
+            native_check_mouse_event_ = event;
+    }
     void setTypeToFilterHandler(std::function<void(const QString &)> handler) { type_to_filter_handler_ = std::move(handler); }
     void setInputMethodHandler(std::function<void(const QString &, const QString &, const QList<QInputMethodEvent::Attribute> &)> handler) { input_method_handler_ = std::move(handler); }
 
@@ -375,6 +387,10 @@ class FolderItemsList final : public QTreeView {
             painter.fillRect(label_rect, QColor(QString::fromLatin1(active_color)));
             painter.setPen(QColor(QString::fromLatin1(text_color)));
             painter.drawText(label_rect, Qt::AlignCenter, label);
+        } else if (drop_ineligible_) {
+            QPainter painter(viewport());
+            painter.setPen(QPen(QColor(QString::fromLatin1(error_color)), 2, Qt::DashLine));
+            painter.drawRect(viewport()->rect().adjusted(2, 2, -3, -3));
         }
     }
     auto selectionCommand(const QModelIndex &, const QEvent *) const -> QItemSelectionModel::SelectionFlags override { return QItemSelectionModel::NoUpdate; }
@@ -382,64 +398,91 @@ class FolderItemsList final : public QTreeView {
     void mousePressEvent(QMouseEvent *event) override {
         event->accept();
         const auto index = indexAt(event->position().toPoint());
-        if (event->button() == Qt::LeftButton) {
+        const bool remapped_primary = event->button() == Qt::RightButton && native_mouse_event() == NativeMouseEvent::PrimaryPress;
+        if (event->button() == Qt::LeftButton || remapped_primary) {
             focusList();
-            // Qt maps ControlModifier to the Command key on macOS.
-            const auto modifiers = user_modifiers(event->modifiers());
-            drag_candidate_ = index.isValid() && modifiers == Qt::NoModifier;
+            remapped_primary_press_ = remapped_primary;
+            press_pending_ = true;
+            drag_modifiers_ = user_modifiers(event->modifiers());
+            drag_candidate_ = index.isValid();
             drag_press_ = event->position().toPoint();
             drag_tab_ = model_->activeTabId();
             drag_revision_ = model_->visibleRevision();
-            if (!index.isValid())
-                model_->clearSelection();
-            else if (modifiers == Qt::ControlModifier)
-                model_->toggleRow(index.row());
-            else if (modifiers == Qt::ShiftModifier)
-                model_->extendToRow(index.row());
-            else if (!model_->rowIsSelected(index.row()))
-                model_->selectRow(index.row());
+            drag_selection_revision_ = model_->getSelectionRevision();
+            drag_row_ = index.isValid() ? index.row() : -1;
+            drag_identity_ = model_->rowDragIdentity(drag_row_);
+            drag_pressed_selected_ = index.isValid() && model_->rowIsSelected(drag_row_);
         } else if (event->button() == Qt::RightButton) {
+            drag_candidate_ = false;
+            press_pending_ = false;
+            remapped_primary_press_ = false;
             focusList();
         }
     }
     void mouseReleaseEvent(QMouseEvent *event) override {
+        if ((event->button() == Qt::LeftButton || (remapped_primary_press_ && event->button() == Qt::RightButton)) && press_pending_)
+            apply_press_click();
         drag_candidate_ = false;
+        press_pending_ = false;
+        remapped_primary_press_ = false;
         event->accept();
     }
     void mouseMoveEvent(QMouseEvent *event) override {
         event->accept();
-        if (!drag_candidate_ || !event->buttons().testFlag(Qt::LeftButton) || (event->position().toPoint() - drag_press_).manhattanLength() < QApplication::startDragDistance())
+        const bool primary_held = event->buttons().testFlag(Qt::LeftButton) || (remapped_primary_press_ && event->buttons().testFlag(Qt::RightButton));
+        if (!drag_candidate_ || !primary_held || (event->position().toPoint() - drag_press_).manhattanLength() < QApplication::startDragDistance())
             return;
         drag_candidate_ = false;
-        const auto drag_id = model_->beginFileDrag(drag_tab_, drag_revision_);
+        press_pending_ = false;
+        const auto drag_id = model_->beginFileDragObserved(drag_tab_, drag_revision_, drag_selection_revision_, drag_row_, drag_identity_, drag_pressed_selected_);
         if (drag_id == 0)
             return;
+        if (drag_started_handler_)
+            drag_started_handler_(drag_id);
         auto *mime = new QMimeData();
         mime->setData(QString::fromLatin1(file_drag_mime), file_drag_payload(drag_id));
         QDrag drag(this);
         drag.setMimeData(mime);
+        if (drag_session_handler_)
+            drag_session_handler_(true);
         drag.exec(Qt::CopyAction | Qt::MoveAction, Qt::MoveAction);
         model_->cancelFileDrag(drag_id);
+        if (drag_session_handler_)
+            drag_session_handler_(false);
     }
     void dragEnterEvent(QDragEnterEvent *event) override { update_drop(event); }
     void dragMoveEvent(QDragMoveEvent *event) override { update_drop(event); }
     void dragLeaveEvent(QDragLeaveEvent *event) override {
         clear_drop();
+        drop_observed_ = false;
         event->accept();
     }
     void dropEvent(QDropEvent *event) override {
-        const auto drag = internal_file_drag(event);
+        const auto *source = native_check_drag_source_ != nullptr ? native_check_drag_source_ : event->source();
+        const auto drag = internal_file_drag(event, source);
         const auto index = indexAt(event->position().toPoint());
         const int row = index.isValid() ? index.row() : -1;
         const int kind = row >= 0 ? 1 : 0;
-        if (!drop_modifiers_supported(event->modifiers())) {
-            clear_drop();
+        const bool copy = drop_is_copy(event->modifiers());
+        const bool stale_target = drop_observed_ && (drop_tab_ != model_->activeTabId() || drop_revision_ != model_->visibleRevision() || drop_observed_row_ != row || (row >= 0 && drop_identity_ != model_->rowDragIdentity(row)));
+        clear_drop();
+        drop_observed_ = false;
+        const int source_browser = file_drag_source_browser(source);
+        if (stale_target) {
+            model_->rejectFileDrop(model_->activeTabId(), 3);
             event->ignore();
             return;
         }
-        const bool copy = drop_is_copy(event->modifiers());
-        clear_drop();
-        const int source_browser = event->source() == nullptr ? -1 : event->source()->property("dualPaneBrowser").toInt();
+        if (!drag) {
+            model_->rejectFileDrop(model_->activeTabId(), source_browser < 0 ? 0 : 1);
+            event->ignore();
+            return;
+        }
+        if (!event->possibleActions().testFlag(file_drop_action(event->modifiers()))) {
+            model_->rejectFileDrop(model_->activeTabId(), 2);
+            event->ignore();
+            return;
+        }
         if (drag && model_->acceptFileDrop(*drag, source_browser, kind, model_->activeTabId(), row, copy)) {
             event->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
             event->accept();
@@ -458,6 +501,9 @@ class FolderItemsList final : public QTreeView {
     }
     void contextMenuEvent(QContextMenuEvent *event) override {
         event->accept();
+        const auto native = native_mouse_event();
+        if (event->reason() == QContextMenuEvent::Mouse && (native == NativeMouseEvent::PrimaryPress || native == NativeMouseEvent::PrimaryRelease || remapped_primary_press_))
+            return;
         focusList();
         const auto index = indexAt(event->pos());
         const auto modifiers = user_modifiers(event->modifiers());
@@ -544,25 +590,49 @@ class FolderItemsList final : public QTreeView {
     }
 
   private:
+    [[nodiscard]] auto native_mouse_event() const -> NativeMouseEvent { return native_check_mouse_event_ == NativeMouseEvent::Unknown ? current_native_mouse_event() : native_check_mouse_event_; }
+    void apply_press_click() {
+        if (model_->activeTabId() != drag_tab_ || model_->visibleRevision() != drag_revision_ || model_->getSelectionRevision() != drag_selection_revision_ || (drag_row_ >= 0 && model_->rowDragIdentity(drag_row_) != drag_identity_))
+            return;
+        if (drag_row_ < 0)
+            model_->clearSelection();
+        else if (drag_modifiers_ == Qt::ControlModifier)
+            model_->toggleRow(drag_row_);
+        else if (drag_modifiers_ == Qt::ShiftModifier)
+            model_->extendToRow(drag_row_);
+        else if (!drag_pressed_selected_)
+            model_->selectRow(drag_row_);
+    }
     template <typename Event>
     void update_drop(Event *event) {
-        const auto drag = internal_file_drag(event);
+        const auto *source = native_check_drag_source_ != nullptr ? native_check_drag_source_ : event->source();
+        const auto drag = internal_file_drag(event, source);
         const auto index = indexAt(event->position().toPoint());
         const int row = index.isValid() ? index.row() : -1;
         const int kind = row >= 0 ? 1 : 0;
-        if (!drop_modifiers_supported(event->modifiers())) {
-            clear_drop();
-            event->ignore();
-            return;
-        }
+        drop_observed_ = true;
+        drop_tab_ = model_->activeTabId();
+        drop_revision_ = model_->visibleRevision();
+        drop_observed_row_ = row;
+        drop_identity_ = model_->rowDragIdentity(row);
         const bool copy = drop_is_copy(event->modifiers());
-        const int source_browser = event->source() == nullptr ? -1 : event->source()->property("dualPaneBrowser").toInt();
-        const int count = drag ? model_->previewFileDrop(*drag, source_browser, kind, model_->activeTabId(), row, copy) : -1;
+        const int source_browser = file_drag_source_browser(source);
+        const int count = drag && event->possibleActions().testFlag(file_drop_action(event->modifiers())) ? model_->previewFileDrop(*drag, source_browser, kind, model_->activeTabId(), row, copy) : -1;
         if (count <= 0) {
             clear_drop();
-            event->ignore();
+            drop_ineligible_ = true;
+            setAccessibleDescription(QStringLiteral("Cannot drop here"));
+            viewport()->update();
+            const auto action = admission_action(event);
+            if (action == Qt::IgnoreAction) {
+                event->ignore();
+            } else {
+                event->setDropAction(action);
+                event->accept();
+            }
             return;
         }
+        drop_ineligible_ = false;
         drop_row_ = row;
         drop_count_ = count;
         drop_copy_ = copy;
@@ -575,15 +645,16 @@ class FolderItemsList final : public QTreeView {
             QAccessible::updateAccessibility(&announcement);
         }
         viewport()->update();
-        event->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+        event->setDropAction(admission_action(event));
         event->accept();
     }
     void clear_drop() {
-        if (drop_count_ <= 0)
+        if (drop_count_ <= 0 && !drop_ineligible_)
             return;
         drop_row_ = -1;
         drop_count_ = 0;
         drop_copy_ = false;
+        drop_ineligible_ = false;
         setAccessibleDescription(QString());
         viewport()->update();
     }
@@ -692,6 +763,10 @@ class FolderItemsList final : public QTreeView {
     std::function<void(const std::array<bool, column_count> &)> columns_handler_;
     std::function<void(const QPoint &, int, bool)> menu_handler_;
     std::function<void()> quick_look_failure_handler_;
+    std::function<void(std::uint64_t)> drag_started_handler_;
+    std::function<void(bool)> drag_session_handler_;
+    const QObject *native_check_drag_source_ = nullptr;
+    NativeMouseEvent native_check_mouse_event_ = NativeMouseEvent::Unknown;
     std::function<void(const QString &)> type_to_filter_handler_;
     std::function<void(const QString &, const QString &, const QList<QInputMethodEvent::Attribute> &)> input_method_handler_;
     std::unique_ptr<QuickLookPreviewController> quick_look_;
@@ -701,12 +776,25 @@ class FolderItemsList final : public QTreeView {
     std::uint64_t quick_look_revision_ = 0;
     bool restoring_ = false;
     bool drag_candidate_ = false;
+    bool press_pending_ = false;
+    bool remapped_primary_press_ = false;
     QPoint drag_press_;
+    Qt::KeyboardModifiers drag_modifiers_ = Qt::NoModifier;
+    QByteArray drag_identity_;
+    int drag_row_ = -1;
+    int drag_selection_revision_ = 0;
+    bool drag_pressed_selected_ = false;
     std::uint64_t drag_tab_ = 0;
     std::uint64_t drag_revision_ = 0;
     int drop_row_ = -1;
     int drop_count_ = 0;
     bool drop_copy_ = false;
+    bool drop_ineligible_ = false;
+    bool drop_observed_ = false;
+    int drop_observed_row_ = -1;
+    std::uint64_t drop_tab_ = 0;
+    std::uint64_t drop_revision_ = 0;
+    QByteArray drop_identity_;
 };
 
 class ElidedStatusLabel final : public QLabel {
@@ -1036,9 +1124,152 @@ class FilterRowState final {
 
 auto filter_status_text(int status, bool no_matches, const QString &text, int count) -> QString;
 
+/// A visible Browser-folder target while an internal file drag is running.
+/// It occupies a small part of the list viewport so folder rows remain usable.
+class CurrentFolderDropTarget final : public QWidget {
+  public:
+    CurrentFolderDropTarget(FolderItemsListModel *model, QWidget *parent) : QWidget(parent), model_(model) {
+        setObjectName(QStringLiteral("currentFolderDropTarget"));
+        setAccessibleName(QStringLiteral("Drop into this folder"));
+        setFocusPolicy(Qt::NoFocus);
+        setAcceptDrops(true);
+        hide();
+    }
+
+    void setDragVisible(bool visible) {
+        observed_ = false;
+        if (visible) {
+            clear_drop();
+            show();
+            raise();
+        } else {
+            clear_drop();
+            hide();
+        }
+    }
+    // The disposable native check supplies a registered live source because
+    // synthetic Qt drop events do not carry QDropEvent::source().
+    void setNativeCheckDragSource(const QObject *source) {
+        if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FILE_DRAG_DROP_ROOT") && qEnvironmentVariableIsSet("DUAL_PANE_TEST_PROFILE"))
+            native_check_drag_source_ = source;
+    }
+
+  protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QColor outline(QString::fromLatin1(border_color));
+        if (ineligible_)
+            outline = QColor(QString::fromLatin1(error_color));
+        else if (eligible_)
+            outline = QColor(QString::fromLatin1(active_color));
+        painter.setPen(QPen(outline, 2, ineligible_ ? Qt::DashLine : Qt::SolidLine));
+        painter.setBrush(QColor(QString::fromLatin1(surface_color)));
+        painter.drawRoundedRect(rect().adjusted(2, 2, -3, -3), 8, 8);
+        painter.setPen(QColor(QString::fromLatin1(text_color)));
+        painter.drawText(rect().adjusted(10, 7, -10, -30), Qt::AlignCenter, QStringLiteral("Drop into this folder"));
+        painter.setPen(QColor(QString::fromLatin1(eligible_ ? text_color : inactive_text_color)));
+        QString detail = model_->getPathText();
+        if (ineligible_)
+            detail = QStringLiteral("Cannot drop here");
+        else if (eligible_)
+            detail = QStringLiteral("%1 %2 %3").arg(copy_ ? QStringLiteral("Copy") : QStringLiteral("Move")).arg(count_).arg(count_ == 1 ? QStringLiteral("Item") : QStringLiteral("Items"));
+        const auto detail_rect = rect().adjusted(10, 31, -10, -7);
+        painter.drawText(detail_rect, Qt::AlignCenter, fontMetrics().elidedText(detail, Qt::ElideMiddle, detail_rect.width()));
+    }
+    void dragEnterEvent(QDragEnterEvent *event) override { update_drop(event); }
+    void dragMoveEvent(QDragMoveEvent *event) override { update_drop(event); }
+    void dragLeaveEvent(QDragLeaveEvent *event) override {
+        clear_drop();
+        observed_ = false;
+        event->accept();
+    }
+    void dropEvent(QDropEvent *event) override {
+        const auto *source = native_check_drag_source_ != nullptr ? native_check_drag_source_ : event->source();
+        const auto drag = internal_file_drag(event, source);
+        const bool stale = observed_ && (tab_ != model_->activeTabId() || revision_ != model_->visibleRevision());
+        clear_drop();
+        observed_ = false;
+        const int source_browser = file_drag_source_browser(source);
+        if (stale) {
+            model_->rejectFileDrop(model_->activeTabId(), 3);
+            event->ignore();
+            return;
+        }
+        if (!drag) {
+            model_->rejectFileDrop(model_->activeTabId(), source_browser < 0 ? 0 : 1);
+            event->ignore();
+            return;
+        }
+        if (!event->possibleActions().testFlag(file_drop_action(event->modifiers()))) {
+            model_->rejectFileDrop(model_->activeTabId(), 2);
+            event->ignore();
+            return;
+        }
+        const bool copy = drop_is_copy(event->modifiers());
+        if (model_->acceptFileDrop(*drag, source_browser, 0, model_->activeTabId(), -1, copy)) {
+            event->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+            event->accept();
+        } else {
+            event->ignore();
+        }
+    }
+
+  private:
+    template <typename Event>
+    void update_drop(Event *event) {
+        const auto *source = native_check_drag_source_ != nullptr ? native_check_drag_source_ : event->source();
+        const auto drag = internal_file_drag(event, source);
+        observed_ = true;
+        tab_ = model_->activeTabId();
+        revision_ = model_->visibleRevision();
+        const bool copy = drop_is_copy(event->modifiers());
+        const int count = drag && event->possibleActions().testFlag(file_drop_action(event->modifiers())) ? model_->previewFileDrop(*drag, file_drag_source_browser(source), 0, tab_, -1, copy) : -1;
+        eligible_ = count > 0;
+        ineligible_ = !eligible_;
+        count_ = eligible_ ? count : 0;
+        copy_ = copy;
+        QString description = QStringLiteral("Cannot drop here");
+        if (eligible_)
+            description = QStringLiteral("%1 %2 %3 into %4").arg(copy ? QStringLiteral("Copy") : QStringLiteral("Move")).arg(count).arg(count == 1 ? QStringLiteral("Item") : QStringLiteral("Items")).arg(model_->getPathText());
+        const bool changed = accessibleDescription() != description;
+        setAccessibleDescription(description);
+        if (changed && eligible_) {
+            QAccessibleAnnouncementEvent announcement(this, description);
+            QAccessible::updateAccessibility(&announcement);
+        }
+        update();
+        const auto action = admission_action(event);
+        if (action == Qt::IgnoreAction) {
+            event->ignore();
+        } else {
+            event->setDropAction(action);
+            event->accept();
+        }
+    }
+    void clear_drop() {
+        eligible_ = false;
+        ineligible_ = false;
+        count_ = 0;
+        copy_ = false;
+        setAccessibleDescription(QString());
+        update();
+    }
+
+    FolderItemsListModel *model_;
+    const QObject *native_check_drag_source_ = nullptr;
+    std::uint64_t tab_ = 0;
+    std::uint64_t revision_ = 0;
+    int count_ = 0;
+    bool observed_ = false;
+    bool eligible_ = false;
+    bool ineligible_ = false;
+    bool copy_ = false;
+};
+
 class FolderPane final : public QFrame {
   public:
-    FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)), path_row_(new QWidget(this)) {
+    FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)), drop_target_(new CurrentFolderDropTarget(model, view_->viewport())), path_row_(new QWidget(this)) {
         setObjectName(QStringLiteral("folderPane"));
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -1159,6 +1390,7 @@ class FolderPane final : public QFrame {
         filter_row_->hide();
         view_->setObjectName(QStringLiteral("folderItemsList"));
         view_->setAccessibleName(QStringLiteral("Folder Items List"));
+        view_->viewport()->installEventFilter(this);
         auto *status = new BrowserStatusBar(this);
         status_ = status;
         // The New Folder Name Editor is a temporary row pinned at the top of
@@ -1313,9 +1545,12 @@ class FolderPane final : public QFrame {
                 sorts_.at(choice)->setVisible(fields_visible.at(choice / 2));
         });
         sort_groups_ = sort_groups;
+        position_drop_target();
     }
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return view_; }
+    [[nodiscard]] auto current_folder_drop_target() const -> CurrentFolderDropTarget * { return drop_target_; }
+    void set_file_drag_active(bool active) { drop_target_->setDragVisible(active); }
     [[nodiscard]] auto status() const -> BrowserStatusBar * { return status_; }
     [[nodiscard]] auto new_folder_row() const -> QWidget * { return new_folder_row_; }
     [[nodiscard]] auto path_row() const -> QWidget * { return path_row_; }
@@ -1330,7 +1565,20 @@ class FolderPane final : public QFrame {
         filter_input_->setFocus(Qt::ShortcutFocusReason);
     }
 
+  protected:
+    auto eventFilter(QObject *watched, QEvent *event) -> bool override {
+        if (watched == view_->viewport() && event->type() == QEvent::Resize)
+            position_drop_target();
+        return QFrame::eventFilter(watched, event);
+    }
+
   private:
+    void position_drop_target() {
+        const auto size = view_->viewport()->size();
+        const int width = qMax(0, qMin(260, size.width() - 16));
+        const int height = qMax(0, qMin(68, size.height() - 16));
+        drop_target_->setGeometry((size.width() - width) / 2, (size.height() - height) / 2, width, height);
+    }
     void update_sort(FolderItemsListModel *model) {
         const int choice = model->getSortChoice();
         for (int index = 0; index < static_cast<int>(sorts_.size()); ++index) {
@@ -1340,6 +1588,7 @@ class FolderPane final : public QFrame {
     }
 
     FolderItemsList *view_;
+    CurrentFolderDropTarget *drop_target_;
     QWidget *filter_row_ = nullptr;
     FolderFilterTextEdit *filter_input_ = nullptr;
     QLabel *filter_status_ = nullptr;
@@ -1747,6 +1996,8 @@ class Browser final : public QWidget {
         breadcrumb_layout_->setContentsMargins(4, 0, 4, 0);
         breadcrumb_layout_->setSpacing(2);
         breadcrumb_scroll_->setWidget(breadcrumb_contents_);
+        breadcrumb_scroll_->viewport()->installEventFilter(this);
+        breadcrumb_contents_->installEventFilter(this);
         path_row_layout_->addWidget(breadcrumb_scroll_, 1);
         expand_button_ = command_button(QStringLiteral("expandPathButton"), QStringLiteral("Expand"), QStringLiteral("Show ancestor folder choices"), QStringLiteral("Expand path columns"), path_display_);
         expand_button_->setFocusPolicy(Qt::StrongFocus);
@@ -1886,6 +2137,21 @@ class Browser final : public QWidget {
 
   protected:
     bool eventFilter(QObject *watched, QEvent *event) override {
+        if ((watched == breadcrumb_scroll_->viewport() || watched == breadcrumb_contents_) && event->type() == QEvent::MouseButtonPress) {
+            auto *mouse = dynamic_cast<QMouseEvent *>(event);
+            if (mouse && mouse->button() == Qt::LeftButton) {
+                const auto point = watched == breadcrumb_contents_ ? mouse->position().toPoint() : breadcrumb_contents_->mapFrom(breadcrumb_scroll_->viewport(), mouse->position().toPoint());
+                int path_right = 0;
+                for (int index = 0; index < breadcrumb_layout_->count(); ++index) {
+                    if (auto *button = qobject_cast<QToolButton *>(breadcrumb_layout_->itemAt(index)->widget()); button && button->objectName() == QStringLiteral("pathBreadcrumb"))
+                        path_right = qMax(path_right, button->geometry().right());
+                }
+                if (point.x() > path_right) {
+                    edit_path();
+                    return true;
+                }
+            }
+        }
         if (event->type() == QEvent::KeyPress && columns_expanded_) {
             for (auto *list : visible_column_lists_) {
                 if (watched != list)

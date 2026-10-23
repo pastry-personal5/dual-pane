@@ -59,6 +59,20 @@ fn selection_is_frozen_in_listing_order_and_a_drop_token_is_one_use() {
 }
 
 #[test]
+fn unsupported_source_can_be_carried_but_rejects_on_release() {
+    let mut workspace = Workspace::new();
+    let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), vec![Entry::new(name("special"), EntryKind::Other)]);
+    let (right, _) = load(&mut workspace, BrowserSide::Right, path(&["destination"]), vec![]);
+    workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab: left, row: 0, name: name("special") }.into());
+    let drag = begin(&mut workspace, BrowserSide::Left, left, revision);
+    let target = DropTarget::BrowserFolder { browser: BrowserSide::Right, tab: right };
+    assert!(matches!(workspace.handle(Command::PreviewDrop { drag, source_browser: BrowserSide::Left, target: target.clone(), action: DropAction::Move }.into()).outputs.as_slice(), [Output::DropPreviewed { preview: Err(DropRejection::UnsupportedSource) }]));
+    let refused = workspace.handle(Command::AcceptDrop { drag, source_browser: BrowserSide::Left, target, action: DropAction::Move }.into());
+    assert!(refused.work.is_empty());
+    assert!(matches!(refused.outputs.as_slice(), [Output::DropRejected { browser: BrowserSide::Right, reason: DropRejection::UnsupportedSource, .. }]));
+}
+
+#[test]
 fn row_and_tab_targets_use_exact_identity_and_stale_views_reject() {
     let mut workspace = Workspace::new();
     let (left, revision) = load(&mut workspace, BrowserSide::Left, path(&["source"]), vec![Entry::new(name("item"), EntryKind::File)]);

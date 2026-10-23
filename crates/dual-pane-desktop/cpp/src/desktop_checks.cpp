@@ -396,6 +396,33 @@ void schedule_path_columns_checks(QMainWindow &window, const std::array<Browser 
                 finish(false, "Expand or Edit does not use its Browser focus tone");
                 return;
             }
+            auto *viewport = scroll->viewport();
+            const int blank_start = contents->mapTo(viewport, QPoint(contents->width(), 0)).x();
+            if (blank_start + 12 >= viewport->width()) {
+                if (window.width() >= 8000) {
+                    finish(false, "could not expose empty space after the full path");
+                    return;
+                }
+                window.resize(qMin(8000, window.width() * 2), window.height());
+                return;
+            }
+            const QPoint blank(blank_start + 6, viewport->height() / 2);
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(blank), QPointF(viewport->mapToGlobal(blank)), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(blank), QPointF(viewport->mapToGlobal(blank)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &release);
+            QApplication::processEvents();
+            if (!editor->isVisible() || !editor->editing() || editor->selectedText() != current || left_model.getPathText() != current) {
+                finish(false, "clicking after the full path did not select it for editing");
+                return;
+            }
+            QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(editor, &cancel);
+            QApplication::processEvents();
+            if (editor->editing() || !display->isVisible() || left_model.getPathText() != current) {
+                finish(false, "Escape did not restore the confirmed breadcrumb path");
+                return;
+            }
             expand->click();
             if (expand->icon().cacheKey() != path_action_icon(PathActionIcon::Collapse, focused).cacheKey() || expand->accessibleName() != QStringLiteral("Collapse path columns") || expand->toolTip() != QStringLiteral("Hide ancestor folder choices")) {
                 finish(false, "Expand did not switch to its Collapse icon and feedback");
@@ -568,12 +595,22 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
         int step = 0;
         std::uint64_t drag = 0;
         std::uint64_t inactive_tab = 0;
+        bool awaiting_alias_rejection = false;
+        bool alias_rejection_seen = false;
+        QString alias_last_status;
+        std::vector<QString> alias_statuses;
         QElapsedTimer elapsed;
+        QAccessible::UpdateHandler previous_handler = nullptr;
     };
     auto state = std::make_shared<State>();
     state->elapsed.start();
+    path_announcement_capture().object = browsers.at(1)->folder()->status();
+    path_announcement_capture().message.clear();
+    state->previous_handler = QAccessible::installUpdateHandler(record_path_check_announcement);
     const auto finish = [state, timer](bool passed, const char *reason) {
         timer->stop();
+        QAccessible::installUpdateHandler(state->previous_handler);
+        path_announcement_capture().object = nullptr;
         if (!passed)
             std::cerr << "File drag and drop check failed: " << reason << '\n';
         QApplication::exit(passed ? 0 : 1);
@@ -584,8 +621,19 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
                 return row;
         return -1;
     };
+    QObject::connect(&right_model, &FolderItemsListModel::statusTextChanged, &window, [state, &right_model] {
+        if (state->awaiting_alias_rejection) {
+            state->alias_last_status = right_model.getStatusText();
+            state->alias_statuses.push_back(state->alias_last_status);
+            if (state->alias_last_status.contains(QStringLiteral("current folder")) || state->alias_last_status.contains(QStringLiteral("view changed")) || state->alias_last_status.contains(QStringLiteral("target changed")))
+                state->alias_rejection_seen = true;
+        }
+    });
     QObject::connect(timer, &QTimer::timeout, &window, [=, &left_model, &right_model, &window] {
         if (state->elapsed.elapsed() > 15000) {
+            std::cerr << "drag timeout step=" << state->step << " left=" << left_model.getStatusText().toStdString() << " right=" << right_model.getStatusText().toStdString() << " alias-last=" << state->alias_last_status.toStdString() << " source-exists=" << QFileInfo::exists(source + QStringLiteral("/copy-me")) << '\n';
+            for (const auto &status : state->alias_statuses)
+                std::cerr << "alias-status=" << status.toStdString() << '\n';
             finish(false, "timed out waiting for the workspace or operation");
             return;
         }
@@ -601,8 +649,159 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
             if (right_model.getPathText() != destination || right_model.getStatusText() == QStringLiteral("Loading…"))
                 return;
             const int copy_row = row_named(left_model, QStringLiteral("copy-me"));
-            if (copy_row < 0) {
-                finish(false, "source listing did not contain copy-me");
+            const int move_row = row_named(left_model, QStringLiteral("move-me"));
+            if (copy_row < 0 || move_row < 0) {
+                finish(false, "source listing did not contain drag fixtures");
+                return;
+            }
+            auto *list = browsers.at(0)->view();
+            auto *viewport = list->viewport();
+            const auto point_for = [list, &left_model](int row) { return list->visualRect(left_model.index(row, 0, QModelIndex())).center(); };
+            const auto send_mouse = [viewport](QEvent::Type type, QPoint point, Qt::MouseButton button, Qt::MouseButtons buttons, Qt::KeyboardModifiers modifiers) {
+                QMouseEvent event(type, QPointF(point), QPointF(viewport->mapToGlobal(point)), button, buttons, modifiers);
+                QApplication::sendEvent(viewport, &event);
+            };
+            int starts = 0;
+            int session_starts = 0;
+            int session_ends = 0;
+            bool targets_visible_on_start = true;
+            list->setDragStartedHandler([&starts](std::uint64_t) { ++starts; });
+            list->setDragSessionHandler([&session_starts, &session_ends, &targets_visible_on_start, browsers](bool active) {
+                for (auto *browser : browsers)
+                    browser->folder()->set_file_drag_active(active);
+                if (active) {
+                    ++session_starts;
+                    for (auto *browser : browsers)
+                        targets_visible_on_start &= browser->folder()->current_folder_drop_target()->isVisible();
+                } else {
+                    ++session_ends;
+                }
+            });
+            left_model.selectRow(copy_row);
+            const auto selected_point = point_for(copy_row);
+            send_mouse(QEvent::MouseButtonPress, selected_point, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+            if (!left_model.rowIsSelected(copy_row)) {
+                finish(false, "modified press changed selection before threshold");
+                return;
+            }
+            send_mouse(QEvent::MouseButtonRelease, selected_point, Qt::LeftButton, Qt::NoButton, Qt::ControlModifier);
+            if (left_model.rowIsSelected(copy_row) || starts != 0) {
+                finish(false, "below-threshold modified click did not toggle exactly once");
+                return;
+            }
+            const std::array<Qt::KeyboardModifiers, 6> modifiers = {Qt::NoModifier, Qt::ShiftModifier, Qt::ControlModifier, Qt::AltModifier, Qt::ShiftModifier | Qt::ControlModifier, Qt::AltModifier | Qt::ControlModifier};
+            for (const auto modifier : modifiers) {
+                left_model.selectRow(copy_row);
+                send_mouse(QEvent::MouseButtonPress, selected_point, Qt::LeftButton, Qt::LeftButton, modifier);
+                send_mouse(QEvent::MouseMove, selected_point + QPoint(QApplication::startDragDistance() + 3, 0), Qt::NoButton, Qt::LeftButton, modifier);
+                send_mouse(QEvent::MouseButtonRelease, selected_point, Qt::LeftButton, Qt::NoButton, modifier);
+                if (!left_model.rowIsSelected(copy_row)) {
+                    finish(false, "selected-row drag changed the pre-press selection");
+                    return;
+                }
+            }
+            if (starts != static_cast<int>(modifiers.size())) {
+                finish(false, "a modified primary press did not start a drag at threshold");
+                return;
+            }
+            left_model.selectRow(move_row);
+            send_mouse(QEvent::MouseButtonPress, selected_point, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+            send_mouse(QEvent::MouseMove, selected_point + QPoint(QApplication::startDragDistance() + 3, 0), Qt::NoButton, Qt::LeftButton, Qt::ShiftModifier);
+            send_mouse(QEvent::MouseButtonRelease, selected_point, Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+            if (starts != static_cast<int>(modifiers.size()) + 1 || !left_model.rowIsSelected(copy_row) || left_model.rowIsSelected(move_row)) {
+                finish(false, "unselected-row drag did not freeze the pressed row alone");
+                return;
+            }
+            left_model.selectRow(copy_row);
+            send_mouse(QEvent::MouseButtonPress, selected_point, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            left_model.selectRow(move_row);
+            send_mouse(QEvent::MouseMove, selected_point + QPoint(QApplication::startDragDistance() + 3, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            if (starts != static_cast<int>(modifiers.size()) + 1) {
+                finish(false, "changed selection silently retargeted a press");
+                return;
+            }
+            const QPoint empty_point(viewport->width() / 2, viewport->height() - 5);
+            if (list->indexAt(empty_point).isValid()) {
+                finish(false, "drag check has no empty list surface");
+                return;
+            }
+            send_mouse(QEvent::MouseButtonPress, empty_point, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            send_mouse(QEvent::MouseMove, empty_point - QPoint(QApplication::startDragDistance() + 3, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            send_mouse(QEvent::MouseButtonRelease, empty_point, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            if (starts != static_cast<int>(modifiers.size()) + 1) {
+                finish(false, "empty-space press began a file drag");
+                return;
+            }
+            left_model.selectRow(copy_row);
+            send_mouse(QEvent::MouseButtonPress, selected_point, Qt::RightButton, Qt::RightButton, Qt::ShiftModifier);
+            send_mouse(QEvent::MouseMove, selected_point + QPoint(QApplication::startDragDistance() + 3, 0), Qt::NoButton, Qt::RightButton, Qt::ShiftModifier);
+            send_mouse(QEvent::MouseButtonRelease, selected_point, Qt::RightButton, Qt::NoButton, Qt::ShiftModifier);
+            if (starts != static_cast<int>(modifiers.size()) + 1 || !left_model.rowIsSelected(copy_row)) {
+                finish(false, "secondary-click changed drag roots or began a file drag");
+                return;
+            }
+            list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryPress);
+            send_mouse(QEvent::MouseButtonPress, selected_point, Qt::RightButton, Qt::RightButton, Qt::MetaModifier);
+            QContextMenuEvent remapped_menu(QContextMenuEvent::Mouse, selected_point, viewport->mapToGlobal(selected_point), Qt::MetaModifier);
+            QApplication::sendEvent(viewport, &remapped_menu);
+            if (QApplication::activePopupWidget() != nullptr) {
+                finish(false, "remapped primary press opened a secondary Context Menu");
+                return;
+            }
+            list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryDrag);
+            send_mouse(QEvent::MouseMove, selected_point + QPoint(QApplication::startDragDistance() + 3, 0), Qt::NoButton, Qt::RightButton, Qt::MetaModifier);
+            list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryRelease);
+            send_mouse(QEvent::MouseButtonRelease, selected_point, Qt::RightButton, Qt::NoButton, Qt::MetaModifier);
+            list->setNativeCheckMouseEvent(NativeMouseEvent::Unknown);
+            if (starts != static_cast<int>(modifiers.size()) + 2 || !left_model.rowIsSelected(copy_row)) {
+                finish(false, "remapped Control-primary press did not drag the selected row");
+                return;
+            }
+            left_model.selectRow(move_row);
+            list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryPress);
+            send_mouse(QEvent::MouseButtonPress, selected_point, Qt::RightButton, Qt::RightButton, Qt::MetaModifier);
+            list->setNativeCheckMouseEvent(NativeMouseEvent::PrimaryRelease);
+            send_mouse(QEvent::MouseButtonRelease, selected_point, Qt::RightButton, Qt::NoButton, Qt::MetaModifier);
+            list->setNativeCheckMouseEvent(NativeMouseEvent::Unknown);
+            if (starts != static_cast<int>(modifiers.size()) + 2 || !left_model.rowIsSelected(copy_row) || left_model.rowIsSelected(move_row)) {
+                finish(false, "below-threshold remapped Control-primary click did not select once");
+                return;
+            }
+            if (!targets_visible_on_start || session_starts != starts || session_ends != starts || browsers.at(0)->folder()->current_folder_drop_target()->isVisible() || browsers.at(1)->folder()->current_folder_drop_target()->isVisible()) {
+                finish(false, "native drag session did not reveal and clear both current-folder targets");
+                return;
+            }
+            list->setDragStartedHandler({});
+            list->setDragSessionHandler([browsers](bool active) {
+                for (auto *browser : browsers)
+                    browser->folder()->set_file_drag_active(active);
+            });
+            QMimeData external;
+            external.setUrls({QUrl::fromLocalFile(source + QStringLiteral("/copy-me"))});
+            auto *target_viewport = browsers.at(1)->view()->viewport();
+            const QPoint target_point(5, target_viewport->height() - 5);
+            QDragEnterEvent enter(target_point, Qt::CopyAction, &external, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_viewport, &enter);
+            QDropEvent refused(QPointF(target_point), Qt::CopyAction, &external, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_viewport, &refused);
+            if (!enter.isAccepted() || !right_model.getStatusText().contains(QStringLiteral("another app")) || path_announcement_capture().message != right_model.getStatusText()) {
+                finish(false, "external drop did not reach a visible native refusal");
+                return;
+            }
+            BrowserTabButton *tab = nullptr;
+            for (auto *widget : browsers.at(1)->findChildren<QWidget *>(QStringLiteral("browserTab")))
+                if (auto *button = dynamic_cast<BrowserTabButton *>(widget); button != nullptr && button->id() == right_model.activeTabId())
+                    tab = button;
+            if (tab == nullptr) {
+                finish(false, "target Browser Tab was missing");
+                return;
+            }
+            QDragEnterEvent tab_enter(tab->rect().center(), Qt::CopyAction, &external, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(tab, &tab_enter);
+            QDropEvent tab_refused(QPointF(tab->rect().center()), Qt::CopyAction, &external, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(tab, &tab_refused);
+            if (!tab_enter.isAccepted() || !right_model.getStatusText().contains(QStringLiteral("another app"))) {
+                finish(false, "external tab drop did not reach a visible native refusal");
                 return;
             }
             left_model.selectRow(copy_row);
@@ -620,8 +819,71 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
                 finish(false, "Browser-folder hover did not update Move and Option-Copy");
                 return;
             }
-            if (!right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, true) || right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, true)) {
-                finish(false, "drop token was not accepted exactly once");
+            for (auto *browser : browsers)
+                browser->folder()->set_file_drag_active(true);
+            auto *folder_target = browsers.at(1)->folder()->current_folder_drop_target();
+            folder_target->setNativeCheckDragSource(list);
+            const QPoint folder_point = folder_target->rect().center();
+            if (!folder_target->isVisible() || folder_target->accessibleName() != QStringLiteral("Drop into this folder") || !browsers.at(0)->folder()->current_folder_drop_target()->isVisible()) {
+                finish(false, "internal drag did not reveal both current-folder targets");
+                return;
+            }
+            QDragEnterEvent folder_enter(folder_point, Qt::CopyAction | Qt::MoveAction, &exact, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(folder_target, &folder_enter);
+            QDragMoveEvent folder_copy(folder_point, Qt::CopyAction | Qt::MoveAction, &exact, Qt::LeftButton, Qt::AltModifier);
+            QApplication::sendEvent(folder_target, &folder_copy);
+            if (!folder_enter.isAccepted() || folder_enter.dropAction() != Qt::MoveAction || !folder_copy.isAccepted() || folder_copy.dropAction() != Qt::CopyAction || !folder_target->accessibleDescription().contains(QStringLiteral("Copy 1 Item"))) {
+                finish(false, "current-folder target did not preview Move and Option-Copy");
+                return;
+            }
+            QDragEnterEvent folder_bad_enter(folder_point, Qt::CopyAction | Qt::MoveAction, &malformed, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(folder_target, &folder_bad_enter);
+            QDropEvent folder_bad_drop(QPointF(folder_point), Qt::CopyAction | Qt::MoveAction, &malformed, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(folder_target, &folder_bad_drop);
+            if (!folder_bad_enter.isAccepted() || folder_bad_drop.isAccepted() || !right_model.getStatusText().contains(QStringLiteral("invalid file data")) || QFileInfo::exists(destination + QStringLiteral("/copy-me"))) {
+                finish(false, "current-folder target did not refuse malformed data safely");
+                return;
+            }
+            QDragLeaveEvent folder_leave;
+            QApplication::sendEvent(folder_target, &folder_leave);
+            folder_target->setNativeCheckDragSource(nullptr);
+            for (auto *browser : browsers)
+                browser->folder()->set_file_drag_active(false);
+            if (folder_target->isVisible() || browsers.at(0)->folder()->current_folder_drop_target()->isVisible()) {
+                finish(false, "current-folder targets remained after drag ended");
+                return;
+            }
+            auto *target_list = browsers.at(1)->view();
+            if (target_list->indexAt(target_point).isValid()) {
+                finish(false, "Browser-folder event point unexpectedly resolved to a row");
+                return;
+            }
+            target_list->setNativeCheckDragSource(list);
+            QDragEnterEvent malformed_enter(target_point, Qt::CopyAction | Qt::MoveAction, &malformed, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_viewport, &malformed_enter);
+            QDropEvent malformed_drop(QPointF(target_point), Qt::CopyAction | Qt::MoveAction, &malformed, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_viewport, &malformed_drop);
+            if (!malformed_enter.isAccepted() || malformed_drop.isAccepted() || !right_model.getStatusText().contains(QStringLiteral("invalid file data")) || QFileInfo::exists(destination + QStringLiteral("/copy-me"))) {
+                finish(false, "malformed internal payload did not reach a safe refusal");
+                return;
+            }
+            QDragEnterEvent internal_enter(target_point, Qt::CopyAction | Qt::MoveAction, &exact, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_viewport, &internal_enter);
+            if (!internal_enter.isAccepted() || internal_enter.dropAction() != Qt::MoveAction || !target_list->accessibleDescription().contains(QStringLiteral("Move 1 Item"))) {
+                finish(false, "internal Browser-folder event did not preview Move");
+                return;
+            }
+            QDragMoveEvent internal_move(target_point, Qt::CopyAction | Qt::MoveAction, &exact, Qt::LeftButton, Qt::AltModifier | Qt::ControlModifier);
+            QApplication::sendEvent(target_viewport, &internal_move);
+            if (!internal_move.isAccepted() || internal_move.dropAction() != Qt::CopyAction || !target_list->accessibleDescription().contains(QStringLiteral("Copy 1 Item"))) {
+                finish(false, "internal Browser-folder event did not update to combined-modifier Copy");
+                return;
+            }
+            QDropEvent internal_copy(QPointF(target_point), Qt::CopyAction | Qt::MoveAction, &exact, Qt::LeftButton, Qt::AltModifier | Qt::ControlModifier);
+            QApplication::sendEvent(target_viewport, &internal_copy);
+            target_list->setNativeCheckDragSource(nullptr);
+            if (!internal_copy.isAccepted() || internal_copy.dropAction() != Qt::CopyAction || right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, true)) {
+                finish(false, "widget drop did not choose Copy or consume its token exactly once");
                 return;
             }
             state->step = 2;
@@ -645,8 +907,20 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
                 return;
             left_model.selectRow(move_row);
             state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
-            if (state->drag == 0 || !right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, false)) {
-                finish(false, "Move drop was not accepted");
+            auto *folder_target = browsers.at(1)->folder()->current_folder_drop_target();
+            browsers.at(1)->folder()->set_file_drag_active(true);
+            folder_target->setNativeCheckDragSource(browsers.at(0)->view());
+            QMimeData mime;
+            mime.setData(QString::fromLatin1(file_drag_mime), file_drag_payload(state->drag));
+            const QPoint point = folder_target->rect().center();
+            QDragEnterEvent enter(point, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(folder_target, &enter);
+            QDropEvent drop(QPointF(point), Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(folder_target, &drop);
+            folder_target->setNativeCheckDragSource(nullptr);
+            browsers.at(1)->folder()->set_file_drag_active(false);
+            if (state->drag == 0 || !enter.isAccepted() || !drop.isAccepted() || drop.dropAction() != Qt::MoveAction || right_model.acceptFileDrop(state->drag, 0, 0, right_model.activeTabId(), -1, false)) {
+                finish(false, "current-folder target Move did not accept and consume its token");
                 return;
             }
             state->step = 4;
@@ -673,6 +947,35 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
                 finish(false, "folder-row eligibility did not distinguish folders and files");
                 return;
             }
+            auto *target_list = browsers.at(1)->view();
+            const QPoint file_point = target_list->visualRect(right_model.index(file, 0, QModelIndex())).center();
+            const QPoint folder_point = target_list->visualRect(right_model.index(folder, 0, QModelIndex())).center();
+            QMimeData mime;
+            mime.setData(QString::fromLatin1(file_drag_mime), file_drag_payload(state->drag));
+            target_list->setNativeCheckDragSource(browsers.at(0)->view());
+            QDragEnterEvent changed_target_enter(folder_point, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_list->viewport(), &changed_target_enter);
+            QDropEvent changed_target_drop(QPointF(file_point), Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_list->viewport(), &changed_target_drop);
+            if (!changed_target_enter.isAccepted() || changed_target_drop.isAccepted() || !right_model.getStatusText().contains(QStringLiteral("target changed"))) {
+                finish(false, "changed row target did not receive a stale-target refusal");
+                return;
+            }
+            const int prior_status = right_model.getStatusToken();
+            QDragEnterEvent ineligible_enter(file_point, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_list->viewport(), &ineligible_enter);
+            if (!ineligible_enter.isAccepted() || target_list->accessibleDescription() != QStringLiteral("Cannot drop here") || right_model.getStatusToken() != prior_status) {
+                finish(false, "ineligible row hover did not admit delivery silently");
+                return;
+            }
+            QDropEvent ineligible_drop(QPointF(file_point), Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_list->viewport(), &ineligible_drop);
+            target_list->setNativeCheckDragSource(nullptr);
+            if (ineligible_drop.isAccepted() || !right_model.getStatusText().contains(QStringLiteral("cannot be dropped there")) || !QFileInfo::exists(source + QStringLiteral("/row-target")) || QFileInfo::exists(destination + QStringLiteral("/row-target"))) {
+                finish(false, "ineligible row release did not show a refusal without moving a file");
+                return;
+            }
+            state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
             state->inactive_tab = right_model.activeTabId();
             right_model.newTab();
             if (right_model.activeTabId() == state->inactive_tab || right_model.previewFileDrop(state->drag, 0, 2, state->inactive_tab, -1, false) != 1) {
@@ -719,8 +1022,60 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
             }
             right_model.selectRow(item);
             state->drag = right_model.beginFileDrag(right_model.activeTabId(), right_model.visibleRevision());
-            if (state->drag == 0 || !left_model.acceptFileDrop(state->drag, 1, 0, left_model.activeTabId(), -1, true)) {
-                finish(false, "right-to-left Copy drop was not accepted");
+            BrowserTabsStrip *right_strip = nullptr;
+            BrowserTabButton *same_folder_tab = nullptr;
+            for (auto *widget : browsers.at(1)->findChildren<QWidget *>()) {
+                if (auto *strip = dynamic_cast<BrowserTabsStrip *>(widget))
+                    right_strip = strip;
+                if (auto *button = dynamic_cast<BrowserTabButton *>(widget); button != nullptr && button->id() == right_model.activeTabId())
+                    same_folder_tab = button;
+            }
+            if (state->drag == 0 || right_strip == nullptr || same_folder_tab == nullptr) {
+                finish(false, "same-folder tab target was missing");
+                return;
+            }
+            QMimeData refused_mime;
+            refused_mime.setData(QString::fromLatin1(file_drag_mime), file_drag_payload(state->drag));
+            right_strip->setNativeCheckDragSource(browsers.at(1)->view());
+            const int prior_status = right_model.getStatusToken();
+            QDragEnterEvent tab_ineligible(same_folder_tab->rect().center(), Qt::CopyAction | Qt::MoveAction, &refused_mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(same_folder_tab, &tab_ineligible);
+            if (!tab_ineligible.isAccepted() || same_folder_tab->accessibleDescription() != QStringLiteral("Cannot drop here") || right_model.getStatusToken() != prior_status) {
+                finish(false, "ineligible tab hover did not admit delivery silently");
+                return;
+            }
+            QDropEvent tab_refused(QPointF(same_folder_tab->rect().center()), Qt::CopyAction | Qt::MoveAction, &refused_mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(same_folder_tab, &tab_refused);
+            right_strip->setNativeCheckDragSource(nullptr);
+            if (tab_refused.isAccepted() || !right_model.getStatusText().contains(QStringLiteral("current folder"))) {
+                finish(false, "same-folder tab release did not show its refusal");
+                return;
+            }
+            state->drag = right_model.beginFileDrag(right_model.activeTabId(), right_model.visibleRevision());
+            BrowserTabsStrip *left_strip = nullptr;
+            BrowserTabButton *left_tab = nullptr;
+            for (auto *widget : browsers.at(0)->findChildren<QWidget *>()) {
+                if (auto *strip = dynamic_cast<BrowserTabsStrip *>(widget))
+                    left_strip = strip;
+                if (auto *button = dynamic_cast<BrowserTabButton *>(widget); button != nullptr && button->id() == left_model.activeTabId())
+                    left_tab = button;
+            }
+            if (state->drag == 0 || left_strip == nullptr || left_tab == nullptr) {
+                finish(false, "active tab target was missing");
+                return;
+            }
+            QMimeData accepted_mime;
+            accepted_mime.setData(QString::fromLatin1(file_drag_mime), file_drag_payload(state->drag));
+            left_strip->setNativeCheckDragSource(browsers.at(1)->view());
+            QDragEnterEvent tab_enter(left_tab->rect().center(), Qt::CopyAction | Qt::MoveAction, &accepted_mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(left_tab, &tab_enter);
+            QDragMoveEvent tab_move(left_tab->rect().center(), Qt::CopyAction | Qt::MoveAction, &accepted_mime, Qt::LeftButton, Qt::AltModifier);
+            QApplication::sendEvent(left_tab, &tab_move);
+            QDropEvent tab_copy(QPointF(left_tab->rect().center()), Qt::CopyAction | Qt::MoveAction, &accepted_mime, Qt::LeftButton, Qt::AltModifier);
+            QApplication::sendEvent(left_tab, &tab_copy);
+            left_strip->setNativeCheckDragSource(nullptr);
+            if (!tab_enter.isAccepted() || !tab_move.isAccepted() || tab_move.dropAction() != Qt::CopyAction || !tab_copy.isAccepted() || tab_copy.dropAction() != Qt::CopyAction) {
+                finish(false, "active-tab widget drop did not preview and accept Copy");
                 return;
             }
             state->step = 9;
@@ -729,7 +1084,155 @@ void schedule_file_drag_drop_checks(QMainWindow &window, const std::array<Browse
         case 9:
             if (!QFileInfo::exists(source + QStringLiteral("/move-me")))
                 return;
-            finish(QFileInfo::exists(destination + QStringLiteral("/move-me")), "right-to-left Copy removed its source");
+            if (!QFileInfo::exists(destination + QStringLiteral("/move-me"))) {
+                finish(false, "right-to-left Copy removed its source");
+                return;
+            }
+            state->step = 10;
+            return;
+        case 10: {
+            const int item = row_named(left_model, QStringLiteral("row-target"));
+            const int folder = row_named(right_model, QStringLiteral("Folder"));
+            if (item < 0 || folder < 0)
+                return;
+            left_model.selectRow(item);
+            state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
+            if (state->drag == 0) {
+                finish(false, "folder-row Move source could not start");
+                return;
+            }
+            auto *target_list = browsers.at(1)->view();
+            const QPoint folder_point = target_list->visualRect(right_model.index(folder, 0, QModelIndex())).center();
+            QMimeData mime;
+            mime.setData(QString::fromLatin1(file_drag_mime), file_drag_payload(state->drag));
+            target_list->setNativeCheckDragSource(browsers.at(0)->view());
+            QDragEnterEvent row_enter(folder_point, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_list->viewport(), &row_enter);
+            QDropEvent row_move(QPointF(folder_point), Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target_list->viewport(), &row_move);
+            target_list->setNativeCheckDragSource(nullptr);
+            if (!row_enter.isAccepted() || row_enter.dropAction() != Qt::MoveAction || !row_move.isAccepted() || row_move.dropAction() != Qt::MoveAction) {
+                finish(false, "folder-row widget Move was not accepted");
+                return;
+            }
+            state->step = 11;
+            return;
+        }
+        case 11:
+            if (!QFileInfo::exists(destination + QStringLiteral("/Folder/row-target")) || QFileInfo::exists(source + QStringLiteral("/row-target")))
+                return;
+            left_model.refreshFolder();
+            right_model.refreshFolder();
+            state->step = 12;
+            return;
+        case 12: {
+            if (left_model.getStatusText() == QStringLiteral("Loading…") || right_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            const int item = row_named(right_model, QStringLiteral("tab-target"));
+            if (item < 0)
+                return;
+            right_model.selectRow(item);
+            state->drag = right_model.beginFileDrag(right_model.activeTabId(), right_model.visibleRevision());
+            if (state->drag == 0 || !left_model.acceptFileDrop(state->drag, 1, 2, left_model.activeTabId(), -1, false)) {
+                finish(false, "active-tab right-to-left Move was not accepted");
+                return;
+            }
+            state->step = 13;
+            return;
+        }
+        case 13:
+            if (!QFileInfo::exists(source + QStringLiteral("/tab-target")) || QFileInfo::exists(destination + QStringLiteral("/tab-target")))
+                return;
+            left_model.refreshFolder();
+            right_model.refreshFolder();
+            state->step = 14;
+            return;
+        case 14: {
+            if (left_model.getStatusText() == QStringLiteral("Loading…") || right_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            const int item = row_named(left_model, QStringLiteral("inactive-target"));
+            if (item < 0)
+                return;
+            state->inactive_tab = right_model.activeTabId();
+            right_model.newTab();
+            if (right_model.activeTabId() == state->inactive_tab) {
+                finish(false, "new tab did not leave the destination tab inactive");
+                return;
+            }
+            left_model.selectRow(item);
+            state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
+            BrowserTabsStrip *target_strip = nullptr;
+            BrowserTabButton *target_tab = nullptr;
+            for (auto *widget : browsers.at(1)->findChildren<QWidget *>()) {
+                if (auto *strip = dynamic_cast<BrowserTabsStrip *>(widget))
+                    target_strip = strip;
+                if (auto *button = dynamic_cast<BrowserTabButton *>(widget); button != nullptr && button->id() == state->inactive_tab)
+                    target_tab = button;
+            }
+            if (state->drag == 0 || target_strip == nullptr || target_tab == nullptr) {
+                finish(false, "inactive tab target was missing");
+                return;
+            }
+            QMimeData mime;
+            mime.setData(QString::fromLatin1(file_drag_mime), file_drag_payload(state->drag));
+            target_strip->setNativeCheckDragSource(browsers.at(0)->view());
+            QDragEnterEvent tab_enter(target_tab->rect().center(), Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::AltModifier);
+            QApplication::sendEvent(target_tab, &tab_enter);
+            QDropEvent tab_copy(QPointF(target_tab->rect().center()), Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::AltModifier);
+            QApplication::sendEvent(target_tab, &tab_copy);
+            target_strip->setNativeCheckDragSource(nullptr);
+            if (!tab_enter.isAccepted() || !tab_copy.isAccepted() || tab_copy.dropAction() != Qt::CopyAction || right_model.activeTabId() == state->inactive_tab) {
+                finish(false, "inactive-tab widget Copy was not accepted without activation");
+                return;
+            }
+            state->step = 15;
+            return;
+        }
+        case 15:
+            if (!QFileInfo::exists(destination + QStringLiteral("/inactive-target")))
+                return;
+            if (!QFileInfo::exists(source + QStringLiteral("/inactive-target")) || right_model.activeTabId() == state->inactive_tab) {
+                finish(false, "inactive-tab Copy removed its source or activated the target");
+                return;
+            }
+            if (right_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            {
+                const int item = row_named(left_model, QStringLiteral("copy-me"));
+                const int alias = row_named(right_model, QStringLiteral("source-link"));
+                if (item < 0 || alias < 0)
+                    return;
+                left_model.selectRow(item);
+                state->drag = left_model.beginFileDrag(left_model.activeTabId(), left_model.visibleRevision());
+                if (state->drag == 0) {
+                    finish(false, "alias rejection drag did not start");
+                    return;
+                }
+                auto *target_list = browsers.at(1)->view();
+                const QPoint alias_point = target_list->visualRect(right_model.index(alias, 0, QModelIndex())).center();
+                QMimeData mime;
+                mime.setData(QString::fromLatin1(file_drag_mime), file_drag_payload(state->drag));
+                target_list->setNativeCheckDragSource(browsers.at(0)->view());
+                QDragEnterEvent alias_enter(alias_point, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(target_list->viewport(), &alias_enter);
+                QDropEvent alias_drop(QPointF(alias_point), Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+                state->awaiting_alias_rejection = true;
+                state->alias_rejection_seen = false;
+                state->alias_last_status.clear();
+                state->alias_statuses.clear();
+                QApplication::sendEvent(target_list->viewport(), &alias_drop);
+                target_list->setNativeCheckDragSource(nullptr);
+                if (!alias_enter.isAccepted() || !alias_drop.isAccepted()) {
+                    finish(false, "alias target did not enter asynchronous preflight");
+                    return;
+                }
+                state->step = 16;
+            }
+            return;
+        case 16:
+            if (!state->alias_rejection_seen)
+                return;
+            finish(QFileInfo::exists(source + QStringLiteral("/copy-me")), "late alias rejection removed its source");
             return;
         default:
             finish(false, "invalid check step");

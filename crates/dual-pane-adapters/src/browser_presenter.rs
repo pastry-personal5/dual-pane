@@ -912,11 +912,13 @@ fn clipboard_rejection_text(reason: ClipboardRejection) -> &'static str {
 
 fn drop_rejection_text(reason: DropRejection) -> &'static str {
     match reason {
+        DropRejection::ExternalSource => "Files cannot be dragged into Dual Pane from another app.",
+        DropRejection::InvalidPayload => "That drag contains invalid file data.",
         DropRejection::UnknownDrag => "That drag is no longer available.",
         DropRejection::StaleSource => "The dragged folder view changed. Try again.",
         DropRejection::StaleTarget => "The drop target changed. Try again.",
         DropRejection::NoSelection => "Select one or more items first.",
-        DropRejection::UnsupportedSource => "The selected items cannot be dragged.",
+        DropRejection::UnsupportedSource => "One or more dragged items cannot be transferred.",
         DropRejection::UnsupportedTarget => "Items cannot be dropped there.",
         DropRejection::UnsupportedAction => "That drag action is not supported.",
         DropRejection::DestinationUnavailable => "The destination folder is not available.",

@@ -158,6 +158,10 @@ pub mod ffi {
         fn browser_side(self: &FolderItemsListModel) -> i32;
         #[cxx_name = "rowIsSelected"]
         fn row_is_selected(self: &FolderItemsListModel, row: i32) -> bool;
+        #[cxx_name = "rowDragIdentity"]
+        fn row_drag_identity(self: &FolderItemsListModel, row: i32) -> QByteArray;
+        #[cxx_name = "beginFileDragObserved"]
+        fn begin_file_drag_observed(self: Pin<&mut FolderItemsListModel>, tab: u64, visible_revision: u64, selection_revision: i32, row: i32, identity: &QByteArray, pressed_selected: bool) -> u64;
         #[cxx_name = "beginFileDrag"]
         fn begin_file_drag(self: Pin<&mut FolderItemsListModel>, tab: u64, visible_revision: u64) -> u64;
         #[cxx_name = "previewFileDrop"]
@@ -166,6 +170,8 @@ pub mod ffi {
         fn accept_file_drop(self: Pin<&mut FolderItemsListModel>, drag: u64, source_browser: i32, target_kind: i32, target_tab: u64, row: i32, copy: bool) -> bool;
         #[cxx_name = "cancelFileDrag"]
         fn cancel_file_drag(self: Pin<&mut FolderItemsListModel>, drag: u64);
+        #[cxx_name = "rejectFileDrop"]
+        fn reject_file_drop(self: Pin<&mut FolderItemsListModel>, tab: u64, reason: i32);
         #[cxx_name = "editFilterText"]
         fn edit_filter_text(self: Pin<&mut FolderItemsListModel>, observed_tab: u64, text: &QString);
         /// Captures the exact location the Path Edit Control is filled with.
