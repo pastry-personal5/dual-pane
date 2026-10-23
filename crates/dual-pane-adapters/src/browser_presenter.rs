@@ -283,7 +283,7 @@ impl BrowserViewModel {
         self.entries.get(row).is_some_and(Entry::is_package)
     }
 
-    /// Folder Pane Toolbar Row #2: the count, any selection count, and the
+    /// Folder Summary Row: the count, any selection count, and the
     /// non-recursive size total of the selection or else the whole folder.
     pub fn summary(&self) -> &Summary {
         &self.summary

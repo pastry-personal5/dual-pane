@@ -235,6 +235,7 @@ impl Workspace {
     }
     pub fn handle(&mut self, input: Input) -> Transition {
         let save_session = matches!(&input, Input::Command(Command::ActivateBrowser { .. } | Command::OpenLaunchTarget { .. } | Command::ActivateTab { .. } | Command::NewTab { .. } | Command::CloseTab { .. } | Command::ReorderTab { .. } | Command::Navigate { .. }) | Input::Event(Event::FolderItemsLoaded { .. }));
+        let observed_path = matches!(&input, Input::Command(Command::NavigateObservedPath { .. }));
         let mut transition = match input {
             Input::Command(command) => {
                 if let Command::CaptureClipboard { browser, .. } = command {
@@ -256,7 +257,7 @@ impl Workspace {
             }
             Input::Event(event) => self.event(event),
         };
-        if save_session {
+        if save_session || (observed_path && transition.work.iter().any(|work| matches!(work, WorkRequest::ReadDirectory { .. }))) {
             self.session_revision = self.session_revision.wrapping_add(1);
             if let Some(session) = self.session_snapshot() {
                 transition.work.push(WorkRequest::SaveSession { revision: self.session_revision, session });
@@ -268,6 +269,12 @@ impl Workspace {
         transition
     }
     fn command(&mut self, command: Command) -> Transition {
+        if let Command::NavigateObservedPath { browser, tab, source, visible_revision, target } = &command {
+            let valid = self.active_tab(*browser) == *tab && self.tab(*browser, *tab).is_some_and(|state| state.visible_revision == *visible_revision && state.folder_items.as_ref().is_some_and(|items| &items.location == source));
+            if !valid || source == target {
+                return Transition::default();
+            }
+        }
         let mut superseded = Transition::default();
         if let Some((browser, tab)) = self.navigation_target(&command) {
             superseded = self.supersede_path_check(browser, tab, true);
@@ -281,6 +288,7 @@ impl Workspace {
     fn navigation_target(&self, command: &Command) -> Option<(BrowserSide, TabId)> {
         match command {
             Command::Navigate { browser, .. } | Command::OpenFavoriteItem { browser, .. } => Some((*browser, self.active_tab(*browser))),
+            Command::NavigateObservedPath { browser, tab, .. } => Some((*browser, *tab)),
             Command::GoBack { browser, tab } | Command::GoForward { browser, tab } | Command::Refresh { browser, tab } | Command::GoToParent { browser, tab } | Command::OpenEntry { browser, tab, .. } | Command::ShowPackageContents { browser, tab, .. } => Some((*browser, *tab)),
             _ => None,
         }
@@ -400,6 +408,7 @@ impl Workspace {
             Command::CloseTab { browser, tab } => self.close_tab(browser, tab),
             Command::ReorderTab { browser, tab, position } => self.reorder_tab(browser, tab, position),
             Command::Navigate { browser, location } => self.navigate(browser, location, None),
+            Command::NavigateObservedPath { browser, target, .. } => self.navigate(browser, target, None),
             Command::OpenFavoriteItem { browser, id } => self.open_favorite_item(browser, id),
             Command::SetSort { browser, tab, location, sort } => self.set_sort(browser, tab, location, sort),
             Command::CreateFavoriteGroup { name } => self.favorites_edit(FavoriteEdit::CreateGroup, |workspace| workspace.create_favorite_group(name)),

@@ -1,19 +1,22 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use dual_pane_adapters::{BrowserPresenter, BrowserViewModel, EditorOutcome, FavoritesEvent, InputController, OperationsPresenter, OperationsViewModel, UNREPRESENTABLE_NAME_TEXT, UiEvent, WorkspacePresenter, WorkspaceViewModel, name_rejection_text};
-use dual_pane_application::{ClipboardAction, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteRejection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, Input, Output, PathSubmission, SettingsFailure, WindowLayout, WorkRequest, Workspace};
+use dual_pane_application::{ClipboardAction, Command, ContextMenuKind, Event, FavoriteEdit, FavoriteRejection, FolderItemsMenuSnapshot, FolderItemsMenuTarget, Input, Output, PathSubmission, SettingsFailure, VisibilityPolicy, WindowLayout, WorkRequest, Workspace};
 use dual_pane_domain::{BrowserSide, DecisionToken, EntryName, Location, OperationChoice, OperationCommand, OperationId, OperationRejection, TabId};
 
 use crate::native_location::{location_from_path, path_from_location};
 use crate::native_shell::{open_with_default_application, reveal_in_finder};
 use crate::operation_journal::LaunchId;
-use crate::runtime::{FolderItemsSourceFactory, LocationProbe, Runtime, WorkRunner};
+use crate::runtime::{FolderChoiceResult, FolderItemsSourceFactory, LocationProbe, Runtime, WorkRunner};
 use crate::settings_storage::{SettingsJob, SettingsResult, SettingsWorker};
 
 mod browser_input;
+mod columns;
 mod context_menus;
+use columns::ColumnContext;
+pub use columns::ColumnReadRequest;
 mod favorites;
 mod operations;
 mod shortcuts;
@@ -64,6 +67,9 @@ pub struct WorkspaceSession<R = Runtime> {
     sidebar: WorkspacePresenter,
     operations: OperationsPresenter,
     runner: R,
+    column_contexts: [Option<ColumnContext>; 2],
+    column_results: HashMap<u64, FolderChoiceResult>,
+    next_column_request: u64,
     settings_worker: Option<SettingsWorker>,
     drain_slice: usize,
     drain_time_budget: Duration,
@@ -93,7 +99,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             worker.submit(SettingsJob::Load);
         }
         let missing_worker = settings_worker.is_none();
-        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), revealer: Box::new(|item| reveal_in_finder(&path_from_location(item))), layout_request: None, activation_requests: VecDeque::new() };
+        let mut session = Self { workspace: Workspace::with_home(home), controller: InputController::new(), left: presenter(BrowserSide::Left), right: presenter(BrowserSide::Right), sidebar: WorkspacePresenter::new(), operations: OperationsPresenter::new(), runner, column_contexts: [None, None], column_results: HashMap::new(), next_column_request: 0, settings_worker, drain_slice, drain_time_budget, buffered_events: VecDeque::new(), runner_more_pending: false, opener: Box::new(|item| open_with_default_application(&path_from_location(item))), revealer: Box::new(|item| reveal_in_finder(&path_from_location(item))), layout_request: None, activation_requests: VecDeque::new() };
         session.apply_chrome();
         if missing_worker {
             // Unit-test sessions intentionally use the legacy no-store event
@@ -171,6 +177,7 @@ impl<R: WorkRunner> WorkspaceSession<R> {
             inputs.extend(self.operations.take_dismissals().into_iter().map(|id| Input::from(Command::DismissOperation { id })));
         }
         self.apply_chrome();
+        self.refresh_column_contexts();
         outputs
     }
 
@@ -209,6 +216,10 @@ impl<R: WorkRunner> WorkspaceSession<R> {
     }
 
     pub fn drain(&mut self) -> bool {
+        self.refresh_column_contexts();
+        for result in self.runner.take_folder_choices() {
+            self.accept_column_result(result);
+        }
         let results = self.settings_worker.as_ref().map(SettingsWorker::take_results).unwrap_or_default();
         for result in results {
             self.submit(match result {

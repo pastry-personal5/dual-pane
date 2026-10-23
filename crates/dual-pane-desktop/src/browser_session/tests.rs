@@ -680,6 +680,20 @@ fn loaded_session(base: &str) -> WorkspaceSession<FakeRunner> {
     session.submit(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: TabId::new(0), token: RequestToken::first(), entries: Arc::from(vec![entry("alpha")]), changes: None });
     session
 }
+
+#[test]
+fn cancelled_column_generation_rejects_late_result() {
+    let mut session = loaded_session("base");
+    let browser = BrowserSide::Left;
+    let source = session.view(browser).location().unwrap().clone();
+    let revision = session.view(browser).visible_revision();
+    let id = session.request_folder_choices(ColumnReadRequest { browser, tab: TabId::new(0), source: source.clone(), visible_revision: revision, column: 0, after: None, generation: 17 }).unwrap();
+    let late = session.take_folder_choice_result(id).unwrap();
+    session.cancel_folder_choices(browser, 17);
+    session.accept_column_result(late);
+    assert!(session.take_folder_choice_result(id).is_none());
+    assert!(session.request_folder_choices(ColumnReadRequest { browser, tab: TabId::new(0), source, visible_revision: revision.wrapping_add(1), column: 0, after: None, generation: 18 }).is_none());
+}
 fn resolve_token(session: &WorkspaceSession<FakeRunner>) -> RequestToken {
     session
         .runner

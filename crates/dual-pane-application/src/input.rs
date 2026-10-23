@@ -149,6 +149,15 @@ pub enum Command {
         browser: BrowserSide,
         location: Location,
     },
+    /// Navigates from a visual path control that showed `source` in `tab`.
+    /// The target is an exact Location, including stored non-UTF-8 names.
+    NavigateObservedPath {
+        browser: BrowserSide,
+        tab: TabId,
+        source: Location,
+        visible_revision: u64,
+        target: Location,
+    },
     /// Submits entered path text from the Path Edit Control. It names the tab
     /// the editor observed, which must still be the Browser's active tab.
     SubmitPath {

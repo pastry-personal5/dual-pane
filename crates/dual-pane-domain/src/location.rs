@@ -106,11 +106,29 @@ impl Location {
         let (_, parent) = self.components.split_last()?;
         Some(Self { components: parent.to_vec() })
     }
+
+    /// Exact targets for a path's breadcrumbs, from root through this folder.
+    pub fn breadcrumb_targets(&self) -> Vec<Self> {
+        let mut targets = Vec::with_capacity(self.components.len() + 1);
+        targets.push(Self::root());
+        for name in &self.components {
+            targets.push(targets.last().unwrap().join(name));
+        }
+        targets
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn breadcrumb_targets_keep_exact_component_bytes() {
+        let first = EntryName::new(b"same".to_vec()).unwrap();
+        let second = EntryName::new(b"caf\xFF".to_vec()).unwrap();
+        let path = Location::root().join(&first).join(&second);
+        assert_eq!(path.breadcrumb_targets(), vec![Location::root(), Location::root().join(&first), path]);
+    }
 
     #[test]
     fn accepts_exact_bytes_including_invalid_utf8() {

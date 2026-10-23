@@ -44,6 +44,29 @@ void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, co
     auto *path = browsers.at(0)->path_control();
     auto *right_path = browsers.at(1)->path_control();
     auto *list = browsers.at(0)->view();
+    auto *folder = browsers.at(0)->folder();
+    auto *status = folder->status();
+    auto *status_summary = status->findChild<QWidget *>(QStringLiteral("browserStatusSummary"));
+    auto *status_count = status->findChild<QLabel *>(QStringLiteral("browserStatusCount"));
+    auto *status_selected = status->findChild<QLabel *>(QStringLiteral("browserStatusSelected"));
+    auto *status_size = status->findChild<QLabel *>(QStringLiteral("browserStatusSize"));
+    auto *status_message = status->findChild<QLabel *>(QStringLiteral("browserStatusMessage"));
+    auto *summary_count = folder->findChild<QLabel *>(QStringLiteral("summaryCount"));
+    auto *summary_selected = folder->findChild<QLabel *>(QStringLiteral("summarySelected"));
+    auto *summary_size = folder->findChild<QLabel *>(QStringLiteral("summarySize"));
+    const auto status_matches_summary = [=] {
+        return status_summary && status_count && status_selected && status_size && status_message && summary_count && summary_selected && summary_size && status_summary->isVisible() && !status_message->isVisible() && status_count->text() == summary_count->text() && status_selected->text() == summary_selected->text() && status_size->text() == summary_size->text() && status_selected->styleSheet() == summary_selected->styleSheet();
+    };
+    const auto path_icons_match_focus = [browsers] {
+        return std::all_of(browsers.cbegin(), browsers.cend(), [](Browser *browser) {
+            auto *expand = browser->findChild<QToolButton *>(QStringLiteral("expandPathButton"));
+            auto *edit = browser->findChild<QToolButton *>(QStringLiteral("editPathButton"));
+            if (!expand || !edit)
+                return false;
+            const bool focused = expand->property("browserActive").toBool() && expand->property("windowActive").toBool();
+            return expand->icon().cacheKey() == path_action_icon(PathActionIcon::Expand, focused).cacheKey() && edit->icon().cacheKey() == path_action_icon(PathActionIcon::Edit, focused).cacheKey();
+        });
+    };
     auto *timer = new QTimer(&window);
     timer->setInterval(20);
     struct State {
@@ -64,7 +87,8 @@ void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, co
             std::cerr << "Path entry check failed: " << reason << '\n';
         QApplication::exit(passed ? 0 : 1);
     };
-    const auto type_path = [path](const QString &value) {
+    const auto type_path = [path, browser = browsers.at(0)](const QString &value) {
+        browser->edit_path();
         path->setFocus(Qt::OtherFocusReason);
         path->selectAll();
         QInputMethodEvent commit;
@@ -95,30 +119,63 @@ void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, co
                 finish(false, "could not select the fixture item");
                 return;
             }
-            // Offscreen Qt does not synthesize platform focus from a mouse
-            // event, so deliver the mouse focus event explicitly first.
-            right_path->setFocus(Qt::MouseFocusReason);
-            const QPointF local(5, 5);
-            const QPointF global = right_path->mapToGlobal(QPoint(5, 5));
-            QMouseEvent click(QEvent::MouseButtonPress, local, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-            QApplication::sendEvent(right_path, &click);
-            QMouseEvent release(QEvent::MouseButtonRelease, local, local, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-            QApplication::sendEvent(right_path, &release);
+            if (!path_icons_match_focus()) {
+                finish(false, "path button icons do not match initial Browser focus");
+                return;
+            }
+            if (left_model.getStatusText() == left_model.getPathText()) {
+                if (!status_matches_summary()) {
+                    finish(false, "default Browser Status Bar does not match the Folder Summary Row");
+                    return;
+                }
+            } else {
+                if (!status_summary || !status_message || !summary_count || !summary_selected || !summary_size || status_summary->isVisible() || !status_message->isVisible() || status->accessibleDescription() != left_model.getStatusText()) {
+                    finish(false, "monitoring feedback did not replace the default Browser Status Bar summary");
+                    return;
+                }
+                status->set_summary(summary_count->text(), summary_selected->text(), summary_size->text());
+                if (!status_matches_summary()) {
+                    finish(false, "Browser Status Bar cannot present the matching default summary");
+                    return;
+                }
+                status->set_full_text(left_model.getStatusText());
+            }
+            auto *right_edit = browsers.at(1)->findChild<QToolButton *>(QStringLiteral("editPathButton"));
+            if (!right_edit) {
+                finish(false, "path Edit buttons are missing");
+                return;
+            }
+            right_edit->setFocus(Qt::MouseFocusReason);
+            right_edit->click();
             QApplication::processEvents();
             if (bridge.getActiveBrowser() != 1 || !right_path->editing() || right_path->selectedText() != right_path->text()) {
-                finish(false, "click on the inactive Browser does not activate and select its path");
+                finish(false, "Edit in the inactive Browser does not activate and select its path");
+                return;
+            }
+            if (!path_icons_match_focus()) {
+                finish(false, "path button icons did not follow the active Browser");
                 return;
             }
             list->setFocus(Qt::OtherFocusReason);
+            if (!browsers.at(0)->findChild<QToolButton *>(QStringLiteral("editPathButton")) || !QApplication::focusWidget()) {
+                finish(false, "path Edit button or keyboard focus is missing");
+                return;
+            }
             bool reached = false;
-            for (int index = 0; index < 40 && !reached; ++index) {
+            for (int index = 0; index < 100 && !reached; ++index) {
                 QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
                 QApplication::sendEvent(QApplication::focusWidget(), &tab);
-                reached = QApplication::focusWidget() == path;
+                reached = QApplication::focusWidget() == browsers.at(0)->findChild<QToolButton *>(QStringLiteral("editPathButton"));
             }
+            if (reached)
+                browsers.at(0)->findChild<QToolButton *>(QStringLiteral("editPathButton"))->click();
             QApplication::processEvents();
             if (!reached || !path->editing() || path->selectedText() != start || bridge.getActiveBrowser() != 0 || left_model.selectedRanges() != selected) {
-                finish(false, "Tab traversal does not enter the active Path Edit Control");
+                finish(false, "Tab traversal does not reach Edit and open the Path Edit Control");
+                return;
+            }
+            if (!path_icons_match_focus()) {
+                finish(false, "path button icons did not restore after Browser focus returned");
                 return;
             }
             left_model.goToParent();
@@ -152,7 +209,7 @@ void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, co
                 finish(false, "pending path does not show its busy and accessible state");
                 return;
             }
-            right_path->setFocus(Qt::OtherFocusReason);
+            browsers.at(1)->edit_path();
             state->step = 3;
             return;
         case 3:
@@ -176,6 +233,10 @@ void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, co
                 finish(false, "missing path did not keep the confirmed tab and announce its error");
                 return;
             }
+            if (!status_summary || !status_message || !status_message->isVisible() || status_summary->isVisible() || status->accessibleDescription() != left_model.getStatusText()) {
+                finish(false, "path error did not replace the default Browser Status Bar summary");
+                return;
+            }
             escape();
             if (path->text() != start || QApplication::focusWidget() != list) {
                 finish(false, "Escape did not restore the confirmed path and focus");
@@ -193,6 +254,10 @@ void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, co
                 return;
             if (path->editing() || QApplication::focusWidget() != list || !left_model.getPathText().endsWith(QStringLiteral("/Stored"))) {
                 finish(false, "successful path did not navigate and return focus");
+                return;
+            }
+            if (left_model.getStatusText() == left_model.getPathText() && !status_matches_summary()) {
+                finish(false, "Browser Status Bar did not restore its default summary");
                 return;
             }
             if (!type_path(start)) {
@@ -247,6 +312,245 @@ void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, co
                 return;
             finish(!path->editing() && QApplication::focusWidget() == list, "absolute path did not recover the missing-folder tab");
             return;
+        default:
+            finish(false, "invalid check step");
+        }
+    });
+    timer->start();
+}
+
+void schedule_path_columns_checks(QMainWindow &window, const std::array<Browser *, 2> &browsers, FolderItemsListModel &left_model, FolderItemsListModel &right_model) {
+    const QString root = qEnvironmentVariable("DUAL_PANE_INTERNAL_PATH_COLUMNS_ROOT");
+    const QString parent = root + QStringLiteral("/Parent");
+    const QString current = parent + QStringLiteral("/Current");
+    const QString sibling = parent + QStringLiteral("/Sibling");
+    auto *timer = new QTimer(&window);
+    timer->setInterval(20);
+    struct State {
+        int step = 0;
+        QElapsedTimer elapsed;
+        QString right_path;
+        bool narrow_checked = false;
+        int original_width = 0;
+    };
+    auto state = std::make_shared<State>();
+    state->elapsed.start();
+    const auto finish = [timer](bool passed, const char *reason) {
+        timer->stop();
+        if (!passed)
+            std::cerr << "Path columns check failed: " << reason << '\n';
+        QApplication::exit(passed ? 0 : 1);
+    };
+    const auto column_list = [browser = browsers.at(0)](int column) -> QListWidget * {
+        for (auto *list : browser->findChildren<QListWidget *>(QStringLiteral("pathColumn")))
+            if (list->property("columnIndex").toInt() == column)
+                return list;
+        return nullptr;
+    };
+    QObject::connect(timer, &QTimer::timeout, &window, [=, &left_model, &right_model, &window] {
+        if (state->elapsed.elapsed() > 15000) {
+            std::cerr << "Path columns check timed out at step " << state->step << '\n';
+            finish(false, "timed out");
+            return;
+        }
+        const int final_column = left_model.breadcrumbCount() - 2;
+        switch (state->step) {
+        case 0: {
+            if (!window.isVisible() || left_model.getPathText() != current || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            state->right_path = right_model.getPathText();
+            auto *folder = browsers.at(0)->folder();
+            auto *row = folder->path_row();
+            auto *display = folder->findChild<QWidget *>(QStringLiteral("pathBreadcrumbRow"));
+            auto *editor = browsers.at(0)->path_control();
+            auto *panel = folder->findChild<QWidget *>(QStringLiteral("pathColumns"));
+            auto *expand = browsers.at(0)->findChild<QToolButton *>(QStringLiteral("expandPathButton"));
+            auto *edit = browsers.at(0)->findChild<QToolButton *>(QStringLiteral("editPathButton"));
+            auto *scroll = folder->findChild<QScrollArea *>(QStringLiteral("breadcrumbScroll"));
+            auto *contents = folder->findChild<QWidget *>(QStringLiteral("breadcrumbContents"));
+            if (!row || row->parentWidget() != folder || !display || display->parentWidget() != row || !editor || editor->parentWidget() != row || !panel || panel->parentWidget() != folder || !expand || expand->parentWidget() != display || !edit || edit->parentWidget() != display || !row->isVisible() || !display->isVisible() || editor->isVisible() || display->toolTip() != current) {
+                finish(false, "full path and controls are not in Folder Pane Row #1");
+                return;
+            }
+            const auto crumbs = contents ? contents->findChildren<QToolButton *>(QStringLiteral("pathBreadcrumb")) : QList<QToolButton *>{};
+            if (!scroll || !contents || !contents->isVisible() || contents->height() <= 0 || crumbs.size() != left_model.breadcrumbCount() || !std::all_of(crumbs.cbegin(), crumbs.cend(), [](const QToolButton *crumb) { return crumb->isVisible() && !crumb->text().isEmpty(); })) {
+                finish(false, "confirmed full path is not visibly rendered in Row #1");
+                return;
+            }
+            if (!expand || !expand->isEnabled() || left_model.breadcrumbPath(final_column) != parent) {
+                finish(false, "ancestor trail or Expand control is incorrect");
+                return;
+            }
+            if (expand->toolButtonStyle() != Qt::ToolButtonIconOnly || edit->toolButtonStyle() != Qt::ToolButtonIconOnly || !expand->text().isEmpty() || !edit->text().isEmpty() || expand->icon().isNull() || edit->icon().isNull() || expand->iconSize() != QSize(20, 20) || edit->iconSize() != QSize(20, 20)) {
+                finish(false, "Expand or Edit is missing its bitmap button treatment");
+                return;
+            }
+            for (const auto action : {PathActionIcon::Expand, PathActionIcon::Collapse, PathActionIcon::Edit}) {
+                if (path_action_icon(action, true).pixmap(QSize(20, 20), QIcon::Normal).toImage() == path_action_icon(action, false).pixmap(QSize(20, 20), QIcon::Normal).toImage()) {
+                    finish(false, "active and inactive path icons have the same foreground");
+                    return;
+                }
+            }
+            const bool focused = expand->property("browserActive").toBool() && expand->property("windowActive").toBool();
+            if (expand->icon().cacheKey() != path_action_icon(PathActionIcon::Expand, focused).cacheKey() || edit->icon().cacheKey() != path_action_icon(PathActionIcon::Edit, focused).cacheKey()) {
+                finish(false, "Expand or Edit does not use its Browser focus tone");
+                return;
+            }
+            expand->click();
+            if (expand->icon().cacheKey() != path_action_icon(PathActionIcon::Collapse, focused).cacheKey() || expand->accessibleName() != QStringLiteral("Collapse path columns") || expand->toolTip() != QStringLiteral("Hide ancestor folder choices")) {
+                finish(false, "Expand did not switch to its Collapse icon and feedback");
+                return;
+            }
+            state->step = 1;
+            return;
+        }
+        case 1: {
+            if (left_model.columnState(final_column) == -1 || left_model.columnState(final_column) == 0)
+                return;
+            if (left_model.columnState(final_column) != 1) {
+                finish(false, "the final ancestor column did not load");
+                return;
+            }
+            auto *list = column_list(final_column);
+            auto *panel = browsers.at(0)->findChild<QWidget *>(QStringLiteral("pathColumns"));
+            if (!list || !panel || !panel->isVisible()) {
+                finish(false, "expanded ancestor choices are not visible");
+                return;
+            }
+            int sibling_row = -1;
+            bool current_selected = false;
+            bool link_seen = false;
+            bool package_seen = false;
+            for (int row = 0; row < left_model.columnChoiceCount(final_column); ++row) {
+                const QString label = left_model.columnChoiceLabel(final_column, row);
+                if (label == QStringLiteral("Sibling"))
+                    sibling_row = row;
+                if (label == QStringLiteral("Current"))
+                    current_selected = left_model.columnChoiceSelected(final_column, row);
+                if (label == QStringLiteral("link"))
+                    link_seen = true;
+                if (label == QStringLiteral("bundle.app"))
+                    package_seen = true;
+            }
+            if (sibling_row < 0 || !current_selected || !link_seen || package_seen || left_model.columnChoicePath(final_column, sibling_row) != sibling) {
+                finish(false, "folder choices, selected path, symlink, or package policy is incorrect");
+                return;
+            }
+            if (!state->narrow_checked) {
+                state->original_width = window.width();
+                const int old_first = qMax(0, final_column + 1 - qMax(1, (browsers.at(0)->width() - 8) / 160));
+                if (auto *oldest = column_list(old_first); oldest && old_first < final_column) {
+                    oldest->setFocus(Qt::OtherFocusReason);
+                    window.resize(650, window.height());
+                    state->step = 7;
+                    return;
+                }
+                state->narrow_checked = true;
+            }
+            auto *sibling_item = list->item(sibling_row);
+            if (!sibling_item || sibling_item->data(Qt::UserRole).toInt() != sibling_row)
+                return;
+            const auto foreground = list->palette().color(QPalette::Text);
+            const auto background = list->palette().color(QPalette::Base);
+            if (!list->alternatingRowColors() || foreground.lightness() - background.lightness() < 80 || !sibling_item->flags().testFlag(Qt::ItemIsEnabled) || list->visualItemRect(sibling_item).height() <= 0 || !list->currentItem() || !list->currentItem()->isSelected()) {
+                finish(false, "expanded sibling rows lack readable text or a visible selected path");
+                return;
+            }
+            list->itemClicked(sibling_item);
+            if (left_model.getPathText() != current || left_model.columnState(final_column) != -1) {
+                finish(false, "option activation did not collapse while keeping the confirmed path pending");
+                return;
+            }
+            state->step = 2;
+            return;
+        }
+        case 2: {
+            if (left_model.getPathText() != sibling || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            if (right_model.getPathText() != state->right_path) {
+                finish(false, "left column navigation changed the other Browser");
+                return;
+            }
+            auto *expand = browsers.at(0)->findChild<QToolButton *>(QStringLiteral("expandPathButton"));
+            const bool focused = expand && expand->property("browserActive").toBool() && expand->property("windowActive").toBool();
+            if (!expand || expand->icon().cacheKey() != path_action_icon(PathActionIcon::Expand, focused).cacheKey() || expand->accessibleName() != QStringLiteral("Expand path columns") || expand->toolTip() != QStringLiteral("Show ancestor folder choices")) {
+                finish(false, "Expand did not restore its icon and feedback after navigation");
+                return;
+            }
+            expand->click();
+            state->step = 3;
+            return;
+        }
+        case 3: {
+            if (left_model.columnState(final_column) != 1)
+                return;
+            auto *list = column_list(final_column);
+            if (!list) {
+                finish(false, "column did not reappear");
+                return;
+            }
+            list->setFocus(Qt::OtherFocusReason);
+            QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(list, &escape);
+            if (left_model.columnState(final_column) != -1) {
+                finish(false, "Escape did not collapse columns");
+                return;
+            }
+            state->step = 4;
+            return;
+        }
+        case 4: {
+            if (QApplication::focusWidget() != browsers.at(0)->view())
+                return;
+            if (left_model.getPathText() != sibling)
+                return;
+            for (auto *button : browsers.at(0)->findChildren<QToolButton *>(QStringLiteral("pathBreadcrumb"))) {
+                if (button->accessibleDescription() == parent) {
+                    button->click();
+                    state->step = 5;
+                    return;
+                }
+            }
+            finish(false, "parent breadcrumb is missing");
+            return;
+        }
+        case 5: {
+            if (left_model.getPathText() != parent || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            for (auto *button : browsers.at(0)->findChildren<QToolButton *>(QStringLiteral("pathBreadcrumb"))) {
+                if (button->accessibleDescription() == QStringLiteral("/")) {
+                    button->click();
+                    state->step = 6;
+                    return;
+                }
+            }
+            finish(false, "root breadcrumb is missing");
+            return;
+        }
+        case 6:
+            if (left_model.getPathText() != QStringLiteral("/") || left_model.getStatusText() == QStringLiteral("Loading…"))
+                return;
+            if (auto *expand = browsers.at(0)->findChild<QToolButton *>(QStringLiteral("expandPathButton")); expand && !expand->isEnabled()) {
+                finish(true, "");
+                return;
+            }
+            finish(false, "Expand remains enabled at root");
+            return;
+        case 7: {
+            const int total = final_column + 1;
+            const int expected_count = qMin(total, qMax(1, (browsers.at(0)->width() - 8) / 160));
+            const int expected_first = total - expected_count;
+            const auto lists = browsers.at(0)->findChildren<QListWidget *>(QStringLiteral("pathColumn"));
+            if (window.width() >= state->original_width || expected_first == 0 || lists.size() != expected_count || !column_list(expected_first) || !column_list(final_column))
+                return;
+            if (auto *focused = qobject_cast<QListWidget *>(QApplication::focusWidget()); focused && focused->property("columnIndex").toInt() < expected_first) {
+                finish(false, "resize left focus in a hidden ancestor column");
+                return;
+            }
+            state->narrow_checked = true;
+            state->step = 1;
+            return;
+        }
         default:
             finish(false, "invalid check step");
         }

@@ -213,6 +213,10 @@ class BrowserHighlightController final : public QObject {
                     button->setIcon(navigation_icon(NavigationIcon::Forward, browser == active_ && window_active));
                 else if (auto *button = dynamic_cast<QToolButton *>(widget); button != nullptr && button->objectName() == QStringLiteral("upButton"))
                     button->setIcon(navigation_icon(NavigationIcon::Up, browser == active_ && window_active));
+                else if (auto *button = dynamic_cast<QToolButton *>(widget); button != nullptr && button->objectName() == QStringLiteral("expandPathButton"))
+                    button->setIcon(path_action_icon(button->property("pathExpanded").toBool() ? PathActionIcon::Collapse : PathActionIcon::Expand, browser == active_ && window_active));
+                else if (auto *button = dynamic_cast<QToolButton *>(widget); button != nullptr && button->objectName() == QStringLiteral("editPathButton"))
+                    button->setIcon(path_action_icon(PathActionIcon::Edit, browser == active_ && window_active));
                 repolish(widget);
             };
             auto *browser_widget = static_cast<QWidget *>(browsers_.at(browser));

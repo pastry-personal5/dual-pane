@@ -56,9 +56,12 @@ auto style_sheet() -> QString {
       QWidget#sidebar[windowActive="false"] QToolButton#favoriteGroupMenuButton, QWidget#sidebar[windowActive="false"] QToolButton#addFavoriteItemButton { color:#8A9099; background:#1B1D21; }
       QLabel#applicationTitle { background:transparent; color:%3; font-size:24px; font-weight:600; }
       QToolButton#sortControl:hover:enabled:!checked, QToolButton#newTabButton:hover:enabled, QToolButton#closeTabButton:hover:enabled, QToolButton#newGroupButton:hover:enabled, QFrame#operationPanel QToolButton:hover:enabled { background:%11; }
-      QLabel#folderPaneToolbarRow1, QWidget#folderPaneToolbarRow2, QWidget#folderPaneToolbarRow3, QWidget#folderPaneToolbarRow2 QLabel, QWidget#folderPaneToolbarRow2 QLineEdit, QWidget#folderPaneToolbarRow2 QToolButton, QWidget#folderPaneToolbarRow3 QLabel, QWidget#folderPaneToolbarRow3 QLineEdit, QWidget#folderPaneToolbarRow3 QToolButton { background:%1; }
-      QLabel#folderPaneToolbarRow1[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="true"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="true"][windowActive="true"] QToolButton { background:%2; }
-      QLabel#folderPaneToolbarRow1[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"], QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow2[browserActive="false"][windowActive="true"] QToolButton, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLabel, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderPaneToolbarRow3[browserActive="false"][windowActive="true"] QToolButton { background:%9; }
+      QWidget#folderPaneToolbarRow1, QWidget#folderSummaryRow, QWidget#folderNavigationAndSortToolbar, QWidget#folderSummaryRow QLabel, QWidget#folderSummaryRow QLineEdit, QWidget#folderSummaryRow QToolButton, QWidget#folderNavigationAndSortToolbar QLabel, QWidget#folderNavigationAndSortToolbar QLineEdit, QWidget#folderNavigationAndSortToolbar QToolButton { background:%1; }
+      QWidget#folderPaneToolbarRow1[browserActive="true"][windowActive="true"], QWidget#folderSummaryRow[browserActive="true"][windowActive="true"], QWidget#folderNavigationAndSortToolbar[browserActive="true"][windowActive="true"], QWidget#folderSummaryRow[browserActive="true"][windowActive="true"] QLabel, QWidget#folderSummaryRow[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderSummaryRow[browserActive="true"][windowActive="true"] QToolButton, QWidget#folderNavigationAndSortToolbar[browserActive="true"][windowActive="true"] QLabel, QWidget#folderNavigationAndSortToolbar[browserActive="true"][windowActive="true"] QLineEdit, QWidget#folderNavigationAndSortToolbar[browserActive="true"][windowActive="true"] QToolButton { background:%2; }
+      QWidget#folderPaneToolbarRow1[browserActive="false"][windowActive="true"], QWidget#folderSummaryRow[browserActive="false"][windowActive="true"], QWidget#folderNavigationAndSortToolbar[browserActive="false"][windowActive="true"], QWidget#folderSummaryRow[browserActive="false"][windowActive="true"] QLabel, QWidget#folderSummaryRow[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderSummaryRow[browserActive="false"][windowActive="true"] QToolButton, QWidget#folderNavigationAndSortToolbar[browserActive="false"][windowActive="true"] QLabel, QWidget#folderNavigationAndSortToolbar[browserActive="false"][windowActive="true"] QLineEdit, QWidget#folderNavigationAndSortToolbar[browserActive="false"][windowActive="true"] QToolButton { background:%9; }
+      QWidget#browserStatusBar, QWidget#browserStatusSummary, QWidget#browserStatusSummary QLabel, QLabel#browserStatusMessage { background:%1; }
+      QWidget#browserStatusBar[browserActive="true"][windowActive="true"], QWidget#browserStatusSummary[browserActive="true"][windowActive="true"], QWidget#browserStatusSummary[browserActive="true"][windowActive="true"] QLabel, QLabel#browserStatusMessage[browserActive="true"][windowActive="true"] { background:%2; }
+      QWidget#browserStatusBar[browserActive="false"][windowActive="true"], QWidget#browserStatusSummary[browserActive="false"][windowActive="true"], QWidget#browserStatusSummary[browserActive="false"][windowActive="true"] QLabel, QLabel#browserStatusMessage[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
       QFrame#folderPane[browserActive="false"][windowActive="true"] QLabel, QFrame#folderPane[browserActive="false"][windowActive="true"] QLineEdit { background:%9; color:%10; }
       QToolButton#sortControl { min-width:16px; max-width:16px; min-height:16px; max-height:16px; padding:0; background:%1; color:#A7ADB5; }
       QToolButton#sortControl:checked { color:#FFFFFF; }
@@ -69,6 +72,24 @@ auto style_sheet() -> QString {
       QWidget#browserTabsStrip[browserActive="false"][windowActive="true"] { background:%9; }
       QLineEdit#pathEditControl[pathError="true"] { border:1px solid #D9534F; }
       QLineEdit#pathEditControl[pathPending="true"] { font-style:italic; }
+      QWidget#pathBreadcrumbRow[browserActive="true"][windowActive="true"], QWidget#pathColumns[browserActive="true"][windowActive="true"] { background:%2; }
+      QWidget#pathBreadcrumbRow[browserActive="false"][windowActive="true"], QWidget#pathColumns[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
+      QScrollArea#breadcrumbScroll, QWidget#breadcrumbContents { background:transparent; border:0; }
+      QToolButton#pathBreadcrumb { border:0; background:transparent; padding:2px 4px; }
+      QToolButton#pathBreadcrumb:hover:enabled { background:%11; }
+      QToolButton#expandPathButton, QToolButton#editPathButton { border:1px solid %4; border-radius:5px; background:%1; padding:0; }
+      QToolButton#expandPathButton[pathExpanded="true"] { background:#173A55; border-color:%5; }
+      QToolButton#expandPathButton:hover:enabled, QToolButton#editPathButton:hover:enabled { background:%11; border-color:%5; }
+      QToolButton#expandPathButton:pressed:enabled, QToolButton#editPathButton:pressed:enabled { background:%5; }
+      QToolButton#expandPathButton:focus, QToolButton#editPathButton:focus { border-color:%5; }
+      QToolButton#pathBreadcrumb[pathPending="true"] { color:#75C7FF; font-style:italic; }
+      QLabel#pathPendingTarget { color:#75C7FF; font-style:italic; }
+      QListWidget#pathColumn { background:%2; color:%3; alternate-background-color:#2B3139; border:1px solid %4; outline:none; }
+      QListWidget#pathColumn::item { padding:3px 6px; }
+      QListWidget#pathColumn::item:hover:!selected { background:#354553; color:#FFFFFF; }
+      QListWidget#pathColumn::item:selected { background:%5; color:#FFFFFF; }
+      QListWidget#pathColumn[browserActive="false"][windowActive="true"], QListWidget#pathColumn[windowActive="false"] { background:%9; color:#BDC6D0; alternate-background-color:#22272D; }
+      QListWidget#pathColumn[browserActive="false"][windowActive="true"]::item:selected, QListWidget#pathColumn[windowActive="false"]::item:selected { background:#173A55; color:#FFFFFF; }
       QWidget#previewPane { background:%1; color:%3; }
       QWidget#previewPane[browserActive="true"][windowActive="true"] { background:%2; color:%3; }
       QWidget#previewPane[browserActive="false"][windowActive="true"] { background:%9; color:%10; }
@@ -268,6 +289,55 @@ auto navigation_icon(const NavigationIcon direction, const bool focused) -> cons
     static const std::array<QIcon, 3> active = {make_navigation_icon(NavigationIcon::Back, true), make_navigation_icon(NavigationIcon::Forward, true), make_navigation_icon(NavigationIcon::Up, true)};
     static const std::array<QIcon, 3> inactive = {make_navigation_icon(NavigationIcon::Back, false), make_navigation_icon(NavigationIcon::Forward, false), make_navigation_icon(NavigationIcon::Up, false)};
     return (focused ? active : inactive).at(static_cast<std::size_t>(direction));
+}
+
+auto make_path_action_icon(const PathActionIcon action, const bool focused) -> QIcon {
+    QIcon icon;
+    const auto draw = [action](const QColor &color, qreal scale) {
+        QPixmap pixmap(QSize(static_cast<int>(20 * scale), static_cast<int>(20 * scale)));
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QPen pen(color);
+        pen.setWidthF(1.7);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(pen);
+        if (action == PathActionIcon::Edit) {
+            painter.drawLine(QPointF(4, 14), QPointF(13, 5));
+            painter.drawLine(QPointF(7, 17), QPointF(16, 8));
+            painter.drawLine(QPointF(4, 14), QPointF(7, 17));
+            painter.drawLine(QPointF(13, 5), QPointF(16, 8));
+            painter.drawLine(QPointF(3, 18), QPointF(4, 14));
+            painter.drawLine(QPointF(3, 18), QPointF(7, 17));
+            painter.drawLine(QPointF(12, 6), QPointF(15, 9));
+        } else {
+            painter.drawRoundedRect(QRectF(2.5, 2.5, 15, 11), 1.5, 1.5);
+            painter.drawLine(QPointF(3.5, 6), QPointF(16.5, 6));
+            painter.drawLine(QPointF(8, 7), QPointF(8, 13));
+            painter.drawLine(QPointF(12, 7), QPointF(12, 13));
+            const qreal point = action == PathActionIcon::Expand ? 18.0 : 15.5;
+            const qreal tail = action == PathActionIcon::Expand ? 15.5 : 18.0;
+            painter.drawLine(QPointF(7, tail), QPointF(10, point));
+            painter.drawLine(QPointF(10, point), QPointF(13, tail));
+        }
+        return pixmap;
+    };
+    const auto add_variants = [&icon, &draw](const QColor &color, QIcon::Mode mode) {
+        icon.addPixmap(draw(color, 1.0), mode);
+        icon.addPixmap(draw(color, 2.0), mode);
+    };
+    add_variants(QColor(focused ? QStringLiteral("#D5DCE5") : QString::fromLatin1(inactive_text_color)), QIcon::Normal);
+    add_variants(QColor(focused ? QStringLiteral("#FFFFFF") : QStringLiteral("#A7ADB5")), QIcon::Active);
+    add_variants(QColor(QStringLiteral("#6F757D")), QIcon::Disabled);
+    return icon;
+}
+
+auto path_action_icon(const PathActionIcon action, const bool focused) -> const QIcon & {
+    static const std::array<QIcon, 3> active = {make_path_action_icon(PathActionIcon::Expand, true), make_path_action_icon(PathActionIcon::Collapse, true), make_path_action_icon(PathActionIcon::Edit, true)};
+    static const std::array<QIcon, 3> inactive = {make_path_action_icon(PathActionIcon::Expand, false), make_path_action_icon(PathActionIcon::Collapse, false), make_path_action_icon(PathActionIcon::Edit, false)};
+    return (focused ? active : inactive).at(static_cast<std::size_t>(action));
 }
 
 /// Whether `widget` is `ancestor` or inside it.

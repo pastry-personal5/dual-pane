@@ -13,6 +13,74 @@ use crate::native_location::path_from_location;
 
 type FolderItemsOutcome = Option<Result<Arc<[Entry]>, ListingErrorKind>>;
 
+pub const FOLDER_CHOICE_PAGE_SIZE: usize = 256;
+
+/// One bounded page of navigable child names. `next` is the last name in the
+/// page when a later page exists; callers pass it back as an exclusive cursor.
+pub struct FolderChoicePage {
+    pub names: Arc<[EntryName]>,
+    pub next: Option<EntryName>,
+    pub selected_found: bool,
+}
+
+/// Reads folder choices without accumulating the directory in memory. The
+/// worker scans immediate children and retains only the first page in exact
+/// byte order. A selected path component is allowed through visibility rules
+/// even when its siblings are hidden, but operation temporaries remain hidden.
+pub fn read_folder_choices(parent: &Location, selected: Option<&EntryName>, after: Option<&EntryName>, visibility: VisibilityPolicy, cancelled: &AtomicBool, rules: &ListingRules<'_>) -> Option<Result<FolderChoicePage, ListingErrorKind>> {
+    if is_cancelled(cancelled) {
+        return None;
+    }
+    let path = path_from_location(parent);
+    let directory = match fs::read_dir(&path) {
+        Ok(directory) => directory,
+        Err(error) => return Some(Err(map_error(&error))),
+    };
+    let mut names = Vec::with_capacity(FOLDER_CHOICE_PAGE_SIZE + 1);
+    let mut selected_found = false;
+    for item in directory {
+        if is_cancelled(cancelled) {
+            return None;
+        }
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => return Some(Err(map_error(&error))),
+        };
+        let own_name = item.file_name();
+        let bytes = own_name.as_bytes();
+        if after.is_some_and(|after| bytes <= after.as_bytes()) {
+            continue;
+        }
+        let on_path = selected.is_some_and(|selected| selected.as_bytes() == bytes);
+        let policy = if on_path { VisibilityPolicy { show_macos_items: true, show_dotfiles: true, show_macos_invisible: true } } else { visibility };
+        let entry = match classify_dir_entry(item, &path, policy, cancelled, rules)? {
+            Ok(Some(entry)) => entry,
+            Ok(None) => continue,
+            Err(kind) => return Some(Err(kind)),
+        };
+        let navigable = matches!(entry.kind(), EntryKind::Directory | EntryKind::Symlink { points_to_directory: true });
+        let package_link = matches!(entry.kind(), EntryKind::Symlink { points_to_directory: true }) && fs::canonicalize(path.join(&own_name)).is_ok_and(|target| (rules.package)(&target));
+        if !navigable || ((entry.is_package() || package_link) && !on_path) {
+            continue;
+        }
+        if on_path {
+            selected_found = true;
+        }
+        let index = names.binary_search_by(|name: &EntryName| name.as_bytes().cmp(entry.name().as_bytes())).unwrap_or_else(|index| index);
+        names.insert(index, entry.name().clone());
+        if names.len() > FOLDER_CHOICE_PAGE_SIZE + 1 {
+            names.pop();
+        }
+    }
+    let next = if names.len() > FOLDER_CHOICE_PAGE_SIZE {
+        names.pop();
+        names.last().cloned()
+    } else {
+        None
+    };
+    Some(Ok(FolderChoicePage { names: names.into(), next, selected_found }))
+}
+
 /// What a listing leaves out and how it recognizes packages.
 pub struct ListingRules<'a> {
     /// Names never listed, such as reserved operation temporaries.
@@ -227,6 +295,72 @@ mod tests {
 
     use super::*;
     use crate::native_location::location_from_path;
+
+    #[test]
+    fn folder_choice_pages_are_bounded_and_keep_a_hidden_confirmed_child() {
+        let temporary = tempdir().unwrap();
+        for index in 0..260 {
+            fs::create_dir(temporary.path().join(format!("folder-{index:03}"))).unwrap();
+        }
+        fs::create_dir(temporary.path().join(".hidden")).unwrap();
+        fs::create_dir(temporary.path().join(".sibling")).unwrap();
+        File::create(temporary.path().join("file")).unwrap();
+        let parent = location_from_path(temporary.path()).unwrap();
+        let selected = EntryName::new(b".hidden".to_vec()).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let rules = ListingRules { hidden: &|_| false, package: &|_| false, volume_root: &|_| Ok(false), invisible: &|_| Ok(false) };
+        let policy = VisibilityPolicy { show_dotfiles: false, ..VisibilityPolicy::default() };
+        let first = read_folder_choices(&parent, Some(&selected), None, policy, &cancelled, &rules).unwrap().unwrap();
+        assert_eq!(first.names.len(), FOLDER_CHOICE_PAGE_SIZE);
+        assert_eq!(first.names[0], selected);
+        assert!(!first.names.iter().any(|name| name.as_bytes() == b".sibling"));
+        assert!(first.next.is_some());
+        let second = read_folder_choices(&parent, Some(&selected), first.next.as_ref(), policy, &cancelled, &rules).unwrap().unwrap();
+        assert_eq!(second.names.len(), 5);
+        assert!(second.next.is_none());
+        assert!(!first.names.iter().chain(second.names.iter()).any(|name| name.as_bytes() == b"file"));
+    }
+
+    #[test]
+    fn folder_choices_include_folder_links_and_skip_packages() {
+        let temporary = tempdir().unwrap();
+        fs::create_dir(temporary.path().join("folder")).unwrap();
+        fs::create_dir(temporary.path().join("bundle.app")).unwrap();
+        symlink("folder", temporary.path().join("link")).unwrap();
+        symlink("bundle.app", temporary.path().join("bundle-link")).unwrap();
+        symlink("missing", temporary.path().join("dangling")).unwrap();
+        let parent = location_from_path(temporary.path()).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let rules = ListingRules { hidden: &|_| false, package: &|path| path.extension().is_some_and(|extension| extension == "app"), volume_root: &|_| Ok(false), invisible: &|_| Ok(false) };
+        let page = read_folder_choices(&parent, None, None, VisibilityPolicy::default(), &cancelled, &rules).unwrap().unwrap();
+        let names = page.names.iter().map(|name| name.as_bytes()).collect::<Vec<_>>();
+        assert_eq!(names, vec![b"folder".as_slice(), b"link".as_slice()]);
+    }
+
+    #[test]
+    fn folder_choices_preserve_undecodable_names_and_report_missing_parents() {
+        use std::ffi::OsStr;
+
+        let temporary = tempdir().unwrap();
+        let raw = b"folder-\xff";
+        if let Err(error) = fs::create_dir(temporary.path().join(OsStr::from_bytes(raw))) {
+            // APFS can reject arbitrary byte names with EILSEQ.
+            if error.raw_os_error() == Some(92) {
+                return;
+            }
+            panic!("could not create undecodable folder name: {error}");
+        }
+        let parent = location_from_path(temporary.path()).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let rules = ListingRules { hidden: &|_| false, package: &|_| false, volume_root: &|_| Ok(false), invisible: &|_| Ok(false) };
+        let page = read_folder_choices(&parent, None, None, VisibilityPolicy::default(), &cancelled, &rules).unwrap().unwrap();
+        assert_eq!(page.names.len(), 1);
+        assert_eq!(page.names[0].as_bytes(), raw);
+
+        fs::remove_dir(temporary.path().join(OsStr::from_bytes(raw))).unwrap();
+        fs::remove_dir(temporary.path()).unwrap();
+        assert!(read_folder_choices(&parent, None, None, VisibilityPolicy::default(), &cancelled, &rules).unwrap().is_err());
+    }
 
     #[test]
     fn reads_exact_names_classifies_every_kind_and_sorts() {

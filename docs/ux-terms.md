@@ -55,8 +55,8 @@ This is the canonical vocabulary for visible Dual Pane components, shortcut-capa
 | Path Edit Control | `path_edit_control` |
 | Folder Pane | `folder_pane` |
 | Folder Pane Toolbar Row #1 | `folder_pane_toolbar_row_1` |
-| Folder Pane Toolbar Row #2 | `folder_pane_toolbar_row_2` |
-| Folder Pane Toolbar Row #3 | `folder_pane_toolbar_row_3` |
+| Folder Summary Row | `folder_summary_row` |
+| Folder Navigation and Sort Toolbar | `folder_navigation_and_sort_toolbar` |
 | Folder Items Filter Row | `folder_items_filter_row` |
 | Close Filter Button | `close_filter_button` |
 | Up Button | `up_button` |

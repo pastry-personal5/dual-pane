@@ -30,6 +30,7 @@ auto run_text_editor_focus_checks(QApplication &app) -> int;
 /// Exercises path entry against the real workspace and read workers using a
 /// disposable profile. Schedules checks and exits the running event loop.
 void schedule_path_entry_checks(QMainWindow &window, WorkspaceBridge &bridge, const std::array<Browser *, 2> &browsers, FolderItemsListModel &left_model);
+void schedule_path_columns_checks(QMainWindow &window, const std::array<Browser *, 2> &browsers, FolderItemsListModel &left_model, FolderItemsListModel &right_model);
 
 /// Exercises the private payload, typed target routing, one-use acceptance,
 /// stale-state rejection, and real Copy/Move completion with temporary files.

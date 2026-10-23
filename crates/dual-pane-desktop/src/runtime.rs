@@ -19,6 +19,7 @@ use crate::operation_scan::{NativeKind, native_kind};
 use crate::preview_reader::read_preview;
 
 mod clipboard;
+mod column_lane;
 mod filter_lane;
 mod job_queue;
 mod probes;
@@ -27,6 +28,8 @@ mod supervision;
 mod tests;
 
 use clipboard::*;
+use column_lane::*;
+pub use column_lane::{FolderChoiceRequest, FolderChoiceResult};
 use filter_lane::*;
 pub use job_queue::READER_LANES_PER_BROWSER;
 use job_queue::*;
@@ -46,6 +49,13 @@ pub trait WorkRunner {
     /// directly when the request can finish before leaving the GUI thread.
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event>;
     fn take_events(&mut self, max: usize) -> (Vec<Event>, bool);
+    fn request_folder_choices(&mut self, request: FolderChoiceRequest) -> Option<FolderChoiceResult> {
+        Some(FolderChoiceResult { request, outcome: Err(ListingErrorKind::Internal) })
+    }
+    fn cancel_folder_choices(&mut self, _browser: BrowserSide, _generation: u64) {}
+    fn take_folder_choices(&mut self) -> Vec<FolderChoiceResult> {
+        Vec::new()
+    }
     /// After the event loop has exited: stops file operations at a safe
     /// boundary and waits at most `timeout` for their cleanup.
     fn finish_operations(&mut self, _timeout: Duration) {}
@@ -69,6 +79,9 @@ pub struct Runtime {
     preview_jobs: [SyncSender<PreviewJob>; 2],
     preview_pending: [Option<PreviewJob>; 2],
     preview_outstanding: HashMap<(BrowserSide, u64), Arc<AtomicBool>>,
+    column_senders: [SyncSender<ColumnJob>; 2],
+    column_results: Receiver<FolderChoiceResult>,
+    column_outstanding: HashMap<u64, (BrowserSide, u64, Arc<AtomicBool>)>,
     filter_lanes: Option<[FilterLane; 2]>,
     /// Reads per Browser that may be queued, running, or awaiting delivery.
     read_capacity: usize,
@@ -157,7 +170,8 @@ impl Runtime {
         }
         let preview_jobs: [SyncSender<PreviewJob>; 2] = preview_senders.try_into().map_err(|_| io::Error::from(io::ErrorKind::Other))?;
         let filter_lanes = Some([FilterLane::start(BrowserSide::Left, delivery.clone())?, FilterLane::start(BrowserSide::Right, delivery.clone())?]);
-        Ok(Self { left_jobs, right_jobs, probes, clipboard, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes, read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
+        let (column_senders, column_results) = start_column_lanes(delivery.clone())?;
+        Ok(Self { left_jobs, right_jobs, probes, clipboard, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs, preview_pending: [None, None], preview_outstanding: HashMap::new(), column_senders, column_results, column_outstanding: HashMap::new(), filter_lanes, read_capacity: PENDING_READ_CAPACITY + lanes, delivery, operations: None, watcher })
     }
 
     /// Starts the file-operation lane, which reports through this runtime.
@@ -200,6 +214,46 @@ impl Runtime {
 }
 
 impl WorkRunner for Runtime {
+    fn request_folder_choices(&mut self, request: FolderChoiceRequest) -> Option<FolderChoiceResult> {
+        let browser = request.browser;
+        if self.column_outstanding.values().filter(|(owner, _, _)| *owner == browser).count() > PENDING_COLUMN_CAPACITY {
+            return Some(FolderChoiceResult { request, outcome: Err(ListingErrorKind::Busy) });
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.column_outstanding.insert(request.id, (browser, request.generation, Arc::clone(&cancelled)));
+        let id = request.id;
+        let sender = &self.column_senders[preview_index(browser)];
+        match sender.try_send(ColumnJob { request, cancelled }) {
+            Ok(()) => None,
+            Err(TrySendError::Full(job)) => {
+                self.column_outstanding.remove(&id);
+                Some(FolderChoiceResult { request: job.request, outcome: Err(ListingErrorKind::Busy) })
+            }
+            Err(TrySendError::Disconnected(job)) => {
+                self.column_outstanding.remove(&id);
+                Some(FolderChoiceResult { request: job.request, outcome: Err(ListingErrorKind::Internal) })
+            }
+        }
+    }
+    fn cancel_folder_choices(&mut self, browser: BrowserSide, generation: u64) {
+        self.column_outstanding.retain(|_, (owner, owner_generation, cancelled)| {
+            if *owner == browser && *owner_generation == generation {
+                cancelled.store(true, Ordering::Relaxed);
+                false
+            } else {
+                true
+            }
+        });
+    }
+    fn take_folder_choices(&mut self) -> Vec<FolderChoiceResult> {
+        let mut delivered = Vec::new();
+        while let Ok(result) = self.column_results.try_recv() {
+            if self.column_outstanding.remove(&result.request.id).is_some() {
+                delivered.push(result);
+            }
+        }
+        delivered
+    }
     fn dispatch(&mut self, request: WorkRequest) -> Option<Event> {
         match request {
             WorkRequest::PublishClipboard { request, transfer, action, finder_roots } => match self.clipboard.try_send(ClipboardJob::Publish { request, transfer, action, roots: finder_roots }) {

@@ -236,6 +236,13 @@ auto make_navigation_icon(NavigationIcon direction, bool focused) -> QIcon;
 
 auto navigation_icon(NavigationIcon direction, bool focused) -> const QIcon &;
 
+enum class PathActionIcon : std::uint8_t { Expand,
+                                           Collapse,
+                                           Edit,
+};
+
+auto path_action_icon(PathActionIcon action, bool focused) -> const QIcon &;
+
 /// Whether `widget` is `ancestor` or inside it.
 auto inside(const QWidget *widget, const QWidget *ancestor) -> bool;
 

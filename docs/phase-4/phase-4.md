@@ -3,7 +3,7 @@
 Status: Active
 Goal: Help people find, navigate to, and arrange files through tab-local text filtering, clipboard transfers, direct and visual path navigation, safe drag and drop, and command-line entry into the running workspace.
 
-Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and independent P4-M9 through P4-M11. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
+Phase 3 delivered the underlying Browser, selection, navigation, and file-operation workflows. Phase 4 has completed P4-M1 through P4-M6 and P4-M8 through P4-M11. P4-M7 still needs guided real-pointer macOS acceptance. Phase 4 does not change the safeguards in [product behavior](../product-behavior.md#file-operation-safeguards).
 
 ## Scope and sequence
 
@@ -43,7 +43,7 @@ Phase 4 supports file Copy between Dual Pane and Finder in both directions. Find
 
 ## Milestones
 
-Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M9 through P4-M11 are complete.
+Milestone IDs and entries remain in numeric order below. P4-M9 and P4-M11 were independent and completed ahead of P4-M6 to P4-M8. P4-M1 through P4-M6 and P4-M8 through P4-M11 are complete.
 
 ### P4-M1: Decide interaction and safety behavior
 
@@ -89,7 +89,7 @@ Plan: [overview](milestone-07-overview.md), [architecture](milestone-07-architec
 
 ### P4-M8: Advanced Path Edit Control
 
-Status: Planned
+Status: Done
 Goal: Turn the confirmed path into clickable components and add an expandable, column-based folder navigator inside each Browser.
 Plan: [overview](milestone-08-overview.md), [architecture](milestone-08-architecture.md)
 

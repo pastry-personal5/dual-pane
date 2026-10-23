@@ -34,7 +34,7 @@ This capture applies to pointer selection and activation, keyboard movement and 
 
 ## Desktop composition and signal ordering
 
-Place the temporary Folder Items Filter Row immediately below Folder Pane Toolbar Row #3. It contains text rendered as `Starts with: {query}` and a far-right Close Filter Button. `crates/dual-pane-desktop/cpp/src/desktop_window.cpp` owns widget construction and accessibility properties; the CXX-Qt bridge and `browser_session.rs` carry text changes and per-tab view updates. The application never holds a Qt widget or clipboard object.
+Place the temporary Folder Items Filter Row immediately below the Folder Navigation and Sort Toolbar. It contains text rendered as `Starts with: {query}` and a far-right Close Filter Button. `crates/dual-pane-desktop/cpp/src/desktop_window.cpp` owns widget construction and accessibility properties; the CXX-Qt bridge and `browser_session.rs` carry text changes and per-tab view updates. The application never holds a Qt widget or clipboard object.
 
 Apply model and row updates on the GUI thread. While projection work runs, show the blank list and updating cue without clearing application-owned visit state; block Item and selection-dependent actions. A failed or cancelled projection remains blank and blocked and exposes the presenter's retryable filter-failure status to sighted and assistive-technology users. For a successful zero-result projection, leave the Folder Items List visually empty: do not insert a synthetic row or overlay. Keep the filter row visible, publish the zero-result count, and announce the result through accessibility.
 

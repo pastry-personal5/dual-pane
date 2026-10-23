@@ -31,7 +31,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-4/milestone-06-architecture.md](phase-4/milestone-06-architecture.md) | P4-M6 parsing, stored-name resolution, read-lane placement, stale guards, and editor approach. |
 | [phase-4/milestone-07-overview.md](phase-4/milestone-07-overview.md) | P4-M7 checklist for safe file drag and drop. |
 | [phase-4/milestone-07-architecture.md](phase-4/milestone-07-architecture.md) | P4-M7 drag payload, target, and operation handoff. |
-| [phase-4/milestone-08-overview.md](phase-4/milestone-08-overview.md) | P4-M8 checklist and visual proposal for advanced path navigation. |
+| [phase-4/milestone-08-overview.md](phase-4/milestone-08-overview.md) | Completed P4-M8 checklist and acceptance evidence for advanced path navigation. |
 | [phase-4/milestone-08-architecture.md](phase-4/milestone-08-architecture.md) | P4-M8 breadcrumb, column-loading, and tab-navigation approach. |
 | [phase-4/milestone-09-overview.md](phase-4/milestone-09-overview.md) | P4-M9 owner decisions and checklist for single-instance command-line launch. |
 | [phase-4/milestone-09-architecture.md](phase-4/milestone-09-architecture.md) | P4-M9 journal safety, socket rendezvous, protocol, Browser search, and window activation. |

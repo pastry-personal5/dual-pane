@@ -522,6 +522,53 @@ fn cancellation_is_a_terminal_event_for_queued_and_running_jobs() {
 }
 
 #[test]
+fn column_choices_finish_while_the_ordinary_listing_lane_is_blocked() {
+    let temporary = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temporary.path().join("child")).unwrap();
+    let parent = crate::native_location::location_from_path(temporary.path()).unwrap();
+    let selected = EntryName::new("child").unwrap();
+    let (started_sender, started) = mpsc::channel();
+    let source = source_factory(move |_, cancelled| {
+        started_sender.send(()).ok();
+        while !cancelled.load(Ordering::Relaxed) {
+            thread::park_timeout(Duration::from_millis(1));
+        }
+        None
+    });
+    let (mut runner, wakes) = runtime(source);
+    assert!(runner.dispatch(read(0, "blocked")).is_none());
+    started.recv_timeout(TIMEOUT).unwrap();
+    let request = FolderChoiceRequest { id: 1, browser: BrowserSide::Left, tab: TabId::new(0), source: parent.join(&selected), visible_revision: 1, parent, selected: selected.clone(), after: None, visibility: Default::default(), generation: 1 };
+    assert!(runner.request_folder_choices(request).is_none());
+    wakes.recv_timeout(TIMEOUT).unwrap();
+    let results = runner.take_folder_choices();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome.as_ref().unwrap().names.as_ref(), &[selected]);
+    runner.dispatch(WorkRequest::Cancel { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0) });
+}
+
+#[test]
+fn failed_column_read_can_be_retried_after_the_parent_returns() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent_path = temporary.path().join("parent");
+    let parent = crate::native_location::location_from_path(&parent_path).unwrap();
+    let selected = EntryName::new("child").unwrap();
+    let (mut runner, wakes) = runtime(source_factory(|_, _| None));
+    let request = |id, generation| FolderChoiceRequest { id, browser: BrowserSide::Left, tab: TabId::new(0), source: parent.join(&selected), visible_revision: 1, parent: parent.clone(), selected: selected.clone(), after: None, visibility: Default::default(), generation };
+
+    assert!(runner.request_folder_choices(request(1, 1)).is_none());
+    wakes.recv_timeout(TIMEOUT).unwrap();
+    assert!(runner.take_folder_choices()[0].outcome.is_err());
+    runner.take_events(0);
+
+    std::fs::create_dir(&parent_path).unwrap();
+    std::fs::create_dir(parent_path.join("child")).unwrap();
+    assert!(runner.request_folder_choices(request(2, 2)).is_none());
+    wakes.recv_timeout(TIMEOUT).unwrap();
+    assert_eq!(runner.take_folder_choices()[0].outcome.as_ref().unwrap().names.as_ref(), &[selected]);
+}
+
+#[test]
 fn a_source_reported_cancellation_is_terminal() {
     let (mut runner, wakes) = runtime(source_factory(|_, _| None));
     assert_eq!(runner.dispatch(read(0, "stopped")), None);
@@ -546,7 +593,7 @@ fn a_closed_supervisor_queue_fails_an_accepted_read() {
     let (_event_sender, events) = mpsc::channel();
     let wake_pending = Arc::new(AtomicBool::new(false));
     let delivery = Delivery { events: mpsc::channel().0, wake_pending: Arc::clone(&wake_pending), wake: Arc::new(Mutex::new(Box::new(|| {}))), progress: Arc::default() };
-    let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, clipboard: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], preview_pending: [None, None], preview_outstanding: HashMap::new(), filter_lanes: None, read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
+    let mut runner = Runtime { left_jobs: jobs, right_jobs: job_queue().0, probes: mpsc::sync_channel(1).0, clipboard: mpsc::sync_channel(1).0, events, next_event: None, wake_pending, outstanding: HashMap::new(), preview_jobs: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], preview_pending: [None, None], preview_outstanding: HashMap::new(), column_senders: [mpsc::sync_channel(1).0, mpsc::sync_channel(1).0], column_results: mpsc::channel().1, column_outstanding: HashMap::new(), filter_lanes: None, read_capacity: SINGLE_LANE_CAPACITY, delivery, operations: None, watcher: WatcherHandle::unavailable() };
 
     assert_eq!(runner.dispatch(read(0, "unavailable")), Some(Event::FolderItemsFailed { browser: BrowserSide::Left, tab: TabId::new(0), token: token(0), kind: ListingErrorKind::Internal }));
     assert!(runner.outstanding.is_empty());

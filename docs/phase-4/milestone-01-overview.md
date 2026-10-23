@@ -21,7 +21,7 @@ Out of scope: implementation, recursive search, remote filesystems, new dependen
 | Path syntax and draft | Accept absolute paths, `~/` home-relative paths, and relative paths. Resolve a relative path against the submitting tab's confirmed folder, captured at submission. Do not interpret shell syntax or environment variables. A failed submission keeps its typed text with an error; Escape, focus loss, or switching tabs discards an unsubmitted draft. | P4-M6: focus, symlinks, packages, and non-UTF-8 paths. |
 | Shortcut defaults | `Command+F` focuses the Folder Items Filter Row, `Command+L` edits the path, and `Command+C`, `Command+X`, and `Command+V` perform file Copy, Cut, and Paste while the Folder Items List has focus. A focused text editor retains ordinary text Copy, Cut, and Paste. | P4-M3/M5/M6: menus and focus return. |
 | Type to filter | With a Folder Items List focused, unmodified printable text other than Space begins editing that Browser Tab's filter and transfers focus to its filter field for continued typing. Space retains Quick Look, and movement, activation, and modified shortcuts retain their existing actions. | P4-M3: query continuation and composition/IME behavior are in the [M3 owner-decision record](milestone-03-overview.md#owner-decisions). |
-| Visual path navigation | Clicking a component of the confirmed absolute path navigates to that ancestor. The Path Edit Control can expand into folder-choice columns. Selecting a folder in the expanded columns collapses them. | P4-M8: exact targets, collapse timing, expansion ownership, Edit transition, folder choices, and keyboard behavior. |
+| Visual path navigation | Clicking a component of the confirmed absolute path navigates to that ancestor. The Path Edit Control can expand into folder-choice columns. Selecting a folder in the expanded columns collapses them. | P4-M8: recorded in [M8 owner decisions](milestone-08-overview.md#owner-decisions--2026-10-23). |
 
 ## Deferred owner decisions
 
@@ -35,9 +35,9 @@ These are explicit handoffs, not permission to invent behavior during implementa
 | P4-M5 | Menus, pending-Cut cue, feedback for replaced or unsupported clipboard content, and behavior if a copied Finder or Dual Pane source changes. Finder-compatible representation, Finder-source reading, and native verification in both directions are M5 design obligations, not separate owner decisions. |
 | P4-M6 | Path editor focus and validation feedback, symlinks, packages, and non-UTF-8 paths; failed draft behavior after a tab switch. |
 | P4-M7 | Source selection, same-folder and descendant drops, symlink/package targets, post-drop tab activation, stale payloads, and hover/rejection feedback. |
-| P4-M8 | [Column sketch](milestone-08-overview.md#interaction-sketch-for-p4-m8-planning), expansion ownership and height, collapse timing on selection, Edit transition, folder choices, keyboard and accessibility behavior, and asynchronous feedback. |
+| P4-M8 | [Column sketch](milestone-08-overview.md#interaction-sketch-for-p4-m8-planning), expansion ownership and height, root behavior, collapse timing on selection, Edit transition, path-component visibility, keyboard and accessibility behavior, narrow-width layout, and animation. Recorded in [M8 owner decisions](milestone-08-overview.md#owner-decisions--2026-10-23). |
 
-The P4-M2, P4-M3, and P4-M4 choices have since been answered in their linked owner-decision records. The later rows still await their feature-milestone interviews.
+The P4-M2, P4-M3, P4-M4, and P4-M8 choices have since been answered in their linked owner-decision records. P4-M5 through P4-M7 have their own decision records; M9 through M11 were added later as directed.
 
 ## Completion checklist
 

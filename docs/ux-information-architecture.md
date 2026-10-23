@@ -24,11 +24,15 @@ This document describes the current component hierarchy of Dual Pane and explici
       - Browser Tabs Strip
         - Browser Tabs, each with a Close Tab Button
         - New Tab Button
-      - Path Edit Control
     - Folder Pane
-      - Folder Pane Toolbar Row #1
-      - Folder Pane Toolbar Row #2
-      - Folder Pane Toolbar Row #3 with Back Button, Forward Button, Up Button, and sort controls
+      - Folder Pane Toolbar Row #1, containing the Path Edit Control
+        - Confirmed-path Breadcrumbs
+        - Expand/Collapse Button
+        - Edit Button, which enters the P4-M6 typed-path mode
+        - Typed path editor when editing
+      - Ancestor Folder Columns when expanded (visible child folders along path, ending at current folder's parent; Expand disabled at root)
+      - Folder Summary Row with item count, selected count, and size
+      - Folder Navigation and Sort Toolbar with Back Button, Forward Button, Up Button, and sort controls
       - Temporary Folder Items Filter Row with “Starts with:” text input, result status, and a far-right Close Filter Button
       - Folder Items List and Folder Items Context Menu
       - Missing Folder Overlay
@@ -87,4 +91,4 @@ Each Browser owns its tabs, location, Folder Items, selection, cursor, and previ
 - Permanent Delete Confirmation Window
 - Quit Confirmation Window
 
-The Favorites hierarchy has one level. Settings and Notices are separate windows opened from the Main Toolbar. See [ux-gui.md](ux-gui.md) for presentation, focus, capture, dismissal, and shortcut behavior.
+The M8 additions above are implemented; their detailed behavior follows the [P4-M8 owner decisions](phase-4/milestone-08-overview.md#owner-decisions--2026-10-23). The Favorites hierarchy has one level. Settings and Notices are separate windows opened from the Main Toolbar. See [ux-gui.md](ux-gui.md) for presentation, focus, capture, dismissal, and shortcut behavior.

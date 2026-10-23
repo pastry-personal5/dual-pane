@@ -11,6 +11,7 @@ use dual_pane_domain::{BrowserSide, OperationCommand, OperationId, SortDirection
 
 use crate::workspace_bridge::{key_sequence, revision, with_session};
 
+mod columns;
 mod context_menus;
 mod drag_drop;
 mod filter;
@@ -53,6 +54,8 @@ pub mod ffi {
         #[base = QAbstractTableModel]
         #[qproperty(QString, status_text, cxx_name = "statusText", READ, NOTIFY)]
         #[qproperty(QString, path_text, cxx_name = "pathText", READ, NOTIFY)]
+        #[qproperty(i32, path_view_revision, cxx_name = "pathViewRevision", READ, NOTIFY)]
+        #[qproperty(i32, column_revision, cxx_name = "columnRevision", READ, NOTIFY)]
         #[qproperty(QString, folder_name, cxx_name = "folderName", READ, NOTIFY)]
         #[qproperty(QString, summary_count_text, cxx_name = "summaryCountText", READ, NOTIFY)]
         #[qproperty(QString, summary_selected_text, cxx_name = "summarySelectedText", READ, NOTIFY)]
@@ -168,6 +171,34 @@ pub mod ffi {
         /// Captures the exact location the Path Edit Control is filled with.
         #[cxx_name = "beginPathEntry"]
         fn begin_path_entry(self: Pin<&mut FolderItemsListModel>);
+        #[cxx_name = "breadcrumbCount"]
+        fn breadcrumb_count(self: &FolderItemsListModel) -> i32;
+        #[cxx_name = "breadcrumbLabel"]
+        fn breadcrumb_label(self: &FolderItemsListModel, index: i32) -> QString;
+        #[cxx_name = "breadcrumbPath"]
+        fn breadcrumb_path(self: &FolderItemsListModel, index: i32) -> QString;
+        #[cxx_name = "navigateBreadcrumb"]
+        fn navigate_breadcrumb(self: Pin<&mut FolderItemsListModel>, index: i32, observed_tab: u64, visible_revision: u64);
+        #[cxx_name = "setVisibleColumns"]
+        fn set_visible_columns(self: Pin<&mut FolderItemsListModel>, first: i32, count: i32, generation: u64);
+        #[cxx_name = "closeColumns"]
+        fn close_columns(self: Pin<&mut FolderItemsListModel>);
+        #[cxx_name = "columnState"]
+        fn column_state(self: &FolderItemsListModel, column: i32) -> i32;
+        #[cxx_name = "columnChoiceCount"]
+        fn column_choice_count(self: &FolderItemsListModel, column: i32) -> i32;
+        #[cxx_name = "columnChoiceLabel"]
+        fn column_choice_label(self: &FolderItemsListModel, column: i32, row: i32) -> QString;
+        #[cxx_name = "columnChoicePath"]
+        fn column_choice_path(self: &FolderItemsListModel, column: i32, row: i32) -> QString;
+        #[cxx_name = "columnChoiceSelected"]
+        fn column_choice_selected(self: &FolderItemsListModel, column: i32, row: i32) -> bool;
+        #[cxx_name = "columnHasMore"]
+        fn column_has_more(self: &FolderItemsListModel, column: i32) -> bool;
+        #[cxx_name = "columnLoadMore"]
+        fn column_load_more(self: Pin<&mut FolderItemsListModel>, column: i32);
+        #[cxx_name = "navigateColumnChoice"]
+        fn navigate_column_choice(self: Pin<&mut FolderItemsListModel>, column: i32, row: i32, observed_tab: u64, visible_revision: u64, generation: u64);
         #[cxx_name = "submitPath"]
         fn submit_path(self: Pin<&mut FolderItemsListModel>, observed_tab: u64, text: &QString, edited: bool);
         #[cxx_name = "cancelPathEntry"]
@@ -357,6 +388,8 @@ fn qt_int(value: usize) -> i32 {
 pub struct FolderItemsListModelRust {
     status_text: QString,
     path_text: QString,
+    path_view_revision: i32,
+    column_revision: i32,
     folder_name: QString,
     summary_count_text: QString,
     summary_selected_text: QString,
@@ -381,13 +414,18 @@ pub struct FolderItemsListModelRust {
     path_accepted_count: i32,
     /// The location the Path Edit Control was filled with when editing began.
     path_origin: Option<dual_pane_domain::Location>,
+    column_generation: Option<u64>,
+    column_source: Option<dual_pane_domain::Location>,
+    column_tab: u64,
+    column_visible_revision: u64,
+    columns: Vec<Option<columns::ColumnData>>,
     browser: BrowserSide,
     shown: BrowserViewModel,
     context_menu: Option<FolderItemsMenuSnapshot>,
 }
 impl Default for FolderItemsListModelRust {
     fn default() -> Self {
-        Self { status_text: QString::default(), path_text: QString::default(), folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), filter_text: QString::default(), filter_status: 0, filter_result_count: 0, no_filter_matches: false, cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), path_entry_state: 0, path_error: QString::default(), path_entry_revision: 0, path_accepted_count: 0, path_origin: None, browser: BrowserSide::Left, shown: BrowserViewModel::default(), context_menu: None }
+        Self { status_text: QString::default(), path_text: QString::default(), path_view_revision: 0, column_revision: 0, folder_name: QString::default(), summary_count_text: QString::default(), summary_selected_text: QString::default(), summary_size_text: QString::default(), filter_text: QString::default(), filter_status: 0, filter_result_count: 0, no_filter_matches: false, cursor_row: -1, selection_revision: 0, preview_revision: 0, tabs_revision: 0, toolbar_state: 0, sort_choice: -1, status_token: 0, missing_folder: false, editor_revision: 0, name_error: QString::default(), path_entry_state: 0, path_error: QString::default(), path_entry_revision: 0, path_accepted_count: 0, path_origin: None, column_generation: None, column_source: None, column_tab: 0, column_visible_revision: 0, columns: Vec::new(), browser: BrowserSide::Left, shown: BrowserViewModel::default(), context_menu: None }
     }
 }
 
@@ -432,6 +470,7 @@ impl ffi::FolderItemsListModel {
         // The session lock is released, so Qt may call back into the model
         // while these notifications are delivered.
         self.as_mut().show(view);
+        self.as_mut().refresh_column_results();
         let shown = &self.rust().shown;
         let cursor = shown.cursor_row().and_then(|row| i32::try_from(row).ok()).unwrap_or(-1);
         let selection = revision(shown.selection_revision());
@@ -442,6 +481,7 @@ impl ffi::FolderItemsListModel {
         let sort = sort_choice(toolbar.sort);
         let status = QString::from(shown.status_text());
         let path = QString::from(shown.location_text());
+        let path_revision = revision(shown.visible_revision());
         let folder_name = QString::from(shown.folder_name());
         let summary = shown.summary();
         let (count, selected, size) = (QString::from(summary.count.as_str()), QString::from(summary.selected.as_str()), QString::from(summary.size.as_str()));
@@ -458,6 +498,7 @@ impl ffi::FolderItemsListModel {
         self.as_mut().set_preview_revision(preview);
         self.as_mut().set_status_text(status);
         self.as_mut().set_path_text(path);
+        self.as_mut().set_path_view_revision(path_revision);
         self.as_mut().set_folder_name(folder_name);
         self.as_mut().set_summary_count_text(count);
         self.as_mut().set_summary_selected_text(selected);

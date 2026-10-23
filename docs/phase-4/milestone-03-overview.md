@@ -17,7 +17,7 @@ The owner accepted these M3 behaviors on 2026-10-17. These decisions supersede t
 | Topic | Accepted behavior |
 |---|---|
 | Canonical component | The temporary row is the **Folder Items Filter Row**. Its far-right dismissal control is the **Close Filter Button**. |
-| Placement and lifetime | The row appears immediately below Folder Pane Toolbar Row #3 when direct printable input starts filtering. It remains visible while the tab has a nonempty query. `Command+F` also shows and focuses it with an empty query. An empty row hides on focus loss or tab switch; preserve the newly chosen focus. Explicit close hides it. |
+| Placement and lifetime | The row appears immediately below the Folder Navigation and Sort Toolbar when direct printable input starts filtering. It remains visible while the tab has a nonempty query. `Command+F` also shows and focuses it with an empty query. An empty row hides on focus loss or tab switch; preserve the newly chosen focus. Explicit close hides it. |
 | Query presentation and continuation | The row displays `Starts with: {query}`. Continued printable input appends once to the existing query, so `a` followed by `p` displays `Starts with: ap`. |
 | Matching override | Match folders and files whose displayed names start with the query. This M3 prefix rule supersedes M2's substring matcher while retaining its Unicode, whitespace, invalid-UTF-8 identity, concurrency, and reconciliation rules. |
 | Close behavior | Activating the Close Filter Button or pressing Escape clears the query, restores the full Folder Items List, hides the row, and returns focus to that Browser's Folder Items List. |

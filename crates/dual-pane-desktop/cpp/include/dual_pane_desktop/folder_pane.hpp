@@ -5,6 +5,7 @@
 #include "dual_pane_desktop/gui_common.hpp"
 #include "dual_pane_desktop/quick_look_preview.hpp"
 #include "dual_pane_desktop/tabs_strip.hpp"
+#include <QtCore/QPropertyAnimation>
 
 // Qt parent ownership and the compact native composition are explicit here.
 // NOLINTBEGIN(cppcoreguidelines-owning-memory,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,readability-braces-around-statements,readability-identifier-length,readability-isolate-declaration,readability-named-parameter,bugprone-easily-swappable-parameters,modernize-use-trailing-return-type,readability-function-cognitive-complexity,readability-convert-member-functions-to-static,cppcoreguidelines-special-member-functions,readability-implicit-bool-conversion)
@@ -711,11 +712,9 @@ class FolderItemsList final : public QTreeView {
 class ElidedStatusLabel final : public QLabel {
   public:
     explicit ElidedStatusLabel(QWidget *parent) : QLabel(parent) {
-        setObjectName(QStringLiteral("browserStatusBar"));
-        setAccessibleName(QStringLiteral("Browser Status Bar"));
+        setObjectName(QStringLiteral("browserStatusMessage"));
         setWordWrap(false);
-        setContentsMargins(4, 2, 4, 2);
-        setFixedHeight(fontMetrics().height() + 4);
+        setContentsMargins(6, 0, 6, 0);
     }
 
     void set_full_text(const QString &text) {
@@ -733,7 +732,6 @@ class ElidedStatusLabel final : public QLabel {
     void changeEvent(QEvent *event) override {
         QLabel::changeEvent(event);
         if (event->type() == QEvent::FontChange) {
-            setFixedHeight(fontMetrics().height() + 4);
             update_elision();
         }
     }
@@ -741,6 +739,64 @@ class ElidedStatusLabel final : public QLabel {
   private:
     void update_elision() { QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, qMax(0, contentsRect().width()))); }
     QString full_text_;
+};
+
+class BrowserStatusBar final : public QWidget {
+  public:
+    explicit BrowserStatusBar(QWidget *parent) : QWidget(parent), summary_(new QWidget(this)), message_(new ElidedStatusLabel(this)), count_(new QLabel(summary_)), selected_(new QLabel(summary_)), size_(new QLabel(summary_)) {
+        setObjectName(QStringLiteral("browserStatusBar"));
+        setAccessibleName(QStringLiteral("Browser Status Bar"));
+        setFixedHeight(qMax(20, fontMetrics().height() + 4));
+        auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        summary_->setObjectName(QStringLiteral("browserStatusSummary"));
+        auto *summary_layout = new QHBoxLayout(summary_);
+        summary_layout->setContentsMargins(6, 0, 6, 0);
+        summary_layout->setSpacing(8);
+        count_->setObjectName(QStringLiteral("browserStatusCount"));
+        selected_->setObjectName(QStringLiteral("browserStatusSelected"));
+        selected_->setStyleSheet(QStringLiteral("color: #5B7FA8;"));
+        size_->setObjectName(QStringLiteral("browserStatusSize"));
+        size_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        summary_layout->addWidget(count_);
+        summary_layout->addWidget(selected_);
+        summary_layout->addStretch();
+        summary_layout->addWidget(size_);
+        layout->addWidget(summary_, 1);
+        layout->addWidget(message_, 1);
+        message_->hide();
+    }
+
+    void set_summary(const QString &count, const QString &selected, const QString &size) {
+        count_->setText(count);
+        selected_->setText(selected);
+        size_->setText(size);
+        setAccessibleDescription(QStringLiteral("%1 %2, %3").arg(count, selected, size));
+        message_->hide();
+        summary_->show();
+    }
+
+    void set_full_text(const QString &text) {
+        message_->set_full_text(text);
+        setAccessibleDescription(text);
+        summary_->hide();
+        message_->show();
+    }
+
+  protected:
+    void changeEvent(QEvent *event) override {
+        QWidget::changeEvent(event);
+        if (event->type() == QEvent::FontChange)
+            setFixedHeight(qMax(20, fontMetrics().height() + 4));
+    }
+
+  private:
+    QWidget *summary_;
+    ElidedStatusLabel *message_;
+    QLabel *count_ = nullptr;
+    QLabel *selected_ = nullptr;
+    QLabel *size_ = nullptr;
 };
 
 class FolderFilterTextEdit final : public QLineEdit {
@@ -982,34 +1038,38 @@ auto filter_status_text(int status, bool no_matches, const QString &text, int co
 
 class FolderPane final : public QFrame {
   public:
-    FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)) {
+    FolderPane(FolderItemsListModel *model, IconLoader *icons, QWidget *parent) : QFrame(parent), view_(new FolderItemsList(model, icons)), path_row_(new QWidget(this)) {
         setObjectName(QStringLiteral("folderPane"));
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
-        auto *title = new QLabel(this);
-        title->setObjectName(QStringLiteral("folderPaneToolbarRow1"));
-        title->setAccessibleName(QStringLiteral("Folder Pane Toolbar Row #1"));
+        path_row_->setObjectName(QStringLiteral("folderPaneToolbarRow1"));
+        path_row_->setAccessibleName(QStringLiteral("Folder Pane Toolbar Row #1"));
+        auto *path_layout = new QVBoxLayout(path_row_);
+        path_layout->setContentsMargins(0, 0, 0, 0);
+        path_layout->setSpacing(0);
         auto *summary = new QWidget(this);
-        summary->setObjectName(QStringLiteral("folderPaneToolbarRow2"));
-        summary->setAccessibleName(QStringLiteral("Folder Pane Toolbar Row #2"));
+        summary->setObjectName(QStringLiteral("folderSummaryRow"));
+        summary->setAccessibleName(QStringLiteral("Folder Summary Row"));
         summary->setMinimumHeight(20);
         auto *summary_layout = new QHBoxLayout(summary);
         summary_layout->setContentsMargins(6, 0, 6, 0);
         summary_layout->setSpacing(8);
         auto *summary_count = new QLabel(summary);
+        summary_count->setObjectName(QStringLiteral("summaryCount"));
         auto *summary_selected = new QLabel(summary);
         summary_selected->setObjectName(QStringLiteral("summarySelected"));
         summary_selected->setStyleSheet(QStringLiteral("color: #5B7FA8;"));
         auto *summary_size = new QLabel(summary);
+        summary_size->setObjectName(QStringLiteral("summarySize"));
         summary_size->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         summary_layout->addWidget(summary_count);
         summary_layout->addWidget(summary_selected);
         summary_layout->addStretch();
         summary_layout->addWidget(summary_size);
         auto *commands = new QWidget(this);
-        commands->setObjectName(QStringLiteral("folderPaneToolbarRow3"));
-        commands->setAccessibleName(QStringLiteral("Folder Pane Toolbar Row #3"));
+        commands->setObjectName(QStringLiteral("folderNavigationAndSortToolbar"));
+        commands->setAccessibleName(QStringLiteral("Folder Navigation and Sort Toolbar"));
         auto *command_layout = new QHBoxLayout(commands);
         command_layout->setContentsMargins(0, 0, 0, 0);
         command_layout->setSpacing(0);
@@ -1099,7 +1159,7 @@ class FolderPane final : public QFrame {
         filter_row_->hide();
         view_->setObjectName(QStringLiteral("folderItemsList"));
         view_->setAccessibleName(QStringLiteral("Folder Items List"));
-        auto *status = new ElidedStatusLabel(this);
+        auto *status = new BrowserStatusBar(this);
         status_ = status;
         // The New Folder Name Editor is a temporary row pinned at the top of
         // the listing.
@@ -1109,13 +1169,12 @@ class FolderPane final : public QFrame {
         new_folder_layout->setContentsMargins(icon_column_width, 1, 4, 1);
         new_folder_layout->setSpacing(1);
         new_folder_row_->hide();
-        layout->addWidget(title);
+        layout->addWidget(path_row_);
         layout->addWidget(summary);
         layout->addWidget(commands);
         layout->addWidget(filter_row_);
         layout->addWidget(new_folder_row_);
         layout->addWidget(view_, 1);
-        QObject::connect(model, &FolderItemsListModel::folderNameChanged, this, [title, model] { title->setText(model->getFolderName()); });
         auto *quick_look_failure_timer = new QTimer(this);
         quick_look_failure_timer->setSingleShot(true);
         const auto update_status = [status, model, quick_look_failure_timer] {
@@ -1124,14 +1183,14 @@ class FolderPane final : public QFrame {
             const auto &status_text = model->getStatusText();
             const auto &count = model->getSummaryCountText();
             const auto &selected = model->getSummarySelectedText();
-            // A location path was the old steady-state status. Mirror the
-            // concise summary there, but leave loading and error feedback.
+            // The confirmed path marks the steady state. Match the Folder
+            // Summary Row there, while retaining transient status feedback.
             if (status_text != model->getPathText()) {
                 status->set_full_text(status_text);
             } else if (count.isEmpty()) {
                 status->set_full_text(QString());
             } else {
-                status->set_full_text(QStringLiteral("%1 %2").arg(count, selected));
+                status->set_summary(count, selected, model->getSummarySizeText());
             }
         };
         QObject::connect(model, &FolderItemsListModel::summaryCountTextChanged, this, [summary_count, update_status, model] {
@@ -1142,7 +1201,10 @@ class FolderPane final : public QFrame {
             summary_selected->setText(model->getSummarySelectedText());
             update_status();
         });
-        QObject::connect(model, &FolderItemsListModel::summarySizeTextChanged, this, [summary_size, model] { summary_size->setText(model->getSummarySizeText()); });
+        QObject::connect(model, &FolderItemsListModel::summarySizeTextChanged, this, [summary_size, update_status, model] {
+            summary_size->setText(model->getSummarySizeText());
+            update_status();
+        });
         QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, update_status);
         QObject::connect(quick_look_failure_timer, &QTimer::timeout, this, update_status);
         view_->setQuickLookFailureHandler([status, quick_look_failure_timer] {
@@ -1254,8 +1316,14 @@ class FolderPane final : public QFrame {
     }
 
     [[nodiscard]] auto view() const -> FolderItemsList * { return view_; }
-    [[nodiscard]] auto status() const -> ElidedStatusLabel * { return status_; }
+    [[nodiscard]] auto status() const -> BrowserStatusBar * { return status_; }
     [[nodiscard]] auto new_folder_row() const -> QWidget * { return new_folder_row_; }
+    [[nodiscard]] auto path_row() const -> QWidget * { return path_row_; }
+    void install_path_controls(QWidget *display, PathEditControl *editor, QWidget *columns) {
+        path_row_->layout()->addWidget(display);
+        path_row_->layout()->addWidget(editor);
+        qobject_cast<QVBoxLayout *>(layout())->insertWidget(1, columns);
+    }
     void focus_filter() {
         filter_row_state_.open_empty_row();
         filter_row_->show();
@@ -1277,7 +1345,8 @@ class FolderPane final : public QFrame {
     QLabel *filter_status_ = nullptr;
     FilterRowState filter_row_state_;
     QString last_filter_announcement_;
-    ElidedStatusLabel *status_ = nullptr;
+    BrowserStatusBar *status_ = nullptr;
+    QWidget *path_row_ = nullptr;
     QWidget *new_folder_row_ = nullptr;
     std::array<QWidget *, 4> sort_groups_{};
     std::array<QToolButton *, 8> sorts_{};
@@ -1656,15 +1725,87 @@ class FolderItemsMenuCoordinator final : public QObject {
 
 class Browser final : public QWidget {
   public:
-    Browser(FolderItemsListModel *model, IconLoader *icons, FolderItemsMenuCoordinator *menus, QWidget *parent) : QWidget(parent), model_(model), folder_(new FolderPane(model, icons, this)), preview_splitter_(new ThinSplitter(SplitterKind::Preview, this)), preview_(new PreviewPane(preview_splitter_)), overlay_(new QLabel(QStringLiteral("Expand"), this)), missing_(new QLabel(QStringLiteral("Command+R to Refresh"), this)), editors_(new NameEditController(model, folder_->view(), folder_->new_folder_row())), preview_settle_(this) {
+    Browser(FolderItemsListModel *model, IconLoader *icons, FolderItemsMenuCoordinator *menus, QWidget *parent) : QWidget(parent), model_(model), folder_(new FolderPane(model, icons, this)), path_display_(new QWidget(folder_->path_row())), path_row_layout_(new QHBoxLayout(path_display_)), breadcrumb_scroll_(new QScrollArea(path_display_)), breadcrumb_contents_(new QWidget(breadcrumb_scroll_)), breadcrumb_layout_(new QHBoxLayout(breadcrumb_contents_)), columns_panel_(new QWidget(folder_)), column_layout_(new QHBoxLayout(columns_panel_)), column_animation_(this), preview_splitter_(new ThinSplitter(SplitterKind::Preview, this)), preview_(new PreviewPane(preview_splitter_)), overlay_(new QLabel(QStringLiteral("Expand"), this)), missing_(new QLabel(QStringLiteral("Command+R to Refresh"), this)), editors_(new NameEditController(model, folder_->view(), folder_->new_folder_row())), preview_settle_(this) {
         editors_->setParent(this);
         setObjectName(QStringLiteral("browser"));
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
         layout->addWidget(new BrowserTabsStrip(model, this, [this] { folder_->view()->focusList(); }));
-        path_ = new PathEditControl(model, [this] { folder_->view()->focusList(); }, this);
-        layout->addWidget(path_);
+        path_display_->setObjectName(QStringLiteral("pathBreadcrumbRow"));
+        path_display_->setAccessibleName(QStringLiteral("Current folder path"));
+        path_row_layout_->setContentsMargins(4, 0, 4, 0);
+        path_row_layout_->setSpacing(2);
+        breadcrumb_scroll_->setObjectName(QStringLiteral("breadcrumbScroll"));
+        breadcrumb_scroll_->setFrameShape(QFrame::NoFrame);
+        breadcrumb_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        breadcrumb_scroll_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        breadcrumb_scroll_->setWidgetResizable(false);
+        breadcrumb_scroll_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        breadcrumb_scroll_->setFixedHeight(qMax(34, fontMetrics().height() + 14));
+        breadcrumb_contents_->setObjectName(QStringLiteral("breadcrumbContents"));
+        breadcrumb_layout_->setContentsMargins(4, 0, 4, 0);
+        breadcrumb_layout_->setSpacing(2);
+        breadcrumb_scroll_->setWidget(breadcrumb_contents_);
+        path_row_layout_->addWidget(breadcrumb_scroll_, 1);
+        expand_button_ = command_button(QStringLiteral("expandPathButton"), QStringLiteral("Expand"), QStringLiteral("Show ancestor folder choices"), QStringLiteral("Expand path columns"), path_display_);
+        expand_button_->setFocusPolicy(Qt::StrongFocus);
+        expand_button_->setText(QString());
+        expand_button_->setIcon(path_action_icon(PathActionIcon::Expand, true));
+        expand_button_->setIconSize(QSize(20, 20));
+        expand_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        expand_button_->setFixedSize(30, 28);
+        path_row_layout_->addWidget(expand_button_);
+        QObject::connect(expand_button_, &QToolButton::clicked, this, [this] { set_columns_expanded(!columns_expanded_); });
+        edit_button_ = command_button(QStringLiteral("editPathButton"), QStringLiteral("Edit"), QStringLiteral("Edit path"), QStringLiteral("Edit path"), path_display_);
+        edit_button_->setFocusPolicy(Qt::StrongFocus);
+        edit_button_->setText(QString());
+        edit_button_->setIcon(path_action_icon(PathActionIcon::Edit, true));
+        edit_button_->setIconSize(QSize(20, 20));
+        edit_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        edit_button_->setFixedSize(30, 28);
+        path_row_layout_->addWidget(edit_button_);
+        QObject::connect(edit_button_, &QToolButton::clicked, this, [this] { edit_path(); });
+        path_ = new PathEditControl(model, [this] { folder_->view()->focusList(); }, folder_->path_row());
+        columns_panel_->setObjectName(QStringLiteral("pathColumns"));
+        column_layout_->setContentsMargins(4, 2, 4, 2);
+        column_layout_->setSpacing(4);
+        columns_panel_->setMaximumHeight(0);
+        columns_panel_->hide();
+        folder_->install_path_controls(path_display_, path_, columns_panel_);
+        path_->hide();
+        column_animation_.setTargetObject(columns_panel_);
+        column_animation_.setPropertyName("maximumHeight");
+        column_animation_.setDuration(150);
+        QObject::connect(&column_animation_, &QPropertyAnimation::finished, this, [this] {
+            if (!columns_expanded_)
+                columns_panel_->hide();
+        });
+        rebuild_breadcrumbs();
+        QObject::connect(model, &FolderItemsListModel::pathTextChanged, this, [this] {
+            if (!pending_target_.isEmpty() && model_->getPathText() != pending_source_)
+                pending_target_.clear();
+            schedule_breadcrumbs();
+            schedule_columns();
+        });
+        QObject::connect(model, &FolderItemsListModel::statusTextChanged, this, [this] {
+            if (!pending_target_.isEmpty() && model_->getStatusText() != QStringLiteral("Loading…")) {
+                pending_target_.clear();
+                schedule_breadcrumbs();
+            }
+        });
+        QObject::connect(model, &FolderItemsListModel::pathViewRevisionChanged, this, [this] {
+            schedule_breadcrumbs();
+            schedule_columns();
+        });
+        QObject::connect(model, &FolderItemsListModel::columnRevisionChanged, this, [this] { schedule_columns(); });
+        QObject::connect(model, &FolderItemsListModel::tabsRevisionChanged, this, [this] {
+            schedule_breadcrumbs();
+            schedule_columns();
+            QTimer::singleShot(0, this, [this] { sync_path_mode(); });
+        });
+        QObject::connect(model, &FolderItemsListModel::pathAcceptedCountChanged, this, [this] { QTimer::singleShot(0, this, [this] { sync_path_mode(); }); });
+        QObject::connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *) { QTimer::singleShot(0, this, [this] { sync_path_mode(); }); });
         preview_splitter_->addWidget(folder_);
         preview_splitter_->addWidget(preview_);
         preview_splitter_->setCollapsible(0, false);
@@ -1727,7 +1868,12 @@ class Browser final : public QWidget {
     [[nodiscard]] auto folder() const -> FolderPane * { return folder_; }
     [[nodiscard]] auto editors() const -> NameEditController * { return editors_; }
     void focus_filter() { folder_->focus_filter(); }
-    void edit_path() { path_->edit(); }
+    void edit_path() {
+        collapse_columns(false);
+        path_display_->hide();
+        path_->show();
+        path_->edit();
+    }
     [[nodiscard]] auto path_control() const -> PathEditControl * { return path_; }
     [[nodiscard]] auto preview_splitter() const -> ThinSplitter * { return preview_splitter_; }
     [[nodiscard]] auto preview_height() const -> int { return chosen_preview_height_; }
@@ -1739,15 +1885,265 @@ class Browser final : public QWidget {
     }
 
   protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (event->type() == QEvent::KeyPress && columns_expanded_) {
+            for (auto *list : visible_column_lists_) {
+                if (watched != list)
+                    continue;
+                auto *key = dynamic_cast<QKeyEvent *>(event);
+                if (!key)
+                    break;
+                if (key->key() == Qt::Key_Escape) {
+                    collapse_columns(true);
+                    return true;
+                }
+                if (key->key() == Qt::Key_Left || key->key() == Qt::Key_Right) {
+                    const auto current = visible_column_lists_.indexOf(list);
+                    const auto next = current + (key->key() == Qt::Key_Left ? -1 : 1);
+                    if (next >= 0 && next < visible_column_lists_.size())
+                        visible_column_lists_.at(next)->setFocus(Qt::OtherFocusReason);
+                    return true;
+                }
+                if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+                    if (auto *item = list->currentItem())
+                        activate_column_item(list, item);
+                    return true;
+                }
+            }
+        }
+        return QWidget::eventFilter(watched, event);
+    }
     /// Below the usable width, an instruction covers only this Browser; it
     /// passes pointer input through and takes no keyboard commands.
     void resizeEvent(QResizeEvent *event) override {
         QWidget::resizeEvent(event);
         QTimer::singleShot(0, this, [this] { apply_preview_height(); });
+        if (columns_expanded_)
+            schedule_columns();
         update_overlays();
     }
 
   private:
+    void set_columns_expanded(bool expanded) {
+        if (columns_expanded_ == expanded)
+            return;
+        columns_expanded_ = expanded;
+        const bool focused = expand_button_->property("browserActive").toBool() && expand_button_->property("windowActive").toBool();
+        expand_button_->setIcon(path_action_icon(expanded ? PathActionIcon::Collapse : PathActionIcon::Expand, focused));
+        expand_button_->setToolTip(expanded ? QStringLiteral("Hide ancestor folder choices") : QStringLiteral("Show ancestor folder choices"));
+        expand_button_->setAccessibleName(expanded ? QStringLiteral("Collapse path columns") : QStringLiteral("Expand path columns"));
+        expand_button_->setProperty("pathExpanded", expanded);
+        repolish(expand_button_);
+        schedule_breadcrumbs();
+        column_animation_.stop();
+        const int target = expanded ? qMin(220, qMax(80, height() / 3)) : 0;
+        if (expanded) {
+            columns_panel_->show();
+            schedule_columns();
+        } else {
+            model_->closeColumns();
+            visible_column_first_ = -1;
+            visible_column_count_ = 0;
+        }
+        if (!QApplication::style()->styleHint(QStyle::SH_Widget_Animate)) {
+            columns_panel_->setMaximumHeight(target);
+            if (!expanded)
+                columns_panel_->hide();
+            return;
+        }
+        column_animation_.setStartValue(columns_panel_->maximumHeight());
+        column_animation_.setEndValue(target);
+        column_animation_.start();
+    }
+    void collapse_columns(bool focus_list) {
+        set_columns_expanded(false);
+        if (focus_list)
+            folder_->view()->focusList();
+    }
+    void schedule_columns() {
+        if (!columns_expanded_ || column_rebuild_pending_)
+            return;
+        column_rebuild_pending_ = true;
+        QTimer::singleShot(0, this, [this] {
+            column_rebuild_pending_ = false;
+            sync_columns();
+        });
+    }
+    void sync_columns() {
+        if (!columns_expanded_)
+            return;
+        const int total = qMax(0, model_->breadcrumbCount() - 1);
+        if (total == 0) {
+            collapse_columns(false);
+            return;
+        }
+        const int fit = qMax(1, (width() - 8) / 160);
+        const int count = qMin(total, fit);
+        const int first = total - count;
+        const auto tab = model_->activeTabId();
+        const auto revision = model_->visibleRevision();
+        const auto path = model_->getPathText();
+        if (first != visible_column_first_ || count != visible_column_count_ || tab != column_tab_ || revision != column_path_revision_ || path != column_path_) {
+            visible_column_first_ = first;
+            visible_column_count_ = count;
+            column_tab_ = tab;
+            column_path_revision_ = revision;
+            column_path_ = path;
+            ++column_generation_;
+            model_->setVisibleColumns(first, count, column_generation_);
+        }
+        rebuild_columns();
+    }
+    void activate_column_item(QListWidget *list, QListWidgetItem *item) {
+        if (list == nullptr || item == nullptr || !visible_column_lists_.contains(list) || list->property("columnGeneration").toULongLong() != column_generation_)
+            return;
+        const int column = list->property("columnIndex").toInt();
+        const int row = item->data(Qt::UserRole).toInt();
+        if (row == -1) {
+            model_->columnLoadMore(column);
+            return;
+        }
+        if (row == -2) {
+            ++column_generation_;
+            model_->setVisibleColumns(visible_column_first_, visible_column_count_, column_generation_);
+            return;
+        }
+        const QString target = model_->columnChoicePath(column, row);
+        if (target.isEmpty() || item->toolTip() != target)
+            return;
+        model_->navigateColumnChoice(column, row, column_tab_, column_path_revision_, column_generation_);
+        record_pending(target);
+        collapse_columns(false);
+    }
+    void record_pending(const QString &target) {
+        if (model_->getStatusText() == QStringLiteral("Loading…") && target != model_->getPathText()) {
+            pending_source_ = model_->getPathText();
+            pending_target_ = target;
+            schedule_breadcrumbs();
+        }
+    }
+    void rebuild_columns() {
+        int focused_column = -1;
+        int focused_row = -1;
+        for (auto *list : visible_column_lists_) {
+            if (inside(QApplication::focusWidget(), list)) {
+                focused_column = list->property("columnIndex").toInt();
+                focused_row = list->currentRow();
+                break;
+            }
+        }
+        visible_column_lists_.clear();
+        while (auto *item = column_layout_->takeAt(0)) {
+            delete item->widget();
+            delete item;
+        }
+        for (int column = visible_column_first_; column < visible_column_first_ + visible_column_count_; ++column) {
+            auto *list = new QListWidget(columns_panel_);
+            list->setObjectName(QStringLiteral("pathColumn"));
+            list->setProperty("columnIndex", column);
+            list->setProperty("columnGeneration", static_cast<qulonglong>(column_generation_));
+            list->setAccessibleName(QStringLiteral("Folder choices in %1").arg(model_->breadcrumbPath(column)));
+            list->setFocusPolicy(Qt::StrongFocus);
+            list->setAlternatingRowColors(true);
+            list->setMinimumWidth(160);
+            list->installEventFilter(this);
+            column_layout_->addWidget(list, 1);
+            visible_column_lists_.push_back(list);
+            const int state = model_->columnState(column);
+            if (state == 0) {
+                auto *item = new QListWidgetItem(QStringLiteral("Loading…"), list);
+                item->setFlags(Qt::NoItemFlags);
+                item->setData(Qt::AccessibleDescriptionRole, QStringLiteral("Loading folders"));
+            } else if (state == 2) {
+                auto *item = new QListWidgetItem(QStringLiteral("Could not load folders — Retry"), list);
+                item->setData(Qt::UserRole, -2);
+                item->setData(Qt::AccessibleDescriptionRole, QStringLiteral("Folder loading failed. Activate to retry."));
+            } else {
+                const int rows = model_->columnChoiceCount(column);
+                if (rows == 0) {
+                    auto *item = new QListWidgetItem(QStringLiteral("No folders"), list);
+                    item->setFlags(Qt::NoItemFlags);
+                }
+                for (int row = 0; row < rows; ++row) {
+                    const bool selected = model_->columnChoiceSelected(column, row);
+                    auto *item = new QListWidgetItem(model_->columnChoiceLabel(column, row) + (selected ? QStringLiteral("  ✓") : QString()), list);
+                    item->setData(Qt::UserRole, row);
+                    item->setToolTip(model_->columnChoicePath(column, row));
+                    item->setData(Qt::AccessibleDescriptionRole, item->toolTip() + (selected ? QStringLiteral(", selected path") : QString()));
+                    if (selected)
+                        list->setCurrentItem(item);
+                }
+                if (model_->columnHasMore(column)) {
+                    auto *item = new QListWidgetItem(QStringLiteral("Load more…"), list);
+                    item->setData(Qt::UserRole, -1);
+                }
+            }
+            QObject::connect(list, &QListWidget::itemClicked, this, [this, list](QListWidgetItem *item) { activate_column_item(list, item); });
+            QObject::connect(list, &QListWidget::itemActivated, this, [this, list](QListWidgetItem *item) { activate_column_item(list, item); });
+        }
+        if (focused_column >= 0 && !visible_column_lists_.isEmpty()) {
+            const int target = qBound(visible_column_first_, focused_column, visible_column_first_ + visible_column_count_ - 1) - visible_column_first_;
+            auto *list = visible_column_lists_.at(target);
+            if (focused_row >= 0 && focused_row < list->count())
+                list->setCurrentRow(focused_row);
+            list->setFocus(Qt::OtherFocusReason);
+        }
+    }
+    void schedule_breadcrumbs() {
+        if (breadcrumb_rebuild_pending_)
+            return;
+        breadcrumb_rebuild_pending_ = true;
+        QTimer::singleShot(0, this, [this] {
+            breadcrumb_rebuild_pending_ = false;
+            rebuild_breadcrumbs();
+        });
+    }
+    void sync_path_mode() {
+        if (!path_->editing() && !path_->hasFocus()) {
+            path_->hide();
+            path_display_->show();
+        }
+    }
+    void rebuild_breadcrumbs() {
+        path_display_->setToolTip(model_->getPathText());
+        path_display_->setAccessibleDescription(model_->getPathText());
+        while (auto *item = breadcrumb_layout_->takeAt(0)) {
+            delete item->widget();
+            delete item;
+        }
+        const auto tab = model_->activeTabId();
+        const auto revision = model_->visibleRevision();
+        const int count = model_->breadcrumbCount();
+        for (int index = 0; index < count; ++index) {
+            if (index > 0) {
+                auto *separator = new QLabel(QStringLiteral("›"), breadcrumb_contents_);
+                separator->setAccessibleName(QStringLiteral("Path separator"));
+                breadcrumb_layout_->addWidget(separator);
+                separator->show();
+            }
+            const QString target = model_->breadcrumbPath(index);
+            auto *button = command_button(QStringLiteral("pathBreadcrumb"), model_->breadcrumbLabel(index), target, QStringLiteral("Navigate to %1").arg(target), breadcrumb_contents_);
+            button->setFocusPolicy(Qt::StrongFocus);
+            button->setAccessibleDescription(target);
+            button->setProperty("pathPending", target == pending_target_);
+            breadcrumb_layout_->addWidget(button);
+            button->show();
+            QObject::connect(button, &QToolButton::clicked, model_, [this, index, tab, revision, target] {
+                model_->navigateBreadcrumb(index, tab, revision);
+                record_pending(target);
+            });
+        }
+        if (!pending_target_.isEmpty()) {
+            auto *pending = new QLabel(QStringLiteral("Opening %1…").arg(pending_target_), breadcrumb_contents_);
+            pending->setObjectName(QStringLiteral("pathPendingTarget"));
+            pending->setAccessibleName(QStringLiteral("Pending path: %1").arg(pending_target_));
+            breadcrumb_layout_->addWidget(pending);
+            pending->show();
+        }
+        breadcrumb_contents_->adjustSize();
+        breadcrumb_scroll_->horizontalScrollBar()->setValue(breadcrumb_scroll_->horizontalScrollBar()->maximum());
+        expand_button_->setEnabled(count > 1);
+    }
     void apply_preview_height() {
         if (preview_splitter_->height() <= 0)
             return;
@@ -1790,7 +2186,29 @@ class Browser final : public QWidget {
     }
     FolderItemsListModel *model_;
     FolderPane *folder_;
+    QWidget *path_display_ = nullptr;
+    QHBoxLayout *path_row_layout_ = nullptr;
+    QScrollArea *breadcrumb_scroll_ = nullptr;
+    QWidget *breadcrumb_contents_ = nullptr;
+    QHBoxLayout *breadcrumb_layout_ = nullptr;
+    QToolButton *expand_button_ = nullptr;
+    QToolButton *edit_button_ = nullptr;
+    bool breadcrumb_rebuild_pending_ = false;
     PathEditControl *path_ = nullptr;
+    QWidget *columns_panel_ = nullptr;
+    QHBoxLayout *column_layout_ = nullptr;
+    QPropertyAnimation column_animation_;
+    QList<QListWidget *> visible_column_lists_;
+    bool columns_expanded_ = false;
+    bool column_rebuild_pending_ = false;
+    int visible_column_first_ = -1;
+    int visible_column_count_ = 0;
+    std::uint64_t column_generation_ = 0;
+    std::uint64_t column_tab_ = 0;
+    std::uint64_t column_path_revision_ = 0;
+    QString column_path_;
+    QString pending_source_;
+    QString pending_target_;
     ThinSplitter *preview_splitter_;
     PreviewPane *preview_;
     int chosen_preview_height_ = 0;
