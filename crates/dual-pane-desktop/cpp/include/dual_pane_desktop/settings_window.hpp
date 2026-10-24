@@ -933,8 +933,66 @@ class SettingsWindow final : public QDialog {
         rebuild_file_association_detail();
         sync_file_association_status();
     }
+    // Updates the existing Normal/Comprehensive toggles and default button in
+    // place for the already-built detail panel, instead of tearing it down.
+    // Rebuilding on every toggle click destroyed the very ToggleSwitch that
+    // was mid-click (the revision signal fires synchronously, inside the
+    // click), which cost focus and made the toggles feel unreliable — the
+    // same failure sync_context_menus() already avoids for the Context
+    // Menus tab. Returns false when the panel must be rebuilt instead
+    // (nothing built yet, a different type selected, or the candidate list
+    // changed shape).
+    bool sync_file_association_detail() {
+        if (!bridge_ || !file_association_types_ || !file_association_default_label_)
+            return false;
+        const int type_index = file_association_types_->currentRow();
+        if (type_index < 0 || type_index != file_association_detail_row_)
+            return false;
+        const auto count = static_cast<std::size_t>(bridge_->fileAssociationCandidateCount(type_index));
+        if (count != file_association_normal_toggles_.size() || count != file_association_comprehensive_toggles_.size() || count != file_association_default_buttons_.size())
+            return false;
+        const QString kind = bridge_->fileAssociationTypeKind(type_index);
+        QString default_name = QStringLiteral("None reported by macOS");
+        for (std::size_t app = 0; app < count; ++app) {
+            if (bridge_->fileAssociationCandidateDefault(type_index, static_cast<int>(app))) {
+                default_name = bridge_->fileAssociationCandidateName(type_index, static_cast<int>(app));
+                break;
+            }
+        }
+        file_association_default_label_->setText(QStringLiteral("Current macOS default: ") + default_name);
+        file_association_default_label_->setAccessibleName(file_association_default_label_->text());
+        for (std::size_t app = 0; app < count; ++app) {
+            auto *normal = file_association_normal_toggles_.at(app).data();
+            auto *comprehensive = file_association_comprehensive_toggles_.at(app).data();
+            auto *default_button = file_association_default_buttons_.at(app).data();
+            if (!normal || !comprehensive || !default_button)
+                return false;
+            const int index = static_cast<int>(app);
+            const QString name = bridge_->fileAssociationCandidateName(type_index, index);
+            const bool available = bridge_->fileAssociationCandidateAvailable(type_index, index);
+            const bool is_default = bridge_->fileAssociationCandidateDefault(type_index, index);
+            {
+                const QSignalBlocker block(normal);
+                normal->setChecked(bridge_->fileAssociationCandidateNormal(type_index, index));
+                normal->setEnabled(available || normal->isChecked());
+            }
+            {
+                const QSignalBlocker block(comprehensive);
+                comprehensive->setChecked(bridge_->fileAssociationCandidateComprehensive(type_index, index));
+                comprehensive->setEnabled(available || comprehensive->isChecked());
+            }
+            default_button->setText(is_default ? QStringLiteral("Current Default") : QStringLiteral("Set as Default…"));
+            default_button->setAccessibleName(is_default ? name + QStringLiteral(" is the current default") : QStringLiteral("Set ") + name + QStringLiteral(" as Default for ") + kind);
+            default_button->setEnabled(available && !is_default && !bridge_->getFileAssociationsPending());
+            QObject::disconnect(default_button, &QPushButton::clicked, this, nullptr);
+            QObject::connect(default_button, &QPushButton::clicked, this, [this, type_index, index, name, kind, default_name] { confirm_default_application(type_index, index, name, kind, default_name); });
+        }
+        return true;
+    }
     void rebuild_file_association_detail() {
         if (!file_association_detail_layout_)
+            return;
+        if (sync_file_association_detail())
             return;
         while (auto *item = file_association_detail_layout_->takeAt(0)) {
             if (auto *widget = item->widget()) {
@@ -943,7 +1001,12 @@ class SettingsWindow final : public QDialog {
             }
             delete item;
         }
+        file_association_default_label_.clear();
+        file_association_normal_toggles_.clear();
+        file_association_comprehensive_toggles_.clear();
+        file_association_default_buttons_.clear();
         const int type_index = file_association_types_ ? file_association_types_->currentRow() : -1;
+        file_association_detail_row_ = type_index;
         if (!bridge_ || type_index < 0) {
             auto *empty = new QLabel(bridge_ && bridge_->getFileAssociationsPending() ? QStringLiteral("Identifying file types and applications…") : QStringLiteral("No file types are available. Open a folder containing files or choose Add File Type… with a sample file."), file_association_detail_);
             empty->setWordWrap(true);
@@ -974,6 +1037,7 @@ class SettingsWindow final : public QDialog {
         current_default->setObjectName(QStringLiteral("fileAssociationDefault"));
         current_default->setAccessibleName(current_default->text());
         file_association_detail_layout_->addWidget(current_default);
+        file_association_default_label_ = current_default;
         auto *header = new QLabel(QStringLiteral("Applications                         Normal       Comprehensive       Default"), file_association_detail_);
         header->setObjectName(QStringLiteral("fileAssociationApplicationsHeader"));
         file_association_detail_layout_->addWidget(header);
@@ -1001,6 +1065,10 @@ class SettingsWindow final : public QDialog {
                 choice->setEnabled(available || checked);
                 QObject::connect(choice, &QCheckBox::toggled, this, [this, type_index, app, menu_kind](bool selected) { if (bridge_) bridge_->changeFileAssociationSelection(type_index, app, menu_kind, selected); });
                 cells->addWidget(choice);
+                if (menu_kind == 0)
+                    file_association_normal_toggles_.emplace_back(choice);
+                else
+                    file_association_comprehensive_toggles_.emplace_back(choice);
             };
             add_choice(0, bridge_->fileAssociationCandidateNormal(type_index, app));
             add_choice(1, bridge_->fileAssociationCandidateComprehensive(type_index, app));
@@ -1010,6 +1078,7 @@ class SettingsWindow final : public QDialog {
             make_default->setEnabled(available && !bridge_->fileAssociationCandidateDefault(type_index, app) && !bridge_->getFileAssociationsPending());
             QObject::connect(make_default, &QPushButton::clicked, this, [this, type_index, app, name, kind, default_name] { confirm_default_application(type_index, app, name, kind, default_name); });
             cells->addWidget(make_default);
+            file_association_default_buttons_.emplace_back(make_default);
             file_association_detail_layout_->addWidget(row);
         }
         if (count == 0) {
@@ -1098,6 +1167,11 @@ class SettingsWindow final : public QDialog {
     QVBoxLayout *file_association_detail_layout_ = nullptr;
     QLabel *file_association_status_ = nullptr;
     QString pending_association_focus_;
+    int file_association_detail_row_ = -1;
+    QPointer<QLabel> file_association_default_label_;
+    std::vector<QPointer<ToggleSwitch>> file_association_normal_toggles_;
+    std::vector<QPointer<ToggleSwitch>> file_association_comprehensive_toggles_;
+    std::vector<QPointer<QPushButton>> file_association_default_buttons_;
 };
 
 class SettingsWindowController final : public QObject {
