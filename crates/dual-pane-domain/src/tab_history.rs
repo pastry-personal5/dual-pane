@@ -57,6 +57,16 @@ impl VisitState {
         entries.iter().position(|entry| entry.name() == cursor)
     }
 
+    /// Restores the keyboard cursor to a surviving row after an operation
+    /// removes the row it pointed at. This does not change selection or the
+    /// range anchor.
+    pub fn restore_cursor(&mut self, entries: &[Entry], row: usize) -> bool {
+        let Some(entry) = entries.get(row) else { return false };
+        let changed = self.cursor.as_ref() != Some(entry.name());
+        self.cursor = Some(entry.name().clone());
+        changed
+    }
+
     /// A plain click or movement: selects only `name` and makes it the cursor
     /// and range anchor. Reports whether anything changed, including an anchor
     /// that was missing.

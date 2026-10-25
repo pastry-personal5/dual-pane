@@ -287,8 +287,10 @@ class FolderItemsList final : public QTreeView {
                                                                                                                                                                                                                  if (quick_look_failure_handler_)
                                                                                                                                                                                                                      quick_look_failure_handler_(); }, [this](QuickLookGesture::Release release) {
                                                                                                                                                                                                                  stop_quick_look_timer();
-                                                                                                                                                                                                                 if (release == QuickLookGesture::Release::Dismiss)
-                                                                                                                                                                                                                     quick_look_->dismiss(); }, [this] { stop_quick_look_timer(); }) {
+                                                                                                                                                                                                                 if (release == QuickLookGesture::Release::Dismiss) {
+                                                                                                                                                                                                                     quick_look_->dismiss();
+                                                                                                                                                                                                                     restore_focus_after_held_preview();
+                                                                                                                                                                                                                 } }, [this] { stop_quick_look_timer(); }) {
         setModel(model_);
         setItemDelegate(icons_);
         auto folder_font = font();
@@ -590,8 +592,10 @@ class FolderItemsList final : public QTreeView {
         const auto release = quick_look_gesture_.released(quick_look_gesture_.generation(), event->isAutoRepeat());
         if (release != QuickLookGesture::Release::Ignored)
             stop_quick_look_timer();
-        if (release == QuickLookGesture::Release::Dismiss)
+        if (release == QuickLookGesture::Release::Dismiss) {
             quick_look_->dismiss();
+            restore_focus_after_held_preview();
+        }
     }
     void focusOutEvent(QFocusEvent *event) override {
         suppress_remapped_context_ = false;
@@ -735,6 +739,22 @@ class FolderItemsList final : public QTreeView {
             quick_look_timer_->deleteLater();
             quick_look_timer_ = nullptr;
         }
+    }
+    void restore_focus_after_held_preview() {
+        const auto generation = quick_look_gesture_.generation();
+        QTimer::singleShot(0, this, [this, generation] {
+            // The AppKit key-up monitor runs before Quick Look finishes handling
+            // the event. Return focus after its panel has finished closing.
+            if (quick_look_gesture_.generation() != generation || quick_look_gesture_.active() || QApplication::applicationState() != Qt::ApplicationActive)
+                return;
+            QWidget *workspace = window();
+            if (QWidget *active = QApplication::activeWindow(); active != nullptr && active != workspace)
+                return;
+            if (QWidget *focused = QApplication::focusWidget(); focused != nullptr && focused != this && focused->window() == workspace)
+                return;
+            workspace->activateWindow();
+            focusList();
+        });
     }
     auto eventFilter(QObject *watched, QEvent *event) -> bool override {
         if ((watched == verticalScrollBar() || watched == horizontalScrollBar()) && event->type() == QEvent::MouseButtonPress) {

@@ -64,6 +64,7 @@ pub struct Workspace {
     operations: OperationCoordinator,
     /// The Browser and tab each running job started from.
     operation_origins: HashMap<OperationId, (BrowserSide, TabId)>,
+    operation_trash_cursors: HashMap<OperationId, PendingTrashCursor>,
     transfers: HashMap<TransferId, CapturedTransfer>,
     current_transfer: Option<(TransferId, ClipboardGeneration)>,
     pending_publications: HashMap<ClipboardRequestId, TransferId>,
@@ -95,6 +96,9 @@ pub struct Workspace {
     /// The Item each tab should select once a refreshed listing shows it,
     /// after a successful Rename or New Folder or an entered file path.
     pending_selections: HashMap<(BrowserSide, TabId), PendingSelection>,
+    /// Cursor row to restore in the origin tab if Move to Trash removes its
+    /// current item. The row is clamped to the refreshed listing's last row.
+    pending_trash_cursors: HashMap<(BrowserSide, TabId), PendingTrashCursor>,
     /// The command-line target waiting for the launch session restore.
     launch_target: Option<LaunchTarget>,
     /// The latest link activation waiting for its target to resolve.
@@ -147,6 +151,11 @@ struct LaunchTarget {
 struct PendingSelection {
     folder: Location,
     name: EntryName,
+}
+#[derive(Debug, Clone)]
+struct PendingTrashCursor {
+    folder: Location,
+    row: usize,
 }
 #[derive(Debug)]
 struct PendingPaste {
@@ -244,7 +253,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, association_files: HashMap::new(), association_catalog: HashMap::new(), observed_associations: HashMap::new(), association_observations: HashMap::new(), association_error: None, association_revision: 0, association_pending: 0, next_association_request: 0, next_open_with_token: 0, current_drag: None, pending_drops: HashMap::new(), next_drag: 0, next_drop_request: 0, journal_available: true, pending_selections: HashMap::new(), launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), operation_trash_cursors: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, association_files: HashMap::new(), association_catalog: HashMap::new(), observed_associations: HashMap::new(), association_observations: HashMap::new(), association_error: None, association_revision: 0, association_pending: 0, next_association_request: 0, next_open_with_token: 0, current_drag: None, pending_drops: HashMap::new(), next_drag: 0, next_drop_request: 0, journal_available: true, pending_selections: HashMap::new(), pending_trash_cursors: HashMap::new(), launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn is_quitting(&self) -> bool {
         self.quitting
@@ -1248,11 +1257,19 @@ impl Workspace {
         if self.quitting {
             return Transition::default();
         }
+        let track_trash_cursor = kind == OperationKind::MoveToTrash;
         let command = kind.command();
         match self.operation_availability(browser, tab, kind) {
             Ok(intent) => {
                 let (id, effects) = self.operations.start(intent);
                 self.operation_origins.insert(id, (browser, tab));
+                if track_trash_cursor
+                    && let Some(state) = self.tab(browser, tab)
+                    && let (Some(items), Some(visit)) = (&state.folder_items, state.history.current())
+                    && let Some(row) = visit.state().cursor_row(&items.entries)
+                {
+                    self.operation_trash_cursors.insert(id, PendingTrashCursor { folder: items.location.clone(), row });
+                }
                 self.operation_output(id, effects)
             }
             Err(reason) => Transition::output(Output::OperationRejected { browser, tab, command, reason }),
@@ -1325,6 +1342,13 @@ impl Workspace {
             return transition;
         }
         let Some(job) = self.operations.job(id).cloned() else { return transition };
+        let trash_cursor = self.operation_trash_cursors.remove(&id);
+        if *job.intent().kind() == OperationKind::MoveToTrash
+            && job.progress().completed > 0
+            && let (Some((browser, tab)), Some(cursor)) = (origin, trash_cursor)
+        {
+            self.pending_trash_cursors.insert((browser, tab), cursor);
+        }
         if outcome == OperationOutcome::Succeeded
             && let OperationKind::Rename { to: name } | OperationKind::NewFolder { name } = job.intent().kind()
             && let Some((browser, tab)) = origin
@@ -2895,6 +2919,7 @@ impl Workspace {
     }
     fn loaded(&mut self, browser: BrowserSide, tab: TabId, token: RequestToken, entries: Arc<[Entry]>, changes: Option<Vec<RowChange>>) -> Transition {
         let Some(pending) = self.take_pending(browser, tab, token) else { return Transition::default() };
+        let trash_recovery = self.pending_trash_cursors.remove(&(browser, tab));
         let Some(state) = self.tab_mut(browser, tab) else { return Transition::default() };
         let previous_location = state.folder_items.as_ref().map(|items| items.location.clone());
         let different_folder = state.history.current().is_none_or(|visit| visit.location() != &pending.location);
@@ -2911,6 +2936,13 @@ impl Workspace {
         let Some(visit) = state.history.current_mut() else { return Transition::default() };
         if state.filter_text.is_empty() {
             visit.state_mut().reconcile(&entries);
+        }
+        if let Some(recovery) = trash_recovery
+            && recovery.folder == pending.location
+            && visit.state().cursor_row(&entries).is_none()
+            && !entries.is_empty()
+        {
+            visit.state_mut().restore_cursor(&entries, recovery.row.min(entries.len() - 1));
         }
         // A same-folder reload keeps the worker's row change so the view keeps
         // its rows and scroll position. A change computed against anything but

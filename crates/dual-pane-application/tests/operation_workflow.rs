@@ -303,6 +303,21 @@ fn failure_preserves_item_and_kind_for_terminal_reporting() {
 }
 
 #[test]
+fn moving_the_cursor_item_to_trash_restores_it_at_the_nearest_surviving_row() {
+    let (mut ws, tab) = setup_copy(vec![item("a", EntryKind::File), item("b", EntryKind::File), item("c", EntryKind::File)]);
+    select(&mut ws, tab, 1, "b");
+    let (id, work) = start(&mut ws, BrowserSide::Left, tab, OperationKind::MoveToTrash);
+    let (_, generation) = scan(&work);
+    let planned = PlannedItem { source: path("from").join(&name("b")), destination: None, kind: EntryKind::File };
+    let execution = scanned(&mut ws, id, generation, vec![planned]);
+    let (_, generation, _, _) = execute(&execution);
+    let finished = ws.handle(Event::OperationStepped { id, generation, result: StepResult::Finished { progress: progress(1, 0, 0) } }.into());
+    let (loaded_tab, token) = read(&finished.work);
+    let refreshed = ws.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab: loaded_tab, token, entries: Arc::from(vec![item("a", EntryKind::File), item("c", EntryKind::File)]), changes: None }.into());
+    assert!(refreshed.outputs.contains(&Output::SelectionChanged { browser: BrowserSide::Left, tab, selection: Default::default(), row: Some(1) }));
+}
+
+#[test]
 fn scan_plan_cannot_reenter_a_directory_after_leaving_its_subtree() {
     let (mut ws, tab) = setup_copy(vec![item("root", EntryKind::Directory)]);
     select(&mut ws, tab, 0, "root");
