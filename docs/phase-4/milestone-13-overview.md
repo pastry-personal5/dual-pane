@@ -53,6 +53,9 @@ Out of scope:
 - [x] Qt-free tests cover initially empty per-type/menu choices, independent edits and clearing, unavailable saved-app removal, both setup-action visibility settings and dispatch, multi-file eligibility and rank, exact target capture, one-use and stale dispatch, asynchronous effect-result routing, and settings projections. Storage tests cover schema migration from every supported version including version 11's new action rows, fresh and customized round trips, malformed rows, rollback, relaunch, and reset. Native checks use disposable profiles and temporary files for type and app discovery, flat-menu behavior, setup navigation, responsiveness, and accessibility.
 - [ ] Guided macOS acceptance verifies app names and ranking, both menus and Browsers, same-type multi-selection, type discovery and persistence, confirmation wording, external default visibility, and success and refusal of a default change in a disposable macOS account or another controlled environment. Automated checks never change the real user's Launch Services defaults; record any manual default change and restoration explicitly.
 - [x] `make check` and the affected isolated native scripts pass after implementation. Record exact results and check every item before marking P4-M13 Done.
+- [x] Repair the File Associations detail pane: use aligned application columns without row-shaped artifacts, distinguish application paths, move the page explanation behind a title-row information button, and present delayed loading with a minimum visible duration. Verify the native Settings and File Associations checks and the full gate.
+- [x] Keep exactly one Clear Open With Choices and Remove Type action row after repeated File Associations detail rebuilds.
+- [x] Increase the File Associations page title and selected type heading by four points without changing the surrounding typography.
 
 ## Automated acceptance evidence — 2026-10-23
 
@@ -60,6 +63,13 @@ Out of scope:
 - `scripts/check-settings-window.sh`, `scripts/check-folder-items-context-menu.sh`, and `scripts/check-file-associations.sh` passed. The File Associations check used a disposable profile and temporary text files and covered native type discovery, non-blocking empty choices, Configure Open With navigation, and accessible controls. On this macOS profile Launch Services reported no candidate app for the fixture, so the check explicitly verified that safe empty state; candidate-dependent flat-row, independent-menu, and same-type multi-selection behavior remains covered by the application tests and runs in the native check whenever macOS supplies a candidate.
 - Application and storage tests cover sparse preferences, unavailable-app removal, rank-preserving common apps, one-use and stale menu dispatch, exact source and resolved-target capture, asynchronous failure/refresh routing, migration through schema 12, transactional rollback, relaunch, malformed data, and reset.
 - Automation did not invoke Open With or Set as Default and did not change the real user's Launch Services defaults. The guided macOS acceptance below remains open, so P4-M13 remains Active.
+
+## Detail-pane repair evidence — 2026-10-25
+
+- `make fmt`, `scripts/check-settings-window.sh`, `scripts/check-file-associations.sh`, and `make check` passed after replacing the independently laid-out application rows with one grid, adding the information popup and delayed busy presentation, and extending the native alignment and accessibility assertions.
+- Launch Services supplied the temporary text fixture's content type but no application candidate on this profile. The native check therefore verified the aligned empty table, information control, indeterminate loading indicator, and absence of row frames; candidate-row alignment and distinct rendered path color run whenever macOS supplies a candidate.
+- The follow-up native check rebuilt the detail pane and verified that exactly one **Clear Open With Choices…** and one **Remove Type…** button remain. `make check` and `git diff --check` passed after the ownership fix.
+- The native Settings checks verified that the page title and selected type heading are each four points larger than their inherited fonts. `make check` and `git diff --check` passed after the typography update.
 
 ## Guided macOS acceptance
 

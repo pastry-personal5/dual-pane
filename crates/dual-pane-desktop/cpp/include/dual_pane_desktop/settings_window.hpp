@@ -202,7 +202,10 @@ class SettingsWindow final : public QDialog {
             QObject::connect(bridge_, &WorkspaceBridge::contextMenusRevisionChanged, this, [this] { sync_context_menus(); });
             QObject::connect(bridge_, &WorkspaceBridge::contextMenuRejectionRevisionChanged, this, [this] { QTimer::singleShot(0, this, [this] { show_context_menu_feedback(bridge_->contextMenuRejectionText()); }); });
             QObject::connect(bridge_, &WorkspaceBridge::fileAssociationsRevisionChanged, this, [this] { rebuild_file_associations(); });
-            QObject::connect(bridge_, &WorkspaceBridge::fileAssociationsPendingChanged, this, [this] { sync_file_association_status(); });
+            QObject::connect(bridge_, &WorkspaceBridge::fileAssociationsPendingChanged, this, [this] {
+                sync_file_association_status();
+                sync_file_association_loading();
+            });
             QObject::connect(bridge_, &WorkspaceBridge::fileAssociationsErrorChanged, this, [this] { sync_file_association_status(); });
         }
     }
@@ -849,13 +852,19 @@ class SettingsWindow final : public QDialog {
         auto *layout = new QVBoxLayout(page);
         layout->setContentsMargins(16, 16, 16, 16);
         layout->setSpacing(10);
+        auto *title_row = new QHBoxLayout();
+        title_row->setContentsMargins(0, 0, 0, 0);
+        title_row->setSpacing(8);
         auto *title = new QLabel(QStringLiteral("File Associations"), page);
         title->setObjectName(QStringLiteral("settingsPageHeading"));
-        layout->addWidget(title);
-        auto *description = new QLabel(QStringLiteral("Choose which macOS applications appear as Open With actions in each Folder Items Context Menu. These choices are separate from the macOS default application."), page);
-        description->setWordWrap(true);
-        description->setAccessibleName(description->text());
-        layout->addWidget(description);
+        auto title_font = title->font();
+        title_font.setPointSize(title_font.pointSize() + 4);
+        title->setFont(title_font);
+        auto *information = info_button(page, QStringLiteral("File Associations"), QStringLiteral("Choose which macOS applications appear as Open With actions in each Folder Items Context Menu. These choices are separate from the macOS default application."));
+        title_row->addWidget(title);
+        title_row->addWidget(information, 0, Qt::AlignVCenter);
+        title_row->addStretch();
+        layout->addLayout(title_row);
         auto *tools = new QHBoxLayout();
         auto *add = new QPushButton(QStringLiteral("Add File Type…"), page);
         add->setObjectName(QStringLiteral("fileAssociationAddType"));
@@ -881,17 +890,40 @@ class SettingsWindow final : public QDialog {
         file_association_types_->setObjectName(QStringLiteral("fileAssociationTypeList"));
         file_association_types_->setAccessibleName(QStringLiteral("File Types"));
         file_association_types_->setMinimumWidth(340);
-        file_association_detail_scroll_ = new QScrollArea(split);
+        file_association_detail_stack_ = new QStackedWidget(split);
+        file_association_detail_stack_->setObjectName(QStringLiteral("fileAssociationDetailStack"));
+        file_association_detail_scroll_ = new QScrollArea(file_association_detail_stack_);
         file_association_detail_scroll_->setWidgetResizable(true);
         file_association_detail_scroll_->setObjectName(QStringLiteral("fileAssociationDetailScroll"));
+        file_association_detail_scroll_->setFrameShape(QFrame::NoFrame);
         file_association_detail_ = new QWidget(file_association_detail_scroll_);
         file_association_detail_->setObjectName(QStringLiteral("fileAssociationDetail"));
         file_association_detail_layout_ = new QVBoxLayout(file_association_detail_);
         file_association_detail_layout_->setContentsMargins(12, 0, 0, 0);
         file_association_detail_layout_->setSpacing(10);
         file_association_detail_scroll_->setWidget(file_association_detail_);
+        file_association_loading_ = new QWidget(file_association_detail_stack_);
+        file_association_loading_->setObjectName(QStringLiteral("fileAssociationLoading"));
+        file_association_loading_->setAccessibleName(QStringLiteral("Waiting for File Associations"));
+        auto *loading_layout = new QVBoxLayout(file_association_loading_);
+        loading_layout->setContentsMargins(12, 0, 0, 0);
+        loading_layout->addStretch();
+        auto *waiting = new QLabel(QStringLiteral("Waiting…"), file_association_loading_);
+        waiting->setObjectName(QStringLiteral("fileAssociationWaitingText"));
+        waiting->setAlignment(Qt::AlignCenter);
+        loading_layout->addWidget(waiting);
+        auto *loading_indicator = new QProgressBar(file_association_loading_);
+        loading_indicator->setObjectName(QStringLiteral("fileAssociationLoadingIndicator"));
+        loading_indicator->setAccessibleName(QStringLiteral("Loading File Associations"));
+        loading_indicator->setRange(0, 0);
+        loading_indicator->setTextVisible(false);
+        loading_indicator->setFixedWidth(180);
+        loading_layout->addWidget(loading_indicator, 0, Qt::AlignHCenter);
+        loading_layout->addStretch();
+        file_association_detail_stack_->addWidget(file_association_detail_scroll_);
+        file_association_detail_stack_->addWidget(file_association_loading_);
         split->addWidget(file_association_types_);
-        split->addWidget(file_association_detail_scroll_);
+        split->addWidget(file_association_detail_stack_);
         split->setStretchFactor(1, 1);
         layout->addWidget(split, 1);
         file_association_status_ = new QLabel(page);
@@ -899,9 +931,37 @@ class SettingsWindow final : public QDialog {
         file_association_status_->setAccessibleName(QStringLiteral("File Associations Status"));
         file_association_status_->setWordWrap(true);
         layout->addWidget(file_association_status_);
+        file_association_loading_reveal_ = new QTimer(page);
+        file_association_loading_reveal_->setSingleShot(true);
+        file_association_loading_minimum_ = new QTimer(page);
+        file_association_loading_minimum_->setSingleShot(true);
+        QObject::connect(file_association_loading_reveal_, &QTimer::timeout, this, [this] {
+            if (!bridge_ || !bridge_->getFileAssociationsPending() || !file_association_detail_stack_)
+                return;
+            file_association_loading_visible_ = true;
+            file_association_detail_stack_->setCurrentWidget(file_association_loading_);
+            file_association_loading_minimum_->start(file_association_loading_minimum_milliseconds);
+        });
+        QObject::connect(file_association_loading_minimum_, &QTimer::timeout, this, [this] { sync_file_association_loading(); });
         QObject::connect(file_association_types_, &QListWidget::currentRowChanged, this, [this] { rebuild_file_association_detail(); });
         rebuild_file_associations();
+        sync_file_association_loading();
         return page;
+    }
+    void sync_file_association_loading() {
+        if (!file_association_detail_stack_ || !file_association_loading_reveal_ || !file_association_loading_minimum_)
+            return;
+        const bool pending = bridge_ && bridge_->getFileAssociationsPending();
+        if (pending) {
+            if (!file_association_loading_visible_ && !file_association_loading_reveal_->isActive())
+                file_association_loading_reveal_->start(file_association_loading_reveal_milliseconds);
+            return;
+        }
+        file_association_loading_reveal_->stop();
+        if (file_association_loading_visible_ && file_association_loading_minimum_->isActive())
+            return;
+        file_association_loading_visible_ = false;
+        file_association_detail_stack_->setCurrentWidget(file_association_detail_scroll_);
     }
     void rebuild_file_associations() {
         if (!file_association_types_ || !bridge_)
@@ -949,7 +1009,7 @@ class SettingsWindow final : public QDialog {
         if (type_index < 0 || type_index != file_association_detail_row_)
             return false;
         const auto count = static_cast<std::size_t>(bridge_->fileAssociationCandidateCount(type_index));
-        if (count != file_association_normal_toggles_.size() || count != file_association_comprehensive_toggles_.size() || count != file_association_default_buttons_.size())
+        if (count != file_association_name_labels_.size() || count != file_association_path_labels_.size() || count != file_association_normal_toggles_.size() || count != file_association_comprehensive_toggles_.size() || count != file_association_default_buttons_.size())
             return false;
         const QString kind = bridge_->fileAssociationTypeKind(type_index);
         QString default_name = QStringLiteral("None reported by macOS");
@@ -965,19 +1025,28 @@ class SettingsWindow final : public QDialog {
             auto *normal = file_association_normal_toggles_.at(app).data();
             auto *comprehensive = file_association_comprehensive_toggles_.at(app).data();
             auto *default_button = file_association_default_buttons_.at(app).data();
-            if (!normal || !comprehensive || !default_button)
+            auto *name_label = file_association_name_labels_.at(app).data();
+            auto *path_label = file_association_path_labels_.at(app).data();
+            if (!normal || !comprehensive || !default_button || !name_label || !path_label)
                 return false;
             const int index = static_cast<int>(app);
             const QString name = bridge_->fileAssociationCandidateName(type_index, index);
+            const QString location = bridge_->fileAssociationCandidateLocation(type_index, index);
             const bool available = bridge_->fileAssociationCandidateAvailable(type_index, index);
             const bool is_default = bridge_->fileAssociationCandidateDefault(type_index, index);
+            name_label->setText(name + (available ? QString() : QStringLiteral(" — unavailable")));
+            name_label->setAccessibleName(name + (available ? QString() : QStringLiteral(", unavailable")));
+            path_label->setText(location);
+            path_label->setAccessibleName(QStringLiteral("Application path: ") + location);
             {
                 const QSignalBlocker block(normal);
+                normal->setAccessibleName(QStringLiteral("Show Open with ") + name + QStringLiteral(" in Normal Context Menu"));
                 normal->setChecked(bridge_->fileAssociationCandidateNormal(type_index, index));
                 normal->setEnabled(available || normal->isChecked());
             }
             {
                 const QSignalBlocker block(comprehensive);
+                comprehensive->setAccessibleName(QStringLiteral("Show Open with ") + name + QStringLiteral(" in Comprehensive Context Menu"));
                 comprehensive->setChecked(bridge_->fileAssociationCandidateComprehensive(type_index, index));
                 comprehensive->setEnabled(available || comprehensive->isChecked());
             }
@@ -1002,6 +1071,8 @@ class SettingsWindow final : public QDialog {
             delete item;
         }
         file_association_default_label_.clear();
+        file_association_name_labels_.clear();
+        file_association_path_labels_.clear();
         file_association_normal_toggles_.clear();
         file_association_comprehensive_toggles_.clear();
         file_association_default_buttons_.clear();
@@ -1020,6 +1091,9 @@ class SettingsWindow final : public QDialog {
         const QString extension = bridge_->fileAssociationTypeExtension(type_index);
         auto *heading = new QLabel(kind, file_association_detail_);
         heading->setObjectName(QStringLiteral("fileAssociationKind"));
+        auto heading_font = heading->font();
+        heading_font.setPointSize(heading_font.pointSize() + 4);
+        heading->setFont(heading_font);
         file_association_detail_layout_->addWidget(heading);
         auto *identity = new QLabel(QStringLiteral("Content type: ") + identifier + (extension.isEmpty() ? QString() : QStringLiteral("\nPreferred extension: .") + extension), file_association_detail_);
         identity->setObjectName(QStringLiteral("fileAssociationIdentity"));
@@ -1038,33 +1112,52 @@ class SettingsWindow final : public QDialog {
         current_default->setAccessibleName(current_default->text());
         file_association_detail_layout_->addWidget(current_default);
         file_association_default_label_ = current_default;
-        auto *header = new QLabel(QStringLiteral("Applications                         Normal       Comprehensive       Default"), file_association_detail_);
-        header->setObjectName(QStringLiteral("fileAssociationApplicationsHeader"));
-        file_association_detail_layout_->addWidget(header);
+        auto *table = new QWidget(file_association_detail_);
+        table->setObjectName(QStringLiteral("fileAssociationApplicationsTable"));
+        auto *grid = new QGridLayout(table);
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setHorizontalSpacing(16);
+        grid->setVerticalSpacing(10);
+        grid->setColumnStretch(0, 1);
+        grid->setColumnMinimumWidth(0, 260);
+        const std::array<QString, 4> headings = {QStringLiteral("Applications"), QStringLiteral("Normal"), QStringLiteral("Comprehensive"), QStringLiteral("Default")};
+        for (int column = 0; column < static_cast<int>(headings.size()); ++column) {
+            auto *header = new QLabel(headings.at(static_cast<std::size_t>(column)), table);
+            header->setObjectName(QStringLiteral("fileAssociationColumnHeading"));
+            grid->addWidget(header, 0, column, Qt::AlignLeft | Qt::AlignVCenter);
+        }
         const int count = bridge_->fileAssociationCandidateCount(type_index);
         for (int app = 0; app < count; ++app) {
-            auto *row = new QFrame(file_association_detail_);
-            row->setObjectName(QStringLiteral("fileAssociationApplicationRow"));
-            auto *cells = new QHBoxLayout(row);
-            cells->setContentsMargins(8, 6, 8, 6);
-            cells->setSpacing(12);
             const QString name = bridge_->fileAssociationCandidateName(type_index, app);
             const QString location = bridge_->fileAssociationCandidateLocation(type_index, app);
             const bool available = bridge_->fileAssociationCandidateAvailable(type_index, app);
-            auto *app_text = new QLabel(name + (available ? QStringLiteral("\n") : QStringLiteral(" — unavailable\n")) + location, row);
-            app_text->setWordWrap(true);
-            app_text->setMinimumWidth(320);
-            app_text->setAccessibleName(name + (available ? QString() : QStringLiteral(", unavailable")) + QStringLiteral(", ") + location);
-            cells->addWidget(app_text, 1);
-            auto add_choice = [this, row, cells, type_index, app, name, available](int menu_kind, bool checked) {
-                auto *choice = new ToggleSwitch(row);
+            auto *application = new QWidget(table);
+            application->setObjectName(QStringLiteral("fileAssociationApplicationDescription"));
+            auto *application_layout = new QVBoxLayout(application);
+            application_layout->setContentsMargins(0, 0, 0, 0);
+            application_layout->setSpacing(2);
+            auto *name_label = new QLabel(name + (available ? QString() : QStringLiteral(" — unavailable")), application);
+            name_label->setObjectName(QStringLiteral("fileAssociationApplicationName"));
+            name_label->setAccessibleName(name + (available ? QString() : QStringLiteral(", unavailable")));
+            auto *path_label = new QLabel(location, application);
+            path_label->setObjectName(QStringLiteral("fileAssociationApplicationPath"));
+            path_label->setWordWrap(true);
+            path_label->setTextInteractionFlags(Qt::TextSelectableByKeyboard | Qt::TextSelectableByMouse);
+            path_label->setAccessibleName(QStringLiteral("Application path: ") + location);
+            application_layout->addWidget(name_label);
+            application_layout->addWidget(path_label);
+            grid->addWidget(application, app + 1, 0);
+            file_association_name_labels_.emplace_back(name_label);
+            file_association_path_labels_.emplace_back(path_label);
+            auto add_choice = [this, table, grid, type_index, app, name, available](int menu_kind, bool checked) {
+                auto *choice = new ToggleSwitch(table);
                 const QString menu = menu_kind == 0 ? QStringLiteral("Normal") : QStringLiteral("Comprehensive");
                 choice->setObjectName(menu_kind == 0 ? QStringLiteral("fileAssociationNormal") : QStringLiteral("fileAssociationComprehensive"));
                 choice->setAccessibleName(QStringLiteral("Show Open with ") + name + QStringLiteral(" in ") + menu + QStringLiteral(" Context Menu"));
                 choice->setChecked(checked);
                 choice->setEnabled(available || checked);
                 QObject::connect(choice, &QCheckBox::toggled, this, [this, type_index, app, menu_kind](bool selected) { if (bridge_) bridge_->changeFileAssociationSelection(type_index, app, menu_kind, selected); });
-                cells->addWidget(choice);
+                grid->addWidget(choice, app + 1, menu_kind + 1, Qt::AlignLeft | Qt::AlignTop);
                 if (menu_kind == 0)
                     file_association_normal_toggles_.emplace_back(choice);
                 else
@@ -1072,25 +1165,28 @@ class SettingsWindow final : public QDialog {
             };
             add_choice(0, bridge_->fileAssociationCandidateNormal(type_index, app));
             add_choice(1, bridge_->fileAssociationCandidateComprehensive(type_index, app));
-            auto *make_default = new QPushButton(bridge_->fileAssociationCandidateDefault(type_index, app) ? QStringLiteral("Current Default") : QStringLiteral("Set as Default…"), row);
+            auto *make_default = new QPushButton(bridge_->fileAssociationCandidateDefault(type_index, app) ? QStringLiteral("Current Default") : QStringLiteral("Set as Default…"), table);
             make_default->setObjectName(QStringLiteral("fileAssociationSetDefault"));
             make_default->setAccessibleName(bridge_->fileAssociationCandidateDefault(type_index, app) ? name + QStringLiteral(" is the current default") : QStringLiteral("Set ") + name + QStringLiteral(" as Default for ") + kind);
             make_default->setEnabled(available && !bridge_->fileAssociationCandidateDefault(type_index, app) && !bridge_->getFileAssociationsPending());
             QObject::connect(make_default, &QPushButton::clicked, this, [this, type_index, app, name, kind, default_name] { confirm_default_application(type_index, app, name, kind, default_name); });
-            cells->addWidget(make_default);
+            grid->addWidget(make_default, app + 1, 3, Qt::AlignLeft | Qt::AlignTop);
             file_association_default_buttons_.emplace_back(make_default);
-            file_association_detail_layout_->addWidget(row);
         }
+        file_association_detail_layout_->addWidget(table);
         if (count == 0) {
             auto *none = new QLabel(QStringLiteral("macOS reports no available applications for this content type."), file_association_detail_);
             none->setAccessibleName(none->text());
             file_association_detail_layout_->addWidget(none);
         }
-        auto *actions = new QHBoxLayout();
-        auto *clear = new QPushButton(QStringLiteral("Clear Open With Choices…"), file_association_detail_);
+        auto *action_row = new QWidget(file_association_detail_);
+        action_row->setObjectName(QStringLiteral("fileAssociationActions"));
+        auto *actions = new QHBoxLayout(action_row);
+        actions->setContentsMargins(0, 0, 0, 0);
+        auto *clear = new QPushButton(QStringLiteral("Clear Open With Choices…"), action_row);
         clear->setObjectName(QStringLiteral("fileAssociationClear"));
         clear->setAccessibleName(QStringLiteral("Clear Open With Choices for ") + kind);
-        auto *remove = new QPushButton(QStringLiteral("Remove Type…"), file_association_detail_);
+        auto *remove = new QPushButton(QStringLiteral("Remove Type…"), action_row);
         remove->setObjectName(QStringLiteral("fileAssociationRemove"));
         remove->setAccessibleName(QStringLiteral("Remove File Type ") + kind);
         remove->setEnabled(bridge_->fileAssociationTypePinned(type_index));
@@ -1099,7 +1195,7 @@ class SettingsWindow final : public QDialog {
         actions->addWidget(clear);
         actions->addWidget(remove);
         actions->addStretch();
-        file_association_detail_layout_->addLayout(actions);
+        file_association_detail_layout_->addWidget(action_row);
         file_association_detail_layout_->addStretch();
     }
     void confirm_default_application(int type_index, int app_index, const QString &application, const QString &kind, const QString &old_default) {
@@ -1163,15 +1259,24 @@ class SettingsWindow final : public QDialog {
     std::vector<QPointer<QLabel>> context_menu_shortcuts_;
     QListWidget *file_association_types_ = nullptr;
     QScrollArea *file_association_detail_scroll_ = nullptr;
+    QStackedWidget *file_association_detail_stack_ = nullptr;
     QWidget *file_association_detail_ = nullptr;
+    QWidget *file_association_loading_ = nullptr;
     QVBoxLayout *file_association_detail_layout_ = nullptr;
     QLabel *file_association_status_ = nullptr;
+    QTimer *file_association_loading_reveal_ = nullptr;
+    QTimer *file_association_loading_minimum_ = nullptr;
+    bool file_association_loading_visible_ = false;
     QString pending_association_focus_;
     int file_association_detail_row_ = -1;
     QPointer<QLabel> file_association_default_label_;
+    std::vector<QPointer<QLabel>> file_association_name_labels_;
+    std::vector<QPointer<QLabel>> file_association_path_labels_;
     std::vector<QPointer<ToggleSwitch>> file_association_normal_toggles_;
     std::vector<QPointer<ToggleSwitch>> file_association_comprehensive_toggles_;
     std::vector<QPointer<QPushButton>> file_association_default_buttons_;
+    static constexpr int file_association_loading_reveal_milliseconds = 150;
+    static constexpr int file_association_loading_minimum_milliseconds = 500;
 };
 
 class SettingsWindowController final : public QObject {

@@ -1373,6 +1373,57 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
                 finish(false, "File Associations controls lack keyboard or accessible status exposure");
                 return;
             }
+            auto *table = dialog->findChild<QWidget *>(QStringLiteral("fileAssociationApplicationsTable"));
+            auto *detail = dialog->findChild<QWidget *>(QStringLiteral("fileAssociationDetail"));
+            auto *clear = dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationClear"));
+            auto *loading = dialog->findChild<QProgressBar *>(QStringLiteral("fileAssociationLoadingIndicator"));
+            auto *page_title = dialog->findChild<QLabel *>(QStringLiteral("settingsPageHeading"));
+            auto *type_heading = dialog->findChild<QLabel *>(QStringLiteral("fileAssociationKind"));
+            const auto tool_buttons = dialog->findChildren<QToolButton *>();
+            const auto information = std::find_if(tool_buttons.cbegin(), tool_buttons.cend(), [](const QToolButton *button) { return button->accessibleName() == QStringLiteral("File Associations information"); });
+            if (!table || !detail || !clear || !loading || !page_title || !type_heading || loading->minimum() != 0 || loading->maximum() != 0 || information == tool_buttons.cend()) {
+                finish(false, "File Associations table, information control, or waiting indicator is missing");
+                return;
+            }
+            if (page_title->font().pointSize() != page_title->parentWidget()->font().pointSize() + 4 || type_heading->font().pointSize() != type_heading->parentWidget()->font().pointSize() + 4) {
+                finish(false, "File Associations title typography is not four points larger");
+                return;
+            }
+            if (dialog->findChildren<QPushButton *>(QStringLiteral("fileAssociationClear")).size() != 1 || dialog->findChildren<QPushButton *>(QStringLiteral("fileAssociationRemove")).size() != 1) {
+                finish(false, "File Associations detail rebuild duplicated its action buttons");
+                return;
+            }
+            const auto headings = table->findChildren<QLabel *>(QStringLiteral("fileAssociationColumnHeading"));
+            const auto heading_named = [&headings](const QString &text) {
+                const auto found = std::find_if(headings.cbegin(), headings.cend(), [&text](const QLabel *heading) { return heading->text() == text; });
+                return found == headings.cend() ? nullptr : *found;
+            };
+            auto *applications_heading = heading_named(QStringLiteral("Applications"));
+            if (headings.size() != 4 || !applications_heading || applications_heading->mapTo(detail, QPoint()).x() != clear->mapTo(detail, QPoint()).x() || !dialog->findChildren<QFrame *>(QStringLiteral("fileAssociationApplicationRow")).isEmpty()) {
+                finish(false, "File Associations first column is misaligned or still uses row frames");
+                return;
+            }
+            if (state->application >= 0) {
+                auto *name = table->findChild<QLabel *>(QStringLiteral("fileAssociationApplicationName"));
+                auto *path = table->findChild<QLabel *>(QStringLiteral("fileAssociationApplicationPath"));
+                auto *normal = table->findChild<QCheckBox *>(QStringLiteral("fileAssociationNormal"));
+                auto *comprehensive = table->findChild<QCheckBox *>(QStringLiteral("fileAssociationComprehensive"));
+                auto *make_default = table->findChild<QPushButton *>(QStringLiteral("fileAssociationSetDefault"));
+                const auto aligned = [table, &heading_named](const QString &heading, const QWidget *control) { return control && heading_named(heading) && heading_named(heading)->mapTo(table, QPoint()).x() == control->mapTo(table, QPoint()).x(); };
+                if (!name || !path || name->mapTo(table, QPoint()).x() != applications_heading->mapTo(table, QPoint()).x() || path->palette().color(QPalette::WindowText) == name->palette().color(QPalette::WindowText) || !aligned(QStringLiteral("Normal"), normal) || !aligned(QStringLiteral("Comprehensive"), comprehensive) || !aligned(QStringLiteral("Default"), make_default)) {
+                    finish(false, "File Associations application columns or path treatment are inconsistent");
+                    return;
+                }
+            }
+            (*information)->click();
+            QApplication::processEvents();
+            auto *information_popup = (*information)->findChild<QMenu *>(QStringLiteral("settingsInfoMenu"));
+            auto *information_text = information_popup ? information_popup->findChild<QLabel *>(QStringLiteral("settingsInfoText")) : nullptr;
+            if (!information_popup || !information_popup->isVisible() || !information_text || !information_text->text().contains(QStringLiteral("macOS default application"))) {
+                finish(false, "File Associations information control did not show its explanation");
+                return;
+            }
+            information_popup->close();
             dialog->reject();
             if (state->application < 0) {
                 std::cerr << "File associations check: macOS returned no application candidate; verified discovery and the safe empty state.\n";
@@ -1639,6 +1690,15 @@ auto run_settings_window_checks(QApplication &app) -> int {
         if (categories && categories->count() == 4) {
             check(categories->item(0)->text() == QStringLiteral("General") && categories->item(1)->text() == QStringLiteral("Keyboard Shortcuts") && categories->item(2)->text() == QStringLiteral("Context Menus") && categories->item(3)->text() == QStringLiteral("File Associations"), "concise Settings sidebar labels");
             check(categories->font().pixelSize() == 16, "larger Settings sidebar font");
+            const QRect shortcuts_row = categories->visualItemRect(categories->item(1));
+            const QPoint wide_click(categories->viewport()->width() - 6, shortcuts_row.center().y());
+            check(categories->itemAt(wide_click) == categories->item(1), "Settings sidebar categories use nearly the full sidebar width");
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(wide_click), QPointF(categories->viewport()->mapToGlobal(wide_click)), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(categories->viewport(), &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(wide_click), QPointF(categories->viewport()->mapToGlobal(wide_click)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(categories->viewport(), &release);
+            check(categories->currentRow() == 1 && pages->currentIndex() == 1, "Settings sidebar category is clickable at its far edge");
+            categories->setCurrentRow(0);
         }
         check(title_row && heading && heading->text() == QStringLiteral("Settings") && heading->parentWidget() == title_row && notices && reset, "General controls and title row");
         check(macos_items && macos_items->accessibleName() == QStringLiteral("Show macOS metadata and service items") && macos_items->focusPolicy() != Qt::NoFocus, "accessible macOS items control");

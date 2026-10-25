@@ -124,12 +124,19 @@ auto style_sheet() -> QString {
       QWidget#settingsTitleRow { background:%1; border-bottom:1px solid %4; }
       QWidget#settingsSidebar { background:%1; border-right:1px solid %4; }
       QLabel#settingsHeading { background:transparent; color:%3; }
-      QListWidget#settingsCategoryList { background:%1; color:%3; border:0; outline:none; padding:8px; }
+      QListWidget#settingsCategoryList { background:%1; color:%3; border:0; outline:none; padding:8px 4px; }
       QListWidget#settingsCategoryList::item { padding:10px 12px; margin:2px 0; border-radius:4px; }
       QListWidget#settingsCategoryList::item:hover:!selected { background:%11; }
       QListWidget#settingsCategoryList::item:selected { background:%5; color:white; }
       QWidget#settingsContent, QStackedWidget#settingsPages { background:%2; border:0; }
       QWidget#settingsPage { background:%2; color:%3; }
+      QStackedWidget#fileAssociationDetailStack, QScrollArea#fileAssociationDetailScroll, QScrollArea#fileAssociationDetailScroll QWidget#qt_scrollarea_viewport, QWidget#fileAssociationDetail, QWidget#fileAssociationLoading { background:%2; border:0; }
+      QLabel#fileAssociationColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
+      QWidget#fileAssociationApplicationDescription, QWidget#fileAssociationApplicationDescription QLabel { background:transparent; border:0; }
+      QLabel#fileAssociationApplicationPath { color:#9CA5AF; font-size:11px; }
+      QLabel#fileAssociationWaitingText { background:transparent; color:#B7C0CA; }
+      QProgressBar#fileAssociationLoadingIndicator { background:%1; border:1px solid %4; border-radius:3px; min-height:6px; max-height:6px; }
+      QProgressBar#fileAssociationLoadingIndicator::chunk { background:%5; border-radius:2px; }
       QFrame#settingsCard { background:%1; border:1px solid %4; border-radius:6px; }
       QLabel#settingsCardHeading { background:transparent; color:%3; font-size:14px; font-weight:600; }
       QWidget#settingsShortcutPage { background:%2; color:%3; }
