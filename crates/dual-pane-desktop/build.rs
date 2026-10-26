@@ -16,6 +16,7 @@ fn main() {
             .cpp_file("cpp/src/workspace_window.cpp")
             .cpp_file("cpp/src/shortcuts.cpp")
             .cpp_file("cpp/src/toolbar_sidebar.cpp")
+            .cpp_file("cpp/src/sidebar_symbols.mm")
             .cpp_file("cpp/src/desktop_checks.cpp")
             .cpp_file("cpp/src/preview_reader.cpp")
             .cpp_file("cpp/src/native_shell.cpp")

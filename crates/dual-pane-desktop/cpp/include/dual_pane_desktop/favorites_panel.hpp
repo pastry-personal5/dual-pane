@@ -3,6 +3,7 @@
 
 #include "dual-pane-desktop/src/workspace_bridge.cxxqt.h"
 #include "dual_pane_desktop/gui_common.hpp"
+#include "dual_pane_desktop/sidebar_symbols.hpp"
 
 // Qt parent ownership and the compact native composition are explicit here.
 // NOLINTBEGIN(cppcoreguidelines-owning-memory,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,readability-braces-around-statements,readability-identifier-length,readability-isolate-declaration,readability-named-parameter,bugprone-easily-swappable-parameters,modernize-use-trailing-return-type,readability-function-cognitive-complexity,readability-convert-member-functions-to-static,cppcoreguidelines-special-member-functions,readability-implicit-bool-conversion)
@@ -69,13 +70,20 @@ class InlineNameEditor final : public QLineEdit {
 /// context menu, and dragging moves it.
 class FavoriteItemRow final : public QLabel {
   public:
-    FavoriteItemRow(std::int64_t id, const QString &alias, const QString &path, QWidget *parent) : QLabel(alias, parent), id_(id) {
+    FavoriteItemRow(std::int64_t id, const QString &alias, const QString &path, const QString &home, QWidget *parent) : QLabel(alias, parent), id_(id), symbol_(favorite_symbol_image(favorite_symbol_name(path, home))) {
+        if (!symbol_.isNull()) {
+            symbol_hover_ = symbol_.copy();
+            symbol_focus_ = symbol_.copy();
+            tint_symbol(symbol_, inactive_text_color);
+            tint_symbol(symbol_hover_, text_color);
+            tint_symbol(symbol_focus_, active_color);
+        }
         setObjectName(QStringLiteral("favoriteItem"));
         setAccessibleName(alias);
         setAccessibleDescription(path);
         setToolTip(path);
         setFocusPolicy(Qt::TabFocus);
-        setIndent(0);
+        setIndent(22);
         setContentsMargins(favorite_row_horizontal_padding, favorite_row_vertical_padding, favorite_row_horizontal_padding, favorite_row_vertical_padding);
         setMouseTracking(true);
     }
@@ -138,6 +146,15 @@ class FavoriteItemRow final : public QLabel {
             painter.fillRect(rect(), QColor(QString::fromLatin1(hover_color)));
         }
         QLabel::paintEvent(event);
+        if (!symbol_.isNull()) {
+            QPainter painter(this);
+            const QImage *image = &symbol_;
+            if (hasFocus())
+                image = &symbol_focus_;
+            else if (hovered_)
+                image = &symbol_hover_;
+            painter.drawImage(QRect(favorite_row_horizontal_padding, (height() - 16) / 2, 16, 16), *image);
+        }
         if (hasFocus()) {
             QPainter painter(this);
             painter.setPen(QColor(QString::fromLatin1(active_color)));
@@ -146,7 +163,16 @@ class FavoriteItemRow final : public QLabel {
     }
 
   private:
+    static void tint_symbol(QImage &image, const char *color) {
+        QPainter painter(&image);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        painter.fillRect(image.rect(), QColor(QString::fromLatin1(color)));
+    }
+
     std::int64_t id_;
+    QImage symbol_;
+    QImage symbol_hover_;
+    QImage symbol_focus_;
     std::optional<QPoint> press_;
     bool hovered_ = false;
     std::function<void()> on_open_;
@@ -362,11 +388,12 @@ class FavoritesPanel final : public QWidget {
                     auto *holder = new QWidget(box);
                     auto *holder_layout = new QHBoxLayout(holder);
                     holder_layout->setContentsMargins(favorite_row_horizontal_padding, favorite_row_vertical_padding, favorite_row_horizontal_padding, favorite_row_vertical_padding);
+                    holder_layout->addSpacing(22);
                     add_editor(holder_layout, holder, QStringLiteral("favoriteItemAliasEditor"), QStringLiteral("Favorite Item Alias Editor"), alias, [this, item_id](const QString &text) { return bridge_->renameItem(item_id, text); });
                     box_layout->addWidget(holder);
                     continue;
                 }
-                auto *row_widget = new FavoriteItemRow(item_id, alias, bridge_->itemPath(group, item), box);
+                auto *row_widget = new FavoriteItemRow(item_id, alias, bridge_->itemPath(group, item), bridge_->getFavoritesHome(), box);
                 row_widget->setOpenHandler([this, item_id] {
                     bridge_->openItem(item_id);
                     focus_active_list_();

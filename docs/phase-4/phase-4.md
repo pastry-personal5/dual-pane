@@ -22,6 +22,8 @@ The intended feature set is:
 
 Phase 4 supports file Copy between Dual Pane and Finder in both directions. Finder-sourced Paste into Dual Pane is a Copy through the existing safeguarded operation workflow, never a move of Finder's source. This does not export Cut as a Finder move or support drags to or from Finder. Unsupported or malformed clipboard content, and external drag payloads, must not start a Dual Pane operation.
 
+The owner also requested [P4-M15](milestone-15-overview.md), a focused Sidebar Favorite symbol addition, on 2026-10-26 while earlier pointer acceptance remains open.
+
 ## Exit criteria
 
 - Each Browser Tab can show and clear a text-filtered view of its current Folder Items; sort, selection, cursor, count, refresh, and tab switching remain coherent. Selection-based commands capture only explicitly selected visible targets when invoked; a previously captured clipboard intent or running operation keeps its frozen targets.
@@ -130,3 +132,9 @@ Plan: [overview](milestone-13-overview.md), [architecture](milestone-13-architec
 Status: Active
 Goal: Restore Normal and Comprehensive menus for physical macOS secondary gestures while retaining Control-primary drag behavior.
 Plan: [overview](milestone-14-overview.md), [architecture](milestone-14-architecture.md)
+
+### P4-M15: Sidebar Favorite symbols
+
+Status: Done
+Goal: Add built-in Finder-style symbols beside Favorite aliases without changing Favorite behavior.
+Plan: [overview](milestone-15-overview.md)

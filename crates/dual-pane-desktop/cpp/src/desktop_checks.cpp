@@ -2213,6 +2213,19 @@ auto run_application_title_row_checks(QApplication &app) -> int {
         check(close->mapTo(sidebar, QPoint(close->width(), 0)).x() == sidebar->width() - inset, "close button ends where Add Favorite Item Buttons end");
         check(close_box.center().y() == heading_box.center().y() && heading_box.center().y() == (row->height() + favorite_group_margin) / 2.0, "heading and close button center above the first Favorite Group");
         check(close->accessibleName() == QStringLiteral("Application Close Button") && close->toolTip() == QStringLiteral("Quit Dual Pane") && close->focusPolicy() == Qt::NoFocus, "accessible, pointer-only close button");
+        const QString fixture_home = QDir::tempPath() + QStringLiteral("/dual-pane-sidebar-symbol-check");
+        const std::array<std::pair<QString, QString>, 8> symbols = {{{fixture_home, QStringLiteral("house")}, {QStringLiteral("/Applications"), QStringLiteral("square.grid.2x2")}, {fixture_home + QStringLiteral("/Desktop"), QStringLiteral("desktopcomputer")}, {fixture_home + QStringLiteral("/Documents"), QStringLiteral("doc")}, {fixture_home + QStringLiteral("/Documents/Screenshots"), QStringLiteral("camera.viewfinder")}, {fixture_home + QStringLiteral("/Downloads"), QStringLiteral("arrow.down.circle")}, {fixture_home + QStringLiteral("/Pictures"), QStringLiteral("photo")}, {fixture_home + QStringLiteral("/Other"), QStringLiteral("folder")}}};
+        for (const auto &[path, name] : symbols) {
+            check(favorite_symbol_name(path, fixture_home) == name, "Favorite target maps to its Sidebar symbol independently of its alias");
+            const QImage icon = favorite_symbol_image(name);
+            check(!icon.isNull() && icon.width() == 32 && icon.height() == 32 && icon.devicePixelRatio() == 2.0, "macOS renders the Favorite SF Symbol at Retina scale");
+            bool visible = false;
+            for (int y = 0; y < icon.height() && !visible; ++y)
+                for (int x = 0; x < icon.width(); ++x)
+                    visible |= icon.pixelColor(x, y).alpha() > 0;
+            check(visible, "the Favorite SF Symbol contains visible pixels");
+        }
+        check(!favorite_symbol_image(QStringLiteral("dual-pane-missing-symbol")).isNull(), "an unavailable SF Symbol falls back to a folder");
         const QPixmap glyph = close->icon().pixmap(close->iconSize(), 3.0);
         check(glyph.devicePixelRatio() == 3.0 && glyph.width() == close->iconSize().width() * 3, "close glyph has a 3x bitmap");
         check(row->childAt(heading->geometry().center()) == nullptr && row->childAt(close->geometry().center()) == close, "presses on the heading reach the row's window drag");

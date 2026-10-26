@@ -16,6 +16,7 @@ use dual_pane_domain::BrowserSide;
 use crate::browser_session::{BrowserStartup, DRAIN_SLICE, DRAIN_TIME_BUDGET, SHUTDOWN_TIMEOUT, WorkspaceSession};
 use crate::instance::{PendingRequest, Reply, Request, Server};
 use crate::launch_target::LaunchTarget;
+use crate::native_location::path_from_location;
 use crate::operation_journal::{Journal, journal_path};
 use crate::operation_lane::{STEP_BUDGET, Services};
 use crate::operation_step::NativeFileSystem;
@@ -81,6 +82,7 @@ pub mod ffi {
         /// 0 for the Left Browser, 1 for the Right Browser.
         #[qproperty(i32, active_browser, cxx_name = "activeBrowser", READ, NOTIFY)]
         #[qproperty(bool, favorites_ready, cxx_name = "favoritesReady", READ, NOTIFY)]
+        #[qproperty(QString, favorites_home, cxx_name = "favoritesHome", READ, NOTIFY)]
         #[qproperty(i32, favorites_revision, cxx_name = "favoritesRevision", READ, NOTIFY)]
         #[qproperty(i32, notices_revision, cxx_name = "noticesRevision", READ, NOTIFY)]
         #[qproperty(i32, notices_open_requests, cxx_name = "noticesOpenRequests", READ, NOTIFY)]
@@ -304,6 +306,7 @@ pub(crate) fn revision(value: u64) -> i32 {
 pub struct WorkspaceBridgeRust {
     active_browser: i32,
     favorites_ready: bool,
+    favorites_home: QString,
     favorites_revision: i32,
     notices_revision: i32,
     notices_open_requests: i32,
@@ -342,6 +345,8 @@ impl ffi::WorkspaceBridge {
     #[expect(clippy::boxed_local, reason = "CXX passes an opaque Rust value from C++ only in a Box")]
     fn start(mut self: Pin<&mut Self>, startup: Box<BrowserStartup>) {
         let BrowserStartup { home, settings_path, source_factory, location_probe, launch, target, receiver } = *startup;
+        self.as_mut().rust_mut().get_mut().favorites_home = QString::from(path_from_location(&home).to_string_lossy().as_ref());
+        self.as_mut().favorites_home_changed();
         match Runtime::start(source_factory, location_probe, Box::new(ffi::schedule_gui_drain)) {
             Ok(mut runtime) => {
                 // Without the lane, operations fail closed with a Notice.
