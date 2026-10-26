@@ -43,6 +43,7 @@ Out of scope:
 
 ## Completion checklist
 
+- [x] Make the full painted Normal and Comprehensive switch track clickable, verify pointer toggles, and pass the native checks and full gate.
 - [x] Finalize the planned page labels, confirmation wording, and empty/loading/error states against the owner decisions above; update product behavior, UX GUI, information architecture, terms, and README with the delivered behavior.
 - [x] Resolve real files and file links to exact macOS content-type identifiers, discover distinct types from open listings and a chosen sample file without recursive scanning, and fetch ranked candidate apps and the type default asynchronously. Type display, duplicate app names, missing apps, dynamic or unknown types, and external app/default changes have defined feedback.
 - [x] Add File Associations as the fourth Settings category. Type selection, Add File Type…, initially clear independent app checkboxes, Clear Open With Choices…, Remove Type…, Refresh Applications, the current default, and Set as Default work by pointer and keyboard with accessible names, status, and errors. Settings-unavailable and global-reset behavior follows the existing settings lifecycle.
@@ -70,6 +71,7 @@ Out of scope:
 - Launch Services supplied the temporary text fixture's content type but no application candidate on this profile. The native check therefore verified the aligned empty table, information control, indeterminate loading indicator, and absence of row frames; candidate-row alignment and distinct rendered path color run whenever macOS supplies a candidate.
 - The follow-up native check rebuilt the detail pane and verified that exactly one **Clear Open With Choices…** and one **Remove Type…** button remain. `make check` and `git diff --check` passed after the ownership fix.
 - The native Settings checks verified that the page title and selected type heading are each four points larger than their inherited fonts. `make check` and `git diff --check` passed after the typography update.
+- The native Settings check clicked both ends of the shared Normal and Comprehensive switch tracks and restored their prior states. `scripts/check-settings-window.sh`, `scripts/check-file-associations.sh`, and `make check` passed after the hit-area repair. macOS returned no application candidates in the disposable File Associations check, so its application-choice assertion followed the safe empty-state path.
 
 ## Guided macOS acceptance
 

@@ -21,6 +21,8 @@ class ToggleSwitch final : public QCheckBox {
     using QCheckBox::QCheckBox;
 
   protected:
+    // QCheckBox otherwise uses the platform indicator's smaller click rect.
+    [[nodiscard]] auto hitButton(const QPoint &position) const -> bool override { return rect().contains(position); }
     [[nodiscard]] auto sizeHint() const -> QSize override {
         const QFontMetrics metrics(font());
         const int label_width = text().isEmpty() ? 0 : label_gap + metrics.horizontalAdvance(text());

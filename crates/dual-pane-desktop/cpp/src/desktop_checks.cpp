@@ -1331,13 +1331,17 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
                     state->type = type;
                     state->identifier = bridge.fileAssociationTypeIdentifier(type);
                 }
-                if (bridge.fileAssociationCandidateCount(type) > 0) {
-                    state->type = type;
-                    state->application = 0;
-                    state->identifier = bridge.fileAssociationTypeIdentifier(type);
-                    state->application_name = bridge.fileAssociationCandidateName(type, 0);
-                    break;
+                for (int app = 0; app < bridge.fileAssociationCandidateCount(type); ++app) {
+                    if (bridge.fileAssociationCandidateAvailable(type, app)) {
+                        state->type = type;
+                        state->application = app;
+                        state->identifier = bridge.fileAssociationTypeIdentifier(type);
+                        state->application_name = bridge.fileAssociationCandidateName(type, app);
+                        break;
+                    }
                 }
+                if (state->application >= 0)
+                    break;
             }
             if (state->type < 0) {
                 finish(false, "macOS returned no content type for the temporary text files");
@@ -1406,12 +1410,36 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
             if (state->application >= 0) {
                 auto *name = table->findChild<QLabel *>(QStringLiteral("fileAssociationApplicationName"));
                 auto *path = table->findChild<QLabel *>(QStringLiteral("fileAssociationApplicationPath"));
-                auto *normal = table->findChild<QCheckBox *>(QStringLiteral("fileAssociationNormal"));
-                auto *comprehensive = table->findChild<QCheckBox *>(QStringLiteral("fileAssociationComprehensive"));
+                const auto normal_toggles = table->findChildren<QCheckBox *>(QStringLiteral("fileAssociationNormal"));
+                const auto comprehensive_toggles = table->findChildren<QCheckBox *>(QStringLiteral("fileAssociationComprehensive"));
+                auto *normal = state->application < normal_toggles.size() ? normal_toggles.at(state->application) : nullptr;
+                auto *comprehensive = state->application < comprehensive_toggles.size() ? comprehensive_toggles.at(state->application) : nullptr;
                 auto *make_default = table->findChild<QPushButton *>(QStringLiteral("fileAssociationSetDefault"));
                 const auto aligned = [table, &heading_named](const QString &heading, const QWidget *control) { return control && heading_named(heading) && heading_named(heading)->mapTo(table, QPoint()).x() == control->mapTo(table, QPoint()).x(); };
                 if (!name || !path || name->mapTo(table, QPoint()).x() != applications_heading->mapTo(table, QPoint()).x() || path->palette().color(QPalette::WindowText) == name->palette().color(QPalette::WindowText) || !aligned(QStringLiteral("Normal"), normal) || !aligned(QStringLiteral("Comprehensive"), comprehensive) || !aligned(QStringLiteral("Default"), make_default)) {
                     finish(false, "File Associations application columns or path treatment are inconsistent");
+                    return;
+                }
+                const auto click_track = [](QCheckBox *toggle, const QPoint &position) {
+                    QMouseEvent press(QEvent::MouseButtonPress, QPointF(position), QPointF(toggle->mapToGlobal(position)), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(toggle, &press);
+                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(position), QPointF(toggle->mapToGlobal(position)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                    QApplication::sendEvent(toggle, &release);
+                };
+                const auto verify_track = [&click_track](QCheckBox *toggle, const std::function<bool()> &selected) {
+                    QPointer<QCheckBox> original(toggle);
+                    const QPoint right(toggle->width() - 3, toggle->height() / 2);
+                    const QPoint left(3, toggle->height() / 2);
+                    if (toggle->isChecked() || selected() || right.x() < 20)
+                        return false;
+                    click_track(toggle, right);
+                    if (!original || !original->isChecked() || !selected())
+                        return false;
+                    click_track(toggle, left);
+                    return original && !original->isChecked() && !selected();
+                };
+                if (!verify_track(normal, [&bridge, state] { return bridge.fileAssociationCandidateNormal(state->type, state->application); }) || !verify_track(comprehensive, [&bridge, state] { return bridge.fileAssociationCandidateComprehensive(state->type, state->application); })) {
+                    finish(false, "File Associations switch track did not toggle and persist both menu choices");
                     return;
                 }
             }
@@ -1817,6 +1845,27 @@ auto run_settings_window_checks(QApplication &app) -> int {
             categories->setCurrentRow(2);
             check(pages->currentIndex() == 2 && pages->currentWidget()->accessibleName() == QStringLiteral("Context Menus Settings"), "Context Menus category switching");
             check_category_tables(dialog->findChild<QScrollArea *>(QStringLiteral("settingsContextMenuScroll")), QStringLiteral("contextMenuGroup"), QStringLiteral("contextMenuGroupHeading"), QStringLiteral("contextMenuColumnHeading"), "Context Menu tables fill the page width", "Context Menu category names sit above their tables, aligned with Action", "Context Menu category names are 11px bold");
+            const auto click_switch = [](QCheckBox *toggle, const QPoint &position) {
+                QMouseEvent press(QEvent::MouseButtonPress, QPointF(position), QPointF(toggle->mapToGlobal(position)), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(toggle, &press);
+                QMouseEvent release(QEvent::MouseButtonRelease, QPointF(position), QPointF(toggle->mapToGlobal(position)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(toggle, &release);
+            };
+            const auto check_switch_track = [&check, &click_switch](QCheckBox *toggle, const char *name) {
+                if (!toggle)
+                    return;
+                QPointer<QCheckBox> original(toggle);
+                const bool initially_checked = toggle->isChecked();
+                click_switch(toggle, QPoint(toggle->width() - 3, toggle->height() / 2));
+                check(original && original->isChecked() != initially_checked, name);
+                if (original)
+                    click_switch(original, QPoint(3, original->height() / 2));
+                check(original && original->isChecked() == initially_checked, "Context Menu switch returns to its prior state");
+            };
+            if (!normal_checks.isEmpty() && !comprehensive_checks.isEmpty()) {
+                check_switch_track(normal_checks.first(), "Normal switch responds at the far end of its painted track");
+                check_switch_track(comprehensive_checks.first(), "Comprehensive switch responds at the far end of its painted track");
+            }
             dialog->focus_file_association(QStringLiteral("public.plain-text"));
             check(categories->currentRow() == 3 && pages->currentIndex() == 3 && pages->currentWidget()->accessibleName() == QStringLiteral("File Associations Settings"), "Configure Open With target opens File Associations Settings");
             auto *add_type = dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationAddType"));
