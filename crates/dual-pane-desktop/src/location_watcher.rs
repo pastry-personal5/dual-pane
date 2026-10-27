@@ -197,7 +197,12 @@ fn run_service(mailbox: Arc<Mutex<Mailbox>>, dirty: Arc<Mutex<HashMap<u64, u32>>
             let native_ready = native.as_mut().is_some_and(|watcher| watcher.watch(id, path_from_location(location).as_os_str().as_bytes()));
             let status = if native_ready { MonitoringStatus::Native } else { MonitoringStatus::Periodic };
             let is_visible = visible.contains(location);
-            let deadline = (status == MonitoringStatus::Periodic).then(|| Instant::now() + next_delay(*generation, location, is_visible, 0));
+            // FSEvents is an advisory acceleration, not a durable statement
+            // that no directory changes occurred. Keep a bounded
+            // reconciliation deadline even while the native stream is live;
+            // otherwise one missed native notification leaves the listing
+            // stale until another event or a manual refresh.
+            let deadline = Some(Instant::now() + next_delay(*generation, location, is_visible, 0));
             subscriptions.insert(location.clone(), Subscription { generation: *generation, id, status, failures: 0, visible: is_visible, deadline });
             ids.insert(id, location.clone());
             sink(Event::WatcherReady { location: location.clone(), generation: *generation, status });
@@ -208,13 +213,9 @@ fn run_service(mailbox: Arc<Mutex<Mailbox>>, dirty: Arc<Mutex<HashMap<u64, u32>>
             let is_visible = visible.contains(location);
             if subscription.visible != is_visible {
                 subscription.visible = is_visible;
-                if subscription.status == MonitoringStatus::Periodic {
-                    subscription.deadline = Some(now + next_delay(subscription.generation, location, is_visible, subscription.failures));
-                }
+                subscription.deadline = Some(now + next_delay(subscription.generation, location, is_visible, subscription.failures));
             }
-            if let Some(succeeded) = outcomes.get(location)
-                && subscription.status == MonitoringStatus::Periodic
-            {
+            if let Some(succeeded) = outcomes.get(location) {
                 subscription.failures = if *succeeded { 0 } else { subscription.failures.saturating_add(1) };
                 subscription.deadline = Some(now + next_delay(subscription.generation, location, subscription.visible, subscription.failures));
             }
@@ -238,17 +239,20 @@ fn run_service(mailbox: Arc<Mutex<Mailbox>>, dirty: Arc<Mutex<HashMap<u64, u32>>
         }
 
         if active {
-            let due = subscriptions.iter().filter(|(_, subscription)| subscription.status == MonitoringStatus::Periodic && subscription.deadline.is_some_and(|deadline| deadline <= now)).map(|(location, _)| location.clone()).collect::<Vec<_>>();
+            let due = subscriptions.iter().filter(|(_, subscription)| subscription.deadline.is_some_and(|deadline| deadline <= now)).map(|(location, _)| location.clone()).collect::<Vec<_>>();
             for location in due {
                 let Some(subscription) = subscriptions.get_mut(&location) else { continue };
-                let native_ready = native.as_mut().is_some_and(|watcher| watcher.watch(subscription.id, path_from_location(&location).as_os_str().as_bytes()));
-                if native_ready {
-                    subscription.status = MonitoringStatus::Native;
-                    subscription.deadline = None;
-                    sink(Event::WatcherStatusChanged { location: location.clone(), generation: subscription.generation, status: MonitoringStatus::Native });
-                } else {
-                    subscription.deadline = Some(now + next_delay(subscription.generation, &location, subscription.visible, subscription.failures));
+                if subscription.status == MonitoringStatus::Periodic {
+                    let native_ready = native.as_mut().is_some_and(|watcher| watcher.watch(subscription.id, path_from_location(&location).as_os_str().as_bytes()));
+                    if native_ready {
+                        subscription.status = MonitoringStatus::Native;
+                        sink(Event::WatcherStatusChanged { location: location.clone(), generation: subscription.generation, status: MonitoringStatus::Native });
+                    }
                 }
+                // Arm the next deadline before requesting the read so a busy
+                // or unavailable runtime cannot turn this due item into a
+                // tight loop. The read outcome will apply failure backoff.
+                subscription.deadline = Some(now + next_delay(subscription.generation, &location, subscription.visible, subscription.failures));
                 sink(Event::WatchedLocationInvalidated { location, generation: subscription.generation });
             }
         }
@@ -284,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_intervals_are_visibility_aware_jittered_and_bounded() {
+    fn reconciliation_intervals_are_visibility_aware_jittered_and_bounded() {
         let folder = location("folder");
         let visible = next_delay(7, &folder, true, 0);
         let hidden = next_delay(7, &folder, false, 0);
@@ -335,6 +339,10 @@ mod tests {
             assert_eq!(status, MonitoringStatus::Periodic);
             return;
         }
+
+        // A live native stream still has a bounded reconciliation deadline,
+        // so a missed FSEvents notification cannot leave the listing stale.
+        wait_for_invalidation(&events, &location, 11);
 
         let first = directory.path().join("first.txt");
         let second = directory.path().join("second.txt");
