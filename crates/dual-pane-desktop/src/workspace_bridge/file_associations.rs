@@ -31,6 +31,12 @@ impl ffi::WorkspaceBridge {
     pub(super) fn file_association_candidate_location(&self, type_index: i32, app_index: i32) -> QString {
         self.association_candidate(type_index, app_index).map_or_else(QString::default, |row| QString::from(row.location_hint.as_str()))
     }
+    pub(super) fn file_association_candidate_bundle_identifier(&self, type_index: i32, app_index: i32) -> QString {
+        self.association_candidate(type_index, app_index).map_or_else(QString::default, |row| QString::from(row.identity.bundle_identifier.as_str()))
+    }
+    pub(super) fn file_association_candidate_bundle_url(&self, type_index: i32, app_index: i32) -> QString {
+        self.association_candidate(type_index, app_index).map_or_else(QString::default, |row| QString::from(row.identity.bundle_url.as_str()))
+    }
     pub(super) fn file_association_candidate_available(&self, type_index: i32, app_index: i32) -> bool {
         self.association_candidate(type_index, app_index).is_some_and(|row| row.available)
     }

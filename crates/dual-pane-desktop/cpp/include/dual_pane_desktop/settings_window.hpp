@@ -879,9 +879,12 @@ class SettingsWindow final : public QDialog {
         QObject::connect(add, &QPushButton::clicked, this, [this] {
             const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Choose a Sample File"));
             if (!path.isEmpty() && bridge_)
-                bridge_->addFileAssociationSample(QFile::encodeName(path));
+                track_file_association_request([this, path] { bridge_->addFileAssociationSample(QFile::encodeName(path)); });
         });
-        QObject::connect(refresh, &QPushButton::clicked, this, [this] { if (bridge_) bridge_->refreshFileAssociations(); });
+        QObject::connect(refresh, &QPushButton::clicked, this, [this] {
+            if (bridge_)
+                track_file_association_request([this] { bridge_->refreshFileAssociations(); });
+        });
         tools->addWidget(add);
         tools->addWidget(refresh);
         tools->addStretch();
@@ -892,6 +895,8 @@ class SettingsWindow final : public QDialog {
         file_association_types_->setObjectName(QStringLiteral("fileAssociationTypeList"));
         file_association_types_->setAccessibleName(QStringLiteral("File Types"));
         file_association_types_->setMinimumWidth(340);
+        file_association_types_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        file_association_types_->setTextElideMode(Qt::ElideRight);
         file_association_detail_stack_ = new QStackedWidget(split);
         file_association_detail_stack_->setObjectName(QStringLiteral("fileAssociationDetailStack"));
         file_association_detail_scroll_ = new QScrollArea(file_association_detail_stack_);
@@ -938,7 +943,7 @@ class SettingsWindow final : public QDialog {
         file_association_loading_minimum_ = new QTimer(page);
         file_association_loading_minimum_->setSingleShot(true);
         QObject::connect(file_association_loading_reveal_, &QTimer::timeout, this, [this] {
-            if (!bridge_ || !bridge_->getFileAssociationsPending() || !file_association_detail_stack_)
+            if (!bridge_ || !bridge_->getFileAssociationsPending() || !file_association_detail_stack_ || (file_association_types_->currentItem() && !file_association_request_pending_))
                 return;
             file_association_loading_visible_ = true;
             file_association_detail_stack_->setCurrentWidget(file_association_loading_);
@@ -955,10 +960,11 @@ class SettingsWindow final : public QDialog {
             return;
         const bool pending = bridge_ && bridge_->getFileAssociationsPending();
         if (pending) {
-            if (!file_association_loading_visible_ && !file_association_loading_reveal_->isActive())
+            if ((file_association_request_pending_ || !file_association_types_->currentItem()) && !file_association_loading_visible_ && !file_association_loading_reveal_->isActive())
                 file_association_loading_reveal_->start(file_association_loading_reveal_milliseconds);
             return;
         }
+        file_association_request_pending_ = false;
         file_association_loading_reveal_->stop();
         if (file_association_loading_visible_ && file_association_loading_minimum_->isActive())
             return;
@@ -972,26 +978,44 @@ class SettingsWindow final : public QDialog {
         if (selected.isEmpty() && file_association_types_->currentItem())
             selected = file_association_types_->currentItem()->data(Qt::UserRole).toString();
         pending_association_focus_.clear();
+        const int count = bridge_->fileAssociationTypeCount();
         const QSignalBlocker block(file_association_types_);
-        file_association_types_->clear();
         int selected_row = -1;
-        for (int index = 0; index < bridge_->fileAssociationTypeCount(); ++index) {
+        for (int index = 0; index < count; ++index) {
             const QString kind = bridge_->fileAssociationTypeKind(index);
             const QString extension = bridge_->fileAssociationTypeExtension(index);
             const QString identifier = bridge_->fileAssociationTypeIdentifier(index);
-            QString label = kind;
-            if (!extension.isEmpty())
+            QString label = identifier == QStringLiteral("public.data") ? QStringLiteral("Generic data (public.data)") : kind;
+            if (!extension.isEmpty() && identifier != QStringLiteral("public.data"))
                 label += QStringLiteral(" (.") + extension + QStringLiteral(")");
-            auto *item = new QListWidgetItem(label, file_association_types_);
-            item->setData(Qt::UserRole, identifier);
-            item->setToolTip(identifier);
-            item->setData(Qt::AccessibleDescriptionRole, identifier);
+            else if (extension.isEmpty() && identifier != QStringLiteral("public.data"))
+                label += QStringLiteral(" (") + identifier + QStringLiteral(")");
+            QListWidgetItem *item = index < file_association_types_->count() ? file_association_types_->item(index) : nullptr;
+            if (!item || item->data(Qt::UserRole).toString() != identifier) {
+                int existing_row = index + 1;
+                while (existing_row < file_association_types_->count() && file_association_types_->item(existing_row)->data(Qt::UserRole).toString() != identifier)
+                    ++existing_row;
+                item = existing_row < file_association_types_->count() ? file_association_types_->takeItem(existing_row) : new QListWidgetItem();
+                file_association_types_->insertItem(index, item);
+            }
+            if (item->text() != label)
+                item->setText(label);
+            if (item->data(Qt::UserRole).toString() != identifier) {
+                item->setData(Qt::UserRole, identifier);
+                item->setData(Qt::AccessibleDescriptionRole, identifier);
+            }
+            const QString tooltip = label + QStringLiteral("\n") + identifier;
+            if (item->toolTip() != tooltip)
+                item->setToolTip(tooltip);
             if (identifier == selected)
                 selected_row = index;
         }
+        while (file_association_types_->count() > count)
+            delete file_association_types_->takeItem(file_association_types_->count() - 1);
         if (selected_row < 0 && file_association_types_->count() > 0)
             selected_row = 0;
-        file_association_types_->setCurrentRow(selected_row);
+        if (file_association_types_->currentItem() != (selected_row >= 0 ? file_association_types_->item(selected_row) : nullptr))
+            file_association_types_->setCurrentRow(selected_row);
         rebuild_file_association_detail();
         sync_file_association_status();
     }
@@ -1002,18 +1026,24 @@ class SettingsWindow final : public QDialog {
     // click), which cost focus and made the toggles feel unreliable — the
     // same failure sync_context_menus() already avoids for the Context
     // Menus tab. Returns false when the panel must be rebuilt instead
-    // (nothing built yet, a different type selected, or the candidate list
-    // changed shape).
+    // (nothing built yet, a different type selected, or candidate identities
+    // changed).
     bool sync_file_association_detail() {
-        if (!bridge_ || !file_association_types_ || !file_association_default_label_)
+        if (!bridge_ || !file_association_types_ || !file_association_default_label_ || !file_association_remove_button_)
             return false;
         const int type_index = file_association_types_->currentRow();
-        if (type_index < 0 || type_index != file_association_detail_row_)
+        if (type_index < 0 || type_index != file_association_detail_row_ || file_association_detail_identifier_ != bridge_->fileAssociationTypeIdentifier(type_index) || file_association_detail_kind_ != bridge_->fileAssociationTypeKind(type_index) || file_association_detail_extension_ != bridge_->fileAssociationTypeExtension(type_index))
             return false;
         const auto count = static_cast<std::size_t>(bridge_->fileAssociationCandidateCount(type_index));
-        if (count != file_association_name_labels_.size() || count != file_association_path_labels_.size() || count != file_association_normal_toggles_.size() || count != file_association_comprehensive_toggles_.size() || count != file_association_default_buttons_.size())
+        if (count != file_association_candidate_identities_.size() || count != file_association_name_labels_.size() || count != file_association_path_labels_.size() || count != file_association_normal_toggles_.size() || count != file_association_comprehensive_toggles_.size() || count != file_association_default_buttons_.size())
             return false;
+        for (std::size_t app = 0; app < count; ++app) {
+            const int index = static_cast<int>(app);
+            if (file_association_candidate_identities_.at(app) != std::make_pair(bridge_->fileAssociationCandidateBundleIdentifier(type_index, index), bridge_->fileAssociationCandidateBundleUrl(type_index, index)))
+                return false;
+        }
         const QString kind = bridge_->fileAssociationTypeKind(type_index);
+        file_association_remove_button_->setEnabled(bridge_->fileAssociationTypePinned(type_index));
         QString default_name = QStringLiteral("None reported by macOS");
         for (std::size_t app = 0; app < count; ++app) {
             if (bridge_->fileAssociationCandidateDefault(type_index, static_cast<int>(app))) {
@@ -1073,13 +1103,18 @@ class SettingsWindow final : public QDialog {
             delete item;
         }
         file_association_default_label_.clear();
+        file_association_remove_button_.clear();
         file_association_name_labels_.clear();
         file_association_path_labels_.clear();
         file_association_normal_toggles_.clear();
         file_association_comprehensive_toggles_.clear();
         file_association_default_buttons_.clear();
+        file_association_candidate_identities_.clear();
         const int type_index = file_association_types_ ? file_association_types_->currentRow() : -1;
         file_association_detail_row_ = type_index;
+        file_association_detail_identifier_ = bridge_ && type_index >= 0 ? bridge_->fileAssociationTypeIdentifier(type_index) : QString();
+        file_association_detail_kind_ = bridge_ && type_index >= 0 ? bridge_->fileAssociationTypeKind(type_index) : QString();
+        file_association_detail_extension_ = bridge_ && type_index >= 0 ? bridge_->fileAssociationTypeExtension(type_index) : QString();
         if (!bridge_ || type_index < 0) {
             auto *empty = new QLabel(bridge_ && bridge_->getFileAssociationsPending() ? QStringLiteral("Identifying file types and applications…") : QStringLiteral("No file types are available. Open a folder containing files or choose Add File Type… with a sample file."), file_association_detail_);
             empty->setWordWrap(true);
@@ -1102,6 +1137,12 @@ class SettingsWindow final : public QDialog {
         identity->setTextInteractionFlags(Qt::TextSelectableByKeyboard | Qt::TextSelectableByMouse);
         identity->setAccessibleName(identity->text());
         file_association_detail_layout_->addWidget(identity);
+        if (identifier == QStringLiteral("public.data")) {
+            auto *explanation = new QLabel(QStringLiteral("macOS uses this broad type when it cannot identify a file's specific format, often for files without a recognized extension."), file_association_detail_);
+            explanation->setWordWrap(true);
+            explanation->setAccessibleName(explanation->text());
+            file_association_detail_layout_->addWidget(explanation);
+        }
         QString default_name = QStringLiteral("None reported by macOS");
         for (int app = 0; app < bridge_->fileAssociationCandidateCount(type_index); ++app) {
             if (bridge_->fileAssociationCandidateDefault(type_index, app)) {
@@ -1151,6 +1192,7 @@ class SettingsWindow final : public QDialog {
             grid->addWidget(application, app + 1, 0);
             file_association_name_labels_.emplace_back(name_label);
             file_association_path_labels_.emplace_back(path_label);
+            file_association_candidate_identities_.emplace_back(bridge_->fileAssociationCandidateBundleIdentifier(type_index, app), bridge_->fileAssociationCandidateBundleUrl(type_index, app));
             auto add_choice = [this, table, grid, type_index, app, name, available](int menu_kind, bool checked) {
                 auto *choice = new ToggleSwitch(table);
                 const QString menu = menu_kind == 0 ? QStringLiteral("Normal") : QStringLiteral("Comprehensive");
@@ -1192,6 +1234,7 @@ class SettingsWindow final : public QDialog {
         remove->setObjectName(QStringLiteral("fileAssociationRemove"));
         remove->setAccessibleName(QStringLiteral("Remove File Type ") + kind);
         remove->setEnabled(bridge_->fileAssociationTypePinned(type_index));
+        file_association_remove_button_ = remove;
         QObject::connect(clear, &QPushButton::clicked, this, [this, type_index, kind] { confirm_file_association_local_change(type_index, kind, false); });
         QObject::connect(remove, &QPushButton::clicked, this, [this, type_index, kind] { confirm_file_association_local_change(type_index, kind, true); });
         actions->addWidget(clear);
@@ -1209,7 +1252,7 @@ class SettingsWindow final : public QDialog {
         box->setEscapeButton(cancel);
         box->setWindowModality(Qt::WindowModal);
         box->setAttribute(Qt::WA_DeleteOnClose);
-        QObject::connect(box, &QMessageBox::finished, this, [this, box, confirm, type_index, app_index] { if (box->clickedButton() == confirm && bridge_) bridge_->setDefaultApplication(type_index, app_index); });
+        QObject::connect(box, &QMessageBox::finished, this, [this, box, confirm, type_index, app_index] { if (box->clickedButton() == confirm && bridge_) track_file_association_request([this, type_index, app_index] { bridge_->setDefaultApplication(type_index, app_index); }); });
         box->open();
     }
     void confirm_file_association_local_change(int type_index, const QString &kind, bool remove) {
@@ -1233,16 +1276,25 @@ class SettingsWindow final : public QDialog {
         });
         box->open();
     }
+    void track_file_association_request(const std::function<void()> &request) {
+        file_association_request_pending_ = true;
+        request();
+        file_association_request_pending_ = bridge_ && bridge_->getFileAssociationsPending();
+        sync_file_association_status();
+        sync_file_association_loading();
+    }
     void sync_file_association_status() {
         if (!file_association_status_ || !bridge_)
             return;
         QString text = bridge_->getFileAssociationsError();
-        if (text.isEmpty() && bridge_->getFileAssociationsPending())
+        if (text.isEmpty() && file_association_request_pending_ && bridge_->getFileAssociationsPending())
             text = QStringLiteral("Identifying file types and refreshing applications…");
         if (text.isEmpty())
             text = QStringLiteral("Application choices are saved by Dual Pane. The current default is read from macOS.");
-        file_association_status_->setText(text);
-        file_association_status_->setAccessibleName(text);
+        if (file_association_status_->text() != text) {
+            file_association_status_->setText(text);
+            file_association_status_->setAccessibleName(text);
+        }
     }
     WorkspaceBridge *bridge_;
     std::function<void(bool)> capture_;
@@ -1269,9 +1321,15 @@ class SettingsWindow final : public QDialog {
     QTimer *file_association_loading_reveal_ = nullptr;
     QTimer *file_association_loading_minimum_ = nullptr;
     bool file_association_loading_visible_ = false;
+    bool file_association_request_pending_ = false;
     QString pending_association_focus_;
     int file_association_detail_row_ = -1;
+    QString file_association_detail_identifier_;
+    QString file_association_detail_kind_;
+    QString file_association_detail_extension_;
+    std::vector<std::pair<QString, QString>> file_association_candidate_identities_;
     QPointer<QLabel> file_association_default_label_;
+    QPointer<QPushButton> file_association_remove_button_;
     std::vector<QPointer<QLabel>> file_association_name_labels_;
     std::vector<QPointer<QLabel>> file_association_path_labels_;
     std::vector<QPointer<ToggleSwitch>> file_association_normal_toggles_;

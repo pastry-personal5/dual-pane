@@ -289,6 +289,17 @@ impl WorkRunner for Runtime {
                 TrySendError::Full(AssociationJob::Resolve(request)) | TrySendError::Disconnected(AssociationJob::Resolve(request)) => Event::FileAssociationsResolved { request, outcome: FileAssociationLookup::Rejected("The file-association service is busy or unavailable.".to_owned()) },
                 _ => unreachable!("association queue preserves the job variant"),
             }),
+            WorkRequest::ScheduleFileAssociationRetry { folder, generation, delay_ms } => {
+                let delivery = self.delivery.clone();
+                let retry_folder = folder.clone();
+                match thread::Builder::new().name("file-association-retry".to_owned()).spawn(move || {
+                    thread::sleep(Duration::from_millis(delay_ms));
+                    deliver_event(&delivery, Event::FileAssociationRetryDue { folder: retry_folder, generation });
+                }) {
+                    Ok(_) => None,
+                    Err(_) => Some(Event::FileAssociationRetryDue { folder, generation }),
+                }
+            }
             WorkRequest::OpenWithApplication { request } => self.associations.try_send(AssociationJob::Open(request)).err().map(|error| match error {
                 TrySendError::Full(AssociationJob::Open(request)) | TrySendError::Disconnected(AssociationJob::Open(request)) => Event::OpenWithFinished { request, result: Err("The Open With service is busy or unavailable.".to_owned()) },
                 _ => unreachable!("association queue preserves the job variant"),

@@ -397,6 +397,10 @@ pub enum Event {
         request: FileAssociationRequest,
         outcome: FileAssociationLookup,
     },
+    FileAssociationRetryDue {
+        folder: Location,
+        generation: u64,
+    },
     OpenWithFinished {
         request: OpenWithRequest,
         result: Result<(), String>,

@@ -1295,6 +1295,8 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
         int application = -1;
         QString identifier;
         QString application_name;
+        QString footer_text;
+        QListWidgetItem *selected_type_item = nullptr;
         QElapsedTimer elapsed;
     };
     auto state = std::make_shared<State>();
@@ -1373,6 +1375,12 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
                 finish(false, "Configure Open With did not focus the captured type");
                 return;
             }
+            const auto list_foreground = types->palette().color(QPalette::Text);
+            const auto list_background = types->palette().color(QPalette::Base);
+            if (types->horizontalScrollBarPolicy() != Qt::ScrollBarAlwaysOff || types->textElideMode() != Qt::ElideRight || list_background.lightness() >= list_foreground.lightness()) {
+                finish(false, "File Associations type list lacks the dark theme or clips long labels with a horizontal scrollbar");
+                return;
+            }
             if (dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationAddType"))->focusPolicy() == Qt::NoFocus || dialog->findChild<QLabel *>(QStringLiteral("fileAssociationStatus"))->accessibleName().isEmpty()) {
                 finish(false, "File Associations controls lack keyboard or accessible status exposure");
                 return;
@@ -1408,6 +1416,7 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
                 return;
             }
             if (state->application >= 0) {
+                auto *selected_type_item = types->currentItem();
                 auto *name = table->findChild<QLabel *>(QStringLiteral("fileAssociationApplicationName"));
                 auto *path = table->findChild<QLabel *>(QStringLiteral("fileAssociationApplicationPath"));
                 const auto normal_toggles = table->findChildren<QCheckBox *>(QStringLiteral("fileAssociationNormal"));
@@ -1442,6 +1451,14 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
                     finish(false, "File Associations switch track did not toggle and persist both menu choices");
                     return;
                 }
+                if (types->currentItem() != selected_type_item || types->item(state->type) != selected_type_item || table != dialog->findChild<QWidget *>(QStringLiteral("fileAssociationApplicationsTable"))) {
+                    finish(false, "File Associations recreated its type list or detail during a switch click");
+                    return;
+                }
+                if (bridge.fileAssociationTypePinned(state->type) && !dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationRemove"))->isEnabled()) {
+                    finish(false, "Remove Type did not update after the first app choice pinned the type");
+                    return;
+                }
             }
             (*information)->click();
             QApplication::processEvents();
@@ -1452,6 +1469,48 @@ void schedule_file_association_checks(QMainWindow &window, SettingsWindowControl
                 return;
             }
             information_popup->close();
+            state->selected_type_item = types->currentItem();
+            state->footer_text = dialog->findChild<QLabel *>(QStringLiteral("fileAssociationStatus"))->text();
+            bridge.refreshFileAssociations();
+            if (dialog->findChild<QLabel *>(QStringLiteral("fileAssociationStatus"))->text() != state->footer_text) {
+                finish(false, "background discovery changed the File Associations footer");
+                return;
+            }
+            state->step = 10;
+            return;
+        }
+        case 10: {
+            if (bridge.getFileAssociationsPending())
+                return;
+            auto *dialog = settings.dialog();
+            auto *types = dialog ? dialog->findChild<QListWidget *>(QStringLiteral("fileAssociationTypeList")) : nullptr;
+            if (!types || types->currentItem() != state->selected_type_item || types->currentItem()->data(Qt::UserRole).toString() != state->identifier) {
+                finish(false, "File Associations recreated or changed its selected type during refresh");
+                return;
+            }
+            auto *footer = dialog->findChild<QLabel *>(QStringLiteral("fileAssociationStatus"));
+            auto *refresh = dialog->findChild<QPushButton *>(QStringLiteral("fileAssociationRefresh"));
+            if (!footer || !refresh || footer->text() != state->footer_text) {
+                finish(false, "background discovery did not preserve the File Associations footer");
+                return;
+            }
+            refresh->click();
+            if (bridge.getFileAssociationsPending() && footer->text() != QStringLiteral("Identifying file types and refreshing applications…")) {
+                finish(false, "explicit Refresh Applications did not show progress in the footer");
+                return;
+            }
+            state->step = 11;
+            return;
+        }
+        case 11: {
+            if (bridge.getFileAssociationsPending())
+                return;
+            auto *dialog = settings.dialog();
+            auto *footer = dialog ? dialog->findChild<QLabel *>(QStringLiteral("fileAssociationStatus")) : nullptr;
+            if (!footer || footer->text() != state->footer_text) {
+                finish(false, "File Associations footer did not settle after explicit refresh");
+                return;
+            }
             dialog->reject();
             if (state->application < 0) {
                 std::cerr << "File associations check: macOS returned no application candidate; verified discovery and the safe empty state.\n";

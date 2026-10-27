@@ -19,6 +19,11 @@ pub enum WorkRequest {
     ResolveFileAssociations {
         request: FileAssociationRequest,
     },
+    ScheduleFileAssociationRetry {
+        folder: Location,
+        generation: u64,
+        delay_ms: u64,
+    },
     OpenWithApplication {
         request: OpenWithRequest,
     },

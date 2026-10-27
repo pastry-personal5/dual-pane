@@ -425,6 +425,184 @@ fn late_discovery_cannot_restore_a_type_after_an_empty_listing_replaces_its_fold
 }
 
 #[test]
+fn observed_file_types_change_only_when_a_replacement_lookup_finishes() {
+    let mut workspace = Workspace::new();
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    let folder = location("from");
+    let source = folder.join(&name("item.txt"));
+    let replacement_source = folder.join(&name("item.json"));
+    let (tab, token) = read(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: folder.clone() }.into()).work);
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![Entry::new(name("item.txt"), EntryKind::File)]), changes: None }.into());
+    let first_request = loaded
+        .work
+        .into_iter()
+        .find_map(|work| match work {
+            WorkRequest::ResolveFileAssociations { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let first_record = FileAssociationRecord { content_type: ContentTypeDescription { identifier: "public.plain-text".into(), localized_kind: "Plain Text".into(), preferred_extension: Some("txt".into()) }, candidates: vec![], default_application: None };
+    let resolved_file = |record: FileAssociationRecord| ResolvedFileAssociation { source: source.clone(), target: source.clone(), source_identity: FileIdentity { device: 1, inode: 1 }, target_identity: FileIdentity { device: 1, inode: 1 }, record };
+    workspace.handle(Event::FileAssociationsResolved { request: first_request, outcome: FileAssociationLookup::Resolved { files: vec![resolved_file(first_record.clone())], records: vec![first_record] } }.into());
+    assert_eq!(workspace.file_association_types().iter().map(|row| row.content_type.identifier.as_str()).collect::<Vec<_>>(), ["public.plain-text"]);
+
+    let prior_revision = workspace.file_association_revision();
+    let (_, refresh) = read(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into()).work);
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token: refresh, entries: Arc::from(vec![Entry::new(name("item.json"), EntryKind::File)]), changes: None }.into());
+    let replacement = loaded
+        .work
+        .into_iter()
+        .find_map(|work| match work {
+            WorkRequest::ResolveFileAssociations { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(workspace.file_association_revision(), prior_revision, "starting discovery must not publish a partial type set");
+    assert_eq!(workspace.file_association_types().iter().map(|row| row.content_type.identifier.as_str()).collect::<Vec<_>>(), ["public.plain-text"], "the previous type stays visible until the new lookup is complete");
+
+    let replacement_record = FileAssociationRecord { content_type: ContentTypeDescription { identifier: "public.json".into(), localized_kind: "JSON".into(), preferred_extension: Some("json".into()) }, candidates: vec![], default_application: None };
+    workspace.handle(Event::FileAssociationsResolved { request: replacement, outcome: FileAssociationLookup::Resolved { files: vec![ResolvedFileAssociation { source: replacement_source.clone(), target: replacement_source, source_identity: FileIdentity { device: 1, inode: 2 }, target_identity: FileIdentity { device: 1, inode: 2 }, record: replacement_record.clone() }], records: vec![replacement_record] } }.into());
+    assert_eq!(workspace.file_association_types().iter().map(|row| row.content_type.identifier.as_str()).collect::<Vec<_>>(), ["public.json"], "the completed lookup retires types absent from the replacement listing");
+
+    let (_, refresh) = read(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into()).work);
+    workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token: refresh, entries: Arc::from(Vec::<Entry>::new()), changes: None }.into());
+    assert!(workspace.file_association_types().is_empty(), "an empty listing retires its previous type immediately");
+}
+
+#[test]
+fn unchanged_observations_are_coalesced_and_one_changed_snapshot_waits() {
+    let mut workspace = Workspace::new();
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    let folder = location("from");
+    let first = folder.join(&name("first.txt"));
+    let second = folder.join(&name("second.txt"));
+    let (tab, token) = read(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: folder.clone() }.into()).work);
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![Entry::new(name("first.txt"), EntryKind::File)]), changes: None }.into());
+    let request = loaded
+        .work
+        .into_iter()
+        .find_map(|work| match work {
+            WorkRequest::ResolveFileAssociations { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+
+    let (_, refresh) = read(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into()).work);
+    let unchanged = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token: refresh, entries: Arc::from(vec![Entry::new(name("first.txt"), EntryKind::File)]), changes: None }.into());
+    assert!(!unchanged.work.iter().any(|work| matches!(work, WorkRequest::ResolveFileAssociations { .. })), "an unchanged listing must not queue behind its active observation");
+
+    let (_, refresh) = read(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into()).work);
+    let changed = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token: refresh, entries: Arc::from(vec![Entry::new(name("first.txt"), EntryKind::File), Entry::new(name("second.txt"), EntryKind::File)]), changes: None }.into());
+    assert!(!changed.work.iter().any(|work| matches!(work, WorkRequest::ResolveFileAssociations { .. })), "a changed listing must wait behind the active observation");
+
+    let record = FileAssociationRecord { content_type: ContentTypeDescription { identifier: "public.plain-text".into(), localized_kind: "Plain Text".into(), preferred_extension: Some("txt".into()) }, candidates: vec![], default_application: None };
+    let first_result = ResolvedFileAssociation { source: first.clone(), target: first.clone(), source_identity: FileIdentity { device: 1, inode: 1 }, target_identity: FileIdentity { device: 1, inode: 1 }, record: record.clone() };
+    let completed = workspace.handle(Event::FileAssociationsResolved { request, outcome: FileAssociationLookup::Resolved { files: vec![first_result], records: vec![record.clone()] } }.into());
+    let replacement = completed
+        .work
+        .into_iter()
+        .find_map(|work| match work {
+            WorkRequest::ResolveFileAssociations { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(replacement.files, vec![first.clone(), second.clone()], "only the latest waiting snapshot starts next");
+
+    let resolved = [first.clone(), second.clone()].into_iter().enumerate().map(|(index, source)| ResolvedFileAssociation { target: source.clone(), source, source_identity: FileIdentity { device: 1, inode: index as u64 + 1 }, target_identity: FileIdentity { device: 1, inode: index as u64 + 1 }, record: record.clone() }).collect();
+    workspace.handle(Event::FileAssociationsResolved { request: replacement, outcome: FileAssociationLookup::Resolved { files: resolved, records: vec![record] } }.into());
+    let (_, refresh) = read(&workspace.handle(Command::Refresh { browser: BrowserSide::Left, tab }.into()).work);
+    let unchanged = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token: refresh, entries: Arc::from(vec![Entry::new(name("first.txt"), EntryKind::File), Entry::new(name("second.txt"), EntryKind::File)]), changes: None }.into());
+    assert!(!unchanged.work.iter().any(|work| matches!(work, WorkRequest::ResolveFileAssociations { .. })), "a completed unchanged snapshot must not be looked up again");
+}
+
+#[test]
+fn failed_background_observations_retry_with_exponential_backoff() {
+    let mut workspace = Workspace::new();
+    workspace.handle(Event::SettingsLoaded { snapshot: SettingsSnapshot::default() }.into());
+    let folder = location("from");
+    let source = folder.join(&name("item.txt"));
+    let (tab, token) = read(&workspace.handle(Command::Navigate { browser: BrowserSide::Left, location: folder.clone() }.into()).work);
+    let loaded = workspace.handle(Event::FolderItemsLoaded { browser: BrowserSide::Left, tab, token, entries: Arc::from(vec![Entry::new(name("item.txt"), EntryKind::File)]), changes: None }.into());
+    let request = loaded
+        .work
+        .into_iter()
+        .find_map(|work| match work {
+            WorkRequest::ResolveFileAssociations { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let failed = workspace.handle(Event::FileAssociationsResolved { request, outcome: FileAssociationLookup::Rejected("busy".into()) }.into());
+    let (first_generation, first_delay) = failed
+        .work
+        .iter()
+        .find_map(|work| match work {
+            WorkRequest::ScheduleFileAssociationRetry { folder: retry_folder, generation, delay_ms } if retry_folder == &folder => Some((*generation, *delay_ms)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(first_delay, 1_000);
+    assert_eq!(workspace.file_association_error(), Some("busy Retrying background file-type lookup in 1 second."));
+
+    let due = workspace.handle(Event::FileAssociationRetryDue { folder: folder.clone(), generation: first_generation }.into());
+    let retry = due
+        .work
+        .into_iter()
+        .find_map(|work| match work {
+            WorkRequest::ResolveFileAssociations { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let failed = workspace.handle(Event::FileAssociationsResolved { request: retry, outcome: FileAssociationLookup::Rejected("busy".into()) }.into());
+    let (second_generation, second_delay) = failed
+        .work
+        .iter()
+        .find_map(|work| match work {
+            WorkRequest::ScheduleFileAssociationRetry { folder: retry_folder, generation, delay_ms } if retry_folder == &folder => Some((*generation, *delay_ms)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(second_delay, 2_000);
+    assert!(workspace.handle(Event::FileAssociationRetryDue { folder: folder.clone(), generation: first_generation }.into()).work.is_empty(), "an older retry timer must be stale");
+
+    let due = workspace.handle(Event::FileAssociationRetryDue { folder: folder.clone(), generation: second_generation }.into());
+    let mut retry = due
+        .work
+        .into_iter()
+        .find_map(|work| match work {
+            WorkRequest::ResolveFileAssociations { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let mut later_generations = Vec::new();
+    for expected_delay in [4_000, 8_000, 16_000, 32_000, 60_000, 60_000] {
+        let failed = workspace.handle(Event::FileAssociationsResolved { request: retry, outcome: FileAssociationLookup::Rejected("busy".into()) }.into());
+        let (generation, delay) = failed
+            .work
+            .iter()
+            .find_map(|work| match work {
+                WorkRequest::ScheduleFileAssociationRetry { folder: retry_folder, generation, delay_ms } if retry_folder == &folder => Some((*generation, *delay_ms)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(delay, expected_delay);
+        later_generations.push(generation);
+        let due = workspace.handle(Event::FileAssociationRetryDue { folder: folder.clone(), generation }.into());
+        retry = due
+            .work
+            .into_iter()
+            .find_map(|work| match work {
+                WorkRequest::ResolveFileAssociations { request } => Some(request),
+                _ => None,
+            })
+            .unwrap();
+    }
+    let record = FileAssociationRecord { content_type: ContentTypeDescription { identifier: "public.plain-text".into(), localized_kind: "Plain Text".into(), preferred_extension: Some("txt".into()) }, candidates: vec![], default_application: None };
+    workspace.handle(Event::FileAssociationsResolved { request: retry, outcome: FileAssociationLookup::Resolved { files: vec![ResolvedFileAssociation { source: source.clone(), target: source, source_identity: FileIdentity { device: 1, inode: 1 }, target_identity: FileIdentity { device: 1, inode: 1 }, record: record.clone() }], records: vec![record] } }.into());
+    assert_eq!(workspace.file_association_error(), None);
+    assert!(workspace.handle(Event::FileAssociationRetryDue { folder, generation: *later_generations.last().unwrap() }.into()).work.is_empty(), "success must retire the retry timer");
+}
+
+#[test]
 fn saved_choices_remain_manageable_when_macos_no_longer_knows_the_type() {
     let application = ApplicationIdentity { bundle_identifier: "com.example.RemovedEditor".into(), bundle_url: "file:///Applications/RemovedEditor.app".into() };
     let mut snapshot = SettingsSnapshot::default();

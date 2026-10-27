@@ -272,6 +272,10 @@ pub mod ffi {
         fn file_association_candidate_name(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> QString;
         #[cxx_name = "fileAssociationCandidateLocation"]
         fn file_association_candidate_location(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> QString;
+        #[cxx_name = "fileAssociationCandidateBundleIdentifier"]
+        fn file_association_candidate_bundle_identifier(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> QString;
+        #[cxx_name = "fileAssociationCandidateBundleUrl"]
+        fn file_association_candidate_bundle_url(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> QString;
         #[cxx_name = "fileAssociationCandidateAvailable"]
         fn file_association_candidate_available(self: &WorkspaceBridge, type_index: i32, app_index: i32) -> bool;
         #[cxx_name = "fileAssociationCandidateNormal"]

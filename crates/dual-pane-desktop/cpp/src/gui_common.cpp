@@ -130,6 +130,10 @@ auto style_sheet() -> QString {
       QListWidget#settingsCategoryList::item:selected { background:%5; color:white; }
       QWidget#settingsContent, QStackedWidget#settingsPages { background:%2; border:0; }
       QWidget#settingsPage { background:%2; color:%3; }
+      QListWidget#fileAssociationTypeList { background:%2; color:%3; border:1px solid %4; outline:none; }
+      QListWidget#fileAssociationTypeList::item { padding:4px 8px; }
+      QListWidget#fileAssociationTypeList::item:hover:!selected { background:%11; }
+      QListWidget#fileAssociationTypeList::item:selected { background:%5; color:white; }
       QStackedWidget#fileAssociationDetailStack, QScrollArea#fileAssociationDetailScroll, QScrollArea#fileAssociationDetailScroll QWidget#qt_scrollarea_viewport, QWidget#fileAssociationDetail, QWidget#fileAssociationLoading { background:%2; border:0; }
       QLabel#fileAssociationColumnHeading { background:transparent; color:#B7C0CA; font-size:10px; font-weight:600; }
       QWidget#fileAssociationApplicationDescription, QWidget#fileAssociationApplicationDescription QLabel { background:transparent; border:0; }

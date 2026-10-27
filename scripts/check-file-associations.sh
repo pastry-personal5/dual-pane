@@ -6,8 +6,8 @@ test_profile=$(mktemp -d "${TMPDIR:-/tmp}/dual-pane-file-associations.XXXXXX")
 trap 'rm -rf "$test_profile"' EXIT
 test_profile=$(CDPATH= cd -- "$test_profile" && pwd -P)
 mkdir "$test_profile/Files"
-: > "$test_profile/Files/first.txt"
-: > "$test_profile/Files/second.txt"
+printf '{}\n' > "$test_profile/Files/first.json"
+printf '{}\n' > "$test_profile/Files/second.json"
 
 cd "$repo_root"
 cargo test -q -p dual-pane-desktop native_shell::tests::file_association_discovery_uses_a_temporary_regular_file

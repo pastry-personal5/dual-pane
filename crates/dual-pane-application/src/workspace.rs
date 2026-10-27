@@ -9,6 +9,11 @@ use dual_pane_domain::{Activation, BrowserSide, BrowserTabs, Entry, EntryKind, E
 
 /// The most Notices a session keeps; older ones are dropped first.
 pub const NOTICE_LIMIT: usize = 200;
+const ASSOCIATION_RETRY_MAX_MS: u64 = 60_000;
+
+fn association_retry_delay_ms(failures: u32) -> u64 {
+    (1_000u64 << failures.saturating_sub(1).min(6)).min(ASSOCIATION_RETRY_MAX_MS)
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Transition {
@@ -80,7 +85,10 @@ pub struct Workspace {
     association_files: HashMap<Location, ResolvedFileAssociation>,
     association_catalog: HashMap<String, FileAssociationRecord>,
     observed_associations: HashMap<Location, HashSet<String>>,
-    association_observations: HashMap<Location, FileAssociationRequestId>,
+    association_observed_files: HashMap<Location, Vec<Location>>,
+    association_observations: HashMap<Location, PendingAssociationObservation>,
+    association_retries: HashMap<Location, AssociationRetry>,
+    next_association_retry: u64,
     association_error: Option<String>,
     association_revision: u64,
     association_pending: usize,
@@ -240,6 +248,19 @@ struct PendingRead {
     visibility_generation: u64,
     retry_on_busy: bool,
 }
+#[derive(Debug)]
+struct PendingAssociationObservation {
+    id: FileAssociationRequestId,
+    files: Vec<Location>,
+    replacement: Option<Vec<Location>>,
+}
+#[derive(Debug)]
+struct AssociationRetry {
+    failures: u32,
+    generation: u64,
+    files: Vec<Location>,
+    scheduled: bool,
+}
 
 impl Default for Workspace {
     fn default() -> Self {
@@ -253,7 +274,7 @@ impl Workspace {
     pub fn with_home(home: Location) -> Self {
         let left_id = TabId::new(0);
         let right_id = TabId::new(1);
-        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), operation_trash_cursors: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, association_files: HashMap::new(), association_catalog: HashMap::new(), observed_associations: HashMap::new(), association_observations: HashMap::new(), association_error: None, association_revision: 0, association_pending: 0, next_association_request: 0, next_open_with_token: 0, current_drag: None, pending_drops: HashMap::new(), next_drag: 0, next_drop_request: 0, journal_available: true, pending_selections: HashMap::new(), pending_trash_cursors: HashMap::new(), launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
+        Self { left: BrowserState::new(left_id), right: BrowserState::new(right_id), active_browser: BrowserSide::Left, home, settings: SettingsState::new(), settings_status: SettingsStatus::Loading, settings_interaction_available: false, settings_worker: true, reset_from: None, stale_save_floor: None, stale_session_save_floor: None, pending_sorts: Vec::new(), screenshots_probe: None, probing: HashSet::new(), notices: Arc::from([]), next_notice_id: 1, last_token: None, next_tab: 2, next_favorite_group_id: 1, next_favorite_item_id: 1, operations: OperationCoordinator::new(), operation_origins: HashMap::new(), operation_trash_cursors: HashMap::new(), transfers: HashMap::new(), current_transfer: None, pending_publications: HashMap::new(), latest_publication: None, pending_paste: None, cut_operations: HashMap::new(), clipboard_generation: None, clipboard_offer: ClipboardOffer::Unsupported, next_clipboard_request: 0, next_transfer: 0, next_menu_token: 0, live_menu: None, association_files: HashMap::new(), association_catalog: HashMap::new(), observed_associations: HashMap::new(), association_observed_files: HashMap::new(), association_observations: HashMap::new(), association_retries: HashMap::new(), next_association_retry: 0, association_error: None, association_revision: 0, association_pending: 0, next_association_request: 0, next_open_with_token: 0, current_drag: None, pending_drops: HashMap::new(), next_drag: 0, next_drop_request: 0, journal_available: true, pending_selections: HashMap::new(), pending_trash_cursors: HashMap::new(), launch_target: None, pending_open: None, quitting: false, layout: None, launch_completed: false, session_write_protected: false, session_revision: 0, startup_period: true, startup_notices_opened: false, startup_notice_pending: false, application_active: true, deferred_watch_invalidations: HashSet::new(), watch_visible: HashSet::new(), watches: HashMap::new(), watch_status: HashMap::new(), next_watch_generation: 0, visibility_generation: 0, visibility_retries: HashMap::new(), left_preview: PreviewSlot::default(), right_preview: PreviewSlot::default() }
     }
     pub fn is_quitting(&self) -> bool {
         self.quitting
@@ -486,6 +507,7 @@ impl Workspace {
     fn event(&mut self, event: Event) -> Transition {
         match event {
             Event::FileAssociationsResolved { request, outcome } => self.file_associations_resolved(request, outcome),
+            Event::FileAssociationRetryDue { folder, generation } => self.file_association_retry_due(folder, generation),
             Event::OpenWithFinished { request: _, result } => self.association_effect_finished(result, "Open With"),
             Event::DefaultApplicationFinished { request, result } => self.default_application_finished(request, result),
             Event::DropPreflighted { request, result } => self.drop_preflighted(request, result),
@@ -2294,7 +2316,9 @@ impl Workspace {
         let files_before = self.association_files.len();
         self.association_files.retain(|file, _| file.parent().as_ref() != Some(folder));
         let observed = self.observed_associations.remove(folder).is_some();
+        self.association_observed_files.remove(folder);
         let request = self.association_observations.remove(folder).is_some();
+        self.association_retries.remove(folder);
         observed || request || self.association_files.len() != files_before
     }
     fn resolve_file_associations_for(&mut self, mut files: Vec<Location>, mut content_types: Vec<String>, purpose: FileAssociationRequestPurpose) -> Transition {
@@ -2310,7 +2334,7 @@ impl Workspace {
         let request = FileAssociationRequest { id: FileAssociationRequestId(self.next_association_request), files, content_types, purpose };
         if matches!(request.purpose, FileAssociationRequestPurpose::Observe) {
             for folder in request.files.iter().filter_map(Location::parent) {
-                self.association_observations.insert(folder, request.id);
+                self.association_observations.insert(folder, PendingAssociationObservation { id: request.id, files: request.files.clone(), replacement: None });
             }
         }
         Transition { outputs: vec![Output::FileAssociationsChanged], work: vec![WorkRequest::ResolveFileAssociations { request }] }
@@ -2319,6 +2343,27 @@ impl Workspace {
         let files = self.open_file_locations();
         let content_types = self.settings.file_associations().entries().iter().map(|entry| entry.content_type.clone()).collect();
         self.resolve_file_associations_for(files, content_types, FileAssociationRequestPurpose::Refresh)
+    }
+    fn schedule_file_association_retry(&mut self, folder: Location, files: Vec<Location>) -> (u64, WorkRequest) {
+        let failures = self.association_retries.get(&folder).map_or(1, |retry| retry.failures.saturating_add(1));
+        self.next_association_retry = self.next_association_retry.wrapping_add(1).max(1);
+        let generation = self.next_association_retry;
+        self.association_retries.insert(folder.clone(), AssociationRetry { failures, generation, files, scheduled: true });
+        let delay_ms = association_retry_delay_ms(failures);
+        (delay_ms, WorkRequest::ScheduleFileAssociationRetry { folder, generation, delay_ms })
+    }
+    fn file_association_retry_due(&mut self, folder: Location, generation: u64) -> Transition {
+        let Some(retry) = self.association_retries.get_mut(&folder) else { return Transition::default() };
+        if retry.generation != generation || !retry.scheduled {
+            return Transition::default();
+        }
+        retry.scheduled = false;
+        let files = retry.files.clone();
+        if files.is_empty() || ![&self.left, &self.right].into_iter().flat_map(|browser| &browser.tabs).any(|tab| tab.folder_items.as_ref().is_some_and(|items| items.location == folder)) {
+            self.association_retries.remove(&folder);
+            return Transition::default();
+        }
+        self.resolve_file_associations(files, FileAssociationRequestPurpose::Observe)
     }
     fn set_file_association_selected(&mut self, content_type: String, kind: ContextMenuKind, application: ApplicationIdentity, selected: bool) -> Transition {
         let available = self.association_catalog.get(&content_type).is_some_and(|record| record.candidates.iter().any(|candidate| candidate.identity == application));
@@ -2359,14 +2404,29 @@ impl Workspace {
     }
     fn file_associations_resolved(&mut self, request: FileAssociationRequest, outcome: FileAssociationLookup) -> Transition {
         self.association_pending = self.association_pending.saturating_sub(1);
-        if matches!(request.purpose, FileAssociationRequestPurpose::Observe) && request.files.iter().filter_map(Location::parent).any(|folder| self.association_observations.get(&folder) != Some(&request.id)) {
-            self.association_revision = self.association_revision.wrapping_add(1);
-            return Transition::output(Output::FileAssociationsChanged);
+        let replaces_observations = matches!(request.purpose, FileAssociationRequestPurpose::Observe | FileAssociationRequestPurpose::Refresh);
+        let observation_folder = matches!(request.purpose, FileAssociationRequestPurpose::Observe).then(|| request.files.first().and_then(Location::parent)).flatten();
+        if let Some(folder) = observation_folder.as_ref() {
+            if self.association_observations.get(folder).is_none_or(|pending| pending.id != request.id) {
+                self.association_revision = self.association_revision.wrapping_add(1);
+                return Transition::output(Output::FileAssociationsChanged);
+            }
+            let pending = self.association_observations.remove(folder).expect("matching observation exists");
+            if let Some(replacement) = pending.replacement {
+                return self.resolve_file_associations(replacement, FileAssociationRequestPurpose::Observe);
+            }
         }
         let mut transition = Transition::default();
         match outcome {
             FileAssociationLookup::Rejected(reason) => {
                 self.association_error = Some(reason.clone());
+                if let Some(folder) = observation_folder {
+                    let (delay_ms, retry) = self.schedule_file_association_retry(folder, request.files.clone());
+                    let delay_seconds = delay_ms / 1_000;
+                    let unit = if delay_seconds == 1 { "second" } else { "seconds" };
+                    self.association_error = Some(format!("{reason} Retrying background file-type lookup in {delay_seconds} {unit}."));
+                    transition.work.push(retry);
+                }
                 if matches!(request.purpose, FileAssociationRequestPurpose::FocusSettings) {
                     transition.outputs.push(Output::OpenFileAssociations { content_type: None });
                 }
@@ -2374,6 +2434,16 @@ impl Workspace {
             FileAssociationLookup::Resolved { files: resolved, records } => {
                 let exact_type = resolved.first().map(|file| file.record.content_type.identifier.clone()).filter(|identifier| resolved.iter().all(|file| file.record.content_type.identifier == *identifier));
                 let mut remapped = false;
+                if replaces_observations {
+                    let folders = request.files.iter().filter_map(Location::parent).collect::<HashSet<_>>();
+                    self.association_files.retain(|file, _| file.parent().is_none_or(|folder| !folders.contains(&folder)));
+                    for folder in folders {
+                        self.observed_associations.remove(&folder);
+                        self.association_retries.remove(&folder);
+                        let snapshot = request.files.iter().filter(|file| file.parent().as_ref() == Some(&folder)).cloned().collect();
+                        self.association_observed_files.insert(folder, snapshot);
+                    }
+                }
                 for file in &resolved {
                     self.association_files.insert(file.source.clone(), file.clone());
                     self.association_catalog.insert(file.record.content_type.identifier.clone(), file.record.clone());
@@ -2611,7 +2681,10 @@ impl Workspace {
         self.association_files.clear();
         self.association_catalog.clear();
         self.observed_associations.clear();
+        self.association_observed_files.clear();
         self.association_observations.clear();
+        self.association_retries.clear();
+        self.next_association_retry = 0;
         self.association_error = None;
         self.association_pending = 0;
         self.association_revision = self.association_revision.wrapping_add(1);
@@ -2977,7 +3050,7 @@ impl Workspace {
             let visit = state.history.current().map(Visit::state);
             Transition { outputs: vec![Output::FolderItemsLoaded { browser, tab, location: pending.location, scroll_hint: visit.and_then(|visit| visit.scroll().cloned()), changes, entries: Arc::clone(&entries), visible_revision: state.visible_revision }, Output::SelectionChanged { browser, tab, selection: visit.map_or_else(Selection::default, |visit| visit.selection().clone()), row: visit.and_then(|visit| visit.cursor_row(&entries)) }], work: vec![WorkRequest::WatchReadCompleted { location: location.clone(), succeeded: true }] }
         };
-        let association_files = entries
+        let mut association_files = entries
             .iter()
             .filter_map(|entry| match entry.kind() {
                 EntryKind::File if !entry.is_package() => Some(location.join(entry.name())),
@@ -2986,15 +3059,42 @@ impl Workspace {
             })
             .take(256)
             .collect::<Vec<_>>();
-        if previous_location.as_ref().filter(|previous| *previous != &location).is_some_and(|previous| self.forget_associations_for_closed_folder(previous)) {
-            self.association_revision = self.association_revision.wrapping_add(1);
+        association_files.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+        association_files.dedup();
+        let previous_type_removed = previous_location.as_ref().filter(|previous| *previous != &location).is_some_and(|previous| self.forget_associations_for_closed_folder(previous));
+        // Keep the previous type snapshot visible until this listing's
+        // asynchronous lookup completes. Replacing it here made every folder
+        // refresh remove and then restore the same Settings rows.
+        let empty_type_removed = if association_files.is_empty() {
+            self.association_files.retain(|file, _| file.parent().as_ref() != Some(&location));
+            self.association_observed_files.remove(&location);
+            self.association_retries.remove(&location);
+            self.observed_associations.remove(&location).is_some()
+        } else {
+            false
+        };
+        // An empty replacement listing starts no lookup, but it still
+        // supersedes any earlier result for this folder and retires its types.
+        if association_files.is_empty() {
+            self.association_observations.remove(&location);
         }
-        self.association_files.retain(|file, _| file.parent().as_ref() != Some(&location));
-        self.observed_associations.remove(&location);
-        // An empty replacement listing starts no new lookup, but it still
-        // supersedes any earlier result for this folder.
-        self.association_observations.remove(&location);
-        transition.append(self.resolve_file_associations(association_files, FileAssociationRequestPurpose::Observe));
+        if previous_type_removed || empty_type_removed {
+            self.association_revision = self.association_revision.wrapping_add(1);
+            transition.outputs.push(Output::FileAssociationsChanged);
+        }
+        if !association_files.is_empty() {
+            if let Some(pending) = self.association_observations.get_mut(&location) {
+                let replacement = (pending.files != association_files).then_some(association_files);
+                if pending.replacement != replacement {
+                    pending.replacement = replacement;
+                    transition.outputs.push(Output::FileAssociationsChanged);
+                }
+            } else if let Some(retry) = self.association_retries.get_mut(&location) {
+                retry.files = association_files;
+            } else if self.association_observed_files.get(&location) != Some(&association_files) {
+                transition.append(self.resolve_file_associations(association_files, FileAssociationRequestPurpose::Observe));
+            }
+        }
         if dirty && self.tab(browser, tab).and_then(TabState::requested_location).as_ref() == Some(&location) {
             transition.append(self.start_read(browser, tab, location, None));
         }
