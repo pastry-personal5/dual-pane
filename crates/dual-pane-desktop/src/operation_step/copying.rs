@@ -16,20 +16,20 @@ impl OperationState {
                 if let Err(stop) = self.outside_source(entry, identity) {
                     return stop.into();
                 }
-                self.make_folder(context, &source, &target, index)
+                self.make_folder(context, &source, &target, &entry.source, index)
             }
             EntryKind::File | EntryKind::Symlink { .. } => self.copy_entry(context, entry.kind, &source, identity, &target, choice).map_or_else(Item::from, |()| Item::Done { next: index + 1, completed: 1 }),
             EntryKind::Other => Stop::Error(OperationErrorKind::UnsupportedItem).into(),
         }
     }
     /// Creates `target` for a folder, or merges into an existing folder.
-    pub(super) fn make_folder(&mut self, context: &StepContext<'_>, source: &Path, target: &Path, index: usize) -> Item {
+    pub(super) fn make_folder(&mut self, context: &StepContext<'_>, source: &Path, target: &Path, item: &Location, index: usize) -> Item {
         if context.cancelled() {
             return Item::Stopped;
         }
         match context.fs.create_dir(target) {
             Ok(()) => {
-                self.created_folders.push((source.to_path_buf(), target.to_path_buf()));
+                self.created_folders.push((item.clone(), source.to_path_buf(), target.to_path_buf()));
                 Item::Done { next: index + 1, completed: 1 }
             }
             Err(error) if error.raw_os_error() == Some(libc::EEXIST) => self.existing_folder(target, index),

@@ -21,6 +21,8 @@ struct TestFs {
     failing_copies: Mutex<Vec<(PathBuf, i32)>>,
     /// Removing these files or folders fails with `EACCES` while listed.
     failing_removals: Mutex<Vec<PathBuf>>,
+    /// Copying metadata onto these folders fails after their contents arrive.
+    failing_metadata: Mutex<Vec<PathBuf>>,
     /// A copy runs this first, for example to cancel.
     before_copy: Mutex<Option<CopyHook>>,
     exclusive_renames: Mutex<usize>,
@@ -66,6 +68,12 @@ impl FileSystem for TestFs {
             return Err(io::Error::from_raw_os_error(libc::EACCES));
         }
         fs::remove_file(path)
+    }
+    fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if self.failing_metadata.lock().unwrap().iter().any(|failing| failing == to) {
+            return Err(io::Error::from_raw_os_error(libc::EACCES));
+        }
+        native_calls::copy_metadata(from, to)
     }
     fn remove_dir(&self, path: &Path) -> io::Result<()> {
         if self.failing_removals.lock().unwrap().iter().any(|failing| failing == path) {

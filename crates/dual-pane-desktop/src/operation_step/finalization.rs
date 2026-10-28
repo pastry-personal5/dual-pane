@@ -5,12 +5,17 @@ use super::*;
 impl OperationState {
     /// Gives the folders this operation created their source's metadata,
     /// deepest first, once their contents are in place.
-    pub(super) fn finish_folders(&mut self, fs: &dyn FileSystem) {
-        for (source, target) in self.created_folders.drain(..).rev() {
+    pub(super) fn finish_folders(&mut self, fs: &dyn FileSystem) -> Option<OperationFailure> {
+        let mut failure = None;
+        for (item, source, target) in self.created_folders.drain(..).rev() {
             if let Err(error) = fs.copy_metadata(&source, &target) {
                 log(self.id, "copy folder metadata", &error);
+                if failure.is_none() {
+                    failure = Some(OperationFailure { item, kind: OperationErrorKind::FolderMetadataCopyFailed });
+                }
             }
         }
+        failure
     }
     /// Removes source folders from `at` on, deepest first. A folder already
     /// gone counts as removed.

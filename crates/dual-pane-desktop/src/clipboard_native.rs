@@ -53,8 +53,19 @@ fn decode_read(bytes: &[u8]) -> (ClipboardGeneration, ClipboardSnapshot) {
     if flags & 8 != 0 {
         return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unavailable);
     }
-    let transfer = if flags & 1 != 0 { cursor.u64().map(TransferId::new) } else { None };
+    if flags & !0b1111 != 0 || flags & 4 != 0 {
+        return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported);
+    }
+    let transfer = if flags & 1 != 0 {
+        let Some(transfer) = cursor.u64() else { return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported) };
+        Some(TransferId::new(transfer))
+    } else {
+        None
+    };
     let Some(count) = cursor.u32() else { return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported) };
+    if (flags & 2 != 0) != (count != 0) {
+        return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported);
+    }
     // Every path carries a four-byte length, so a larger count cannot be honest.
     let mut sources = Vec::with_capacity((count as usize).min(bytes.len() / 4));
     for _ in 0..count {
@@ -62,7 +73,7 @@ fn decode_read(bytes: &[u8]) -> (ClipboardGeneration, ClipboardSnapshot) {
         let Some(location) = location_from_absolute_bytes(path) else { return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported) };
         sources.push(location);
     }
-    if flags & 4 != 0 || !cursor.done() {
+    if !cursor.done() {
         return (ClipboardGeneration::new(generation), ClipboardSnapshot::Unsupported);
     }
     let sources: Arc<[Location]> = sources.into();
@@ -91,7 +102,10 @@ fn location_from_absolute_bytes(path: &[u8]) -> Option<Location> {
     if path.first() != Some(&b'/') || path.contains(&0) {
         return None;
     }
-    let components = path[1..].split(|byte| *byte == b'/').filter(|component| !component.is_empty()).map(|component| EntryName::new(component.to_vec())).collect::<Result<Vec<_>, _>>().ok()?;
+    // File URLs may end in `/` for directories. An empty interior component
+    // would silently turn a different URL spelling into another path.
+    let rest = path[1..].strip_suffix(b"/").unwrap_or(&path[1..]);
+    let components = if rest.is_empty() { Vec::new() } else { rest.split(|byte| *byte == b'/').map(|component| EntryName::new(component.to_vec())).collect::<Result<Vec<_>, _>>().ok()? };
     Some(Location::from_components(components))
 }
 
@@ -169,6 +183,34 @@ mod tests {
         let location = Location::from_components([EntryName::new(b"one".to_vec()).unwrap(), EntryName::new(b"raw\xff".to_vec()).unwrap()]);
         assert_eq!(location_from_absolute_bytes(&path_bytes(&location)), Some(location));
         assert_eq!(location_from_absolute_bytes(b"relative"), None);
+        assert_eq!(location_from_absolute_bytes(b"/one/two/"), location_from_absolute_bytes(b"/one/two"));
+        assert_eq!(location_from_absolute_bytes(b"//one"), None);
+        assert_eq!(location_from_absolute_bytes(b"/one//two"), None);
+        assert_eq!(location_from_absolute_bytes(b"/one/./two"), None);
+    }
+
+    #[test]
+    fn malformed_read_frames_never_become_file_snapshots() {
+        let mut frame = 9_u64.to_le_bytes().to_vec();
+        frame.push(2);
+        frame.extend_from_slice(&1_u32.to_le_bytes());
+        frame.extend_from_slice(&4_u32.to_le_bytes());
+        frame.extend_from_slice(b"/one");
+        assert!(matches!(decode_read(&frame).1, ClipboardSnapshot::ExternalFiles { .. }));
+
+        for flags in [0, 1, 4, 16] {
+            let mut malformed = frame.clone();
+            malformed[8] = flags;
+            assert_eq!(decode_read(&malformed).1, ClipboardSnapshot::Unsupported, "flags {flags}");
+        }
+        let mut missing_token = 9_u64.to_le_bytes().to_vec();
+        missing_token.push(1);
+        missing_token.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(decode_read(&missing_token).1, ClipboardSnapshot::Unsupported);
+        let mut empty_file_offer = 9_u64.to_le_bytes().to_vec();
+        empty_file_offer.push(2);
+        empty_file_offer.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(decode_read(&empty_file_offer).1, ClipboardSnapshot::Unsupported);
     }
 
     #[test]

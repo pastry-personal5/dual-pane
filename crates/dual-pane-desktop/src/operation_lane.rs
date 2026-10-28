@@ -344,7 +344,7 @@ fn respond(services: &Services, state: &mut Option<OperationState>, request: Req
             let mut context = StepContext { fs: services.fs.as_ref(), journal: &services.journal, cancelled, budget: services.budget, progress };
             match operation.execute(&mut context, &plan, at, choice, accepted) {
                 Outcome::Done(result) => {
-                    if matches!(result, StepResult::Finished { .. } | StepResult::Failed { .. }) {
+                    if matches!(result, StepResult::Finished { .. } | StepResult::MetadataFailed { .. } | StepResult::Failed { .. }) {
                         operation.release_journal(&services.journal);
                     }
                     events.extend(operation.trash_folders.drain(..).map(|location| Event::LocationInvalidated { location }));

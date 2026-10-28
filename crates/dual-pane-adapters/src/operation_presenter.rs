@@ -22,6 +22,7 @@ pub fn operation_error_text(kind: OperationErrorKind) -> &'static str {
         OperationErrorKind::SourceRemovalFailed => "it was copied, but the original couldn’t be removed",
         OperationErrorKind::JournalUnavailable => "Dual Pane couldn’t record its temporary files",
         OperationErrorKind::FolderNotEmpty => "the folder isn’t empty",
+        OperationErrorKind::FolderMetadataCopyFailed => "its folder attributes couldn’t be copied",
         OperationErrorKind::DestinationWithinSource => "the destination is inside the folder being copied or moved",
     }
 }
@@ -112,14 +113,14 @@ pub fn operation_summary(intent: &OperationIntent, outcome: OperationOutcome, pr
         OperationKind::MoveToTrash => "move to the Trash",
         OperationKind::DeletePermanently => "delete",
     };
-    let reason = failure.map(|failure| format!(" Couldn’t {action} “{}” because {}.", location_text(&failure.item), operation_error_text(failure.kind))).unwrap_or_default();
+    let reason = failure.map(|failure| if failure.kind == OperationErrorKind::FolderMetadataCopyFailed { format!(" Couldn’t preserve folder attributes for “{}”.", location_text(&failure.item)) } else { format!(" Couldn’t {action} “{}” because {}.", location_text(&failure.item), operation_error_text(failure.kind)) }).unwrap_or_default();
     let title = operation_title(intent.kind());
     match outcome {
         OperationOutcome::Succeeded => format!("{done}."),
         OperationOutcome::Partial => {
             let total = progress.completed + progress.skipped + progress.failed;
             let skipped = if progress.skipped > 0 { format!(" {} skipped.", progress.skipped) } else { String::new() };
-            format!("{title} finished partly: {} of {total} items done.{skipped}{reason}", progress.completed)
+            if progress.completed == total && failure.is_some() { format!("{title} finished with an issue after {total} items.{reason}") } else { format!("{title} finished partly: {} of {total} items done.{skipped}{reason}", progress.completed) }
         }
         OperationOutcome::Failed if failure.is_some() => format!("{title} of {subject} failed.{reason}"),
         OperationOutcome::Failed => format!("{title} of {subject} failed."),
@@ -151,13 +152,17 @@ mod tests {
         let failure = OperationFailure { item: path("from").join(&name("b")), kind: OperationErrorKind::NoSpace };
         let partial = OperationProgress { completed: 1, skipped: 1, failed: 0 };
         assert_eq!(operation_summary(&copy(&["a", "b"]), OperationOutcome::Partial, partial, Some(&failure)), "Copy finished partly: 1 of 2 items done. 1 skipped. Couldn’t copy “/from/b” because there isn’t enough space.");
+        let all_handled = OperationProgress { completed: 2, skipped: 0, failed: 0 };
+        assert_eq!(operation_summary(&copy(&["a", "b"]), OperationOutcome::Partial, all_handled, Some(&failure)), "Copy finished with an issue after 2 items. Couldn’t copy “/from/b” because there isn’t enough space.");
+        let metadata = OperationFailure { item: path("from").join(&name("dir")), kind: OperationErrorKind::FolderMetadataCopyFailed };
+        assert_eq!(operation_summary(&copy(&["a", "b"]), OperationOutcome::Partial, all_handled, Some(&metadata)), "Copy finished with an issue after 2 items. Couldn’t preserve folder attributes for “/from/dir”.");
         let rename = OperationIntent::new(OperationKind::Rename { to: name("z") }, path("from"), vec![OperationTarget { name: name("a"), kind: EntryKind::File }], None).unwrap();
         assert_eq!(operation_summary(&rename, OperationOutcome::Succeeded, done, None), "Renamed “a” to “z”.");
     }
 
     #[test]
     fn every_error_kind_and_rejection_has_wording() {
-        for kind in [OperationErrorKind::PermissionDenied, OperationErrorKind::ReadOnly, OperationErrorKind::PrivacyRestricted, OperationErrorKind::ChangedSinceScan, OperationErrorKind::UnsupportedItem, OperationErrorKind::TrashUnavailable, OperationErrorKind::SourceRemovalFailed, OperationErrorKind::JournalUnavailable, OperationErrorKind::FolderNotEmpty, OperationErrorKind::DestinationWithinSource] {
+        for kind in [OperationErrorKind::PermissionDenied, OperationErrorKind::ReadOnly, OperationErrorKind::PrivacyRestricted, OperationErrorKind::ChangedSinceScan, OperationErrorKind::UnsupportedItem, OperationErrorKind::TrashUnavailable, OperationErrorKind::SourceRemovalFailed, OperationErrorKind::JournalUnavailable, OperationErrorKind::FolderNotEmpty, OperationErrorKind::FolderMetadataCopyFailed, OperationErrorKind::DestinationWithinSource] {
             assert!(!operation_error_text(kind).is_empty());
         }
         assert_eq!(name_rejection_text(OperationRejection::UnchangedName), None, "an unchanged name closes the editor");

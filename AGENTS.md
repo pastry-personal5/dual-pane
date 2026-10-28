@@ -4,7 +4,7 @@ Instructions for AI coding agents and contributors. This file is the **single so
 
 ## Project
 
-`dual-pane` is a dual-Browser file manager for macOS, written in Rust with a Qt 6 Widgets UI. Version 2.0.0 is released. The Qt-free domain, application, and adapter crates own and test the behavior; the desktop crate executes file operations on a two-worker lane with a safety journal.
+`dual-pane` is a dual-Browser file manager for macOS, written in Rust with a Qt 6 Widgets UI. Version 3.0.0 is released. The Qt-free domain, application, and adapter crates own and test the behavior; the desktop crate executes file operations on a two-worker lane with a safety journal.
 
 Start from [README.md](README.md), [docs/README.md](docs/README.md) (doc index), [docs/product-behavior.md](docs/product-behavior.md), and [docs/architecture.md](docs/architecture.md).
 

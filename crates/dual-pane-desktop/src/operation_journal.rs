@@ -278,12 +278,12 @@ fn validated_lock_file(path: &Path, create: bool) -> io::Result<File> {
     {
         return Err(io::Error::other("liveness path is not a regular file"));
     }
-    let file = OpenOptions::new().read(true).write(true).create(create).mode(0o600).open(path)?;
+    let file = OpenOptions::new().read(true).write(true).create(create).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(io::Error::other("liveness path is not a regular file"));
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
     Ok(file)
 }
 

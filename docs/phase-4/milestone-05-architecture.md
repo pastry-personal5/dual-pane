@@ -12,6 +12,8 @@ The adapter writes and parses `file://` URL text itself, percent-encoding every 
 
 Every publication result includes the native `NSPasteboard.changeCount` generation, including failure. A successful write reports the count that `clearContents` returned when it took ownership, so another application's later write is never reported as Dual Pane's. If publication fails before native mutation, application state may retain the previously acknowledged transfer. If the generation changed before failure, the prior transfer is invalidated. A read reports a snapshot only when the count is unchanged across reading its items; after three attempts that each saw a change, it reports the clipboard as busy. The adapter observes generation at launch, on Qt clipboard-change notification, application activation, context-menu preparation, and every Paste request.
 
+The Rust boundary rejects inconsistent native read flags and empty interior path components instead of normalizing an ambiguous external file URL into another path.
+
 ## Serialized asynchronous flow
 
 Publication and reads run on the clipboard lane, never by synchronously materializing another application's provider data on the GUI thread. Results return through the existing application event boundary with request and generation tags. A read result is discarded if its generation is no longer current when delivered; external preflight is likewise discarded if the generation changes before it completes. A replacement observed while a Paste reads or preflights cancels that Paste, which reports that the clipboard changed in the pasting Browser; a replacement with no Paste pending stays silent.

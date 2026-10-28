@@ -29,7 +29,7 @@ impl OperationState {
                 // the scan skipped, which must stay behind.
                 let placeholders = self.identities(plan).is_some_and(|identities| identities[index + 1..end].iter().any(Option::is_none));
                 if !same_volume || placeholders {
-                    return self.make_folder(context, &source, &target, index);
+                    return self.make_folder(context, &source, &target, &entry.source, index);
                 }
                 if context.cancelled() {
                     return Item::Stopped;

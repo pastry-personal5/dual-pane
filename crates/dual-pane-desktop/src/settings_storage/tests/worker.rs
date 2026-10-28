@@ -65,6 +65,21 @@ fn failed_reset_restores_moved_files_and_later_saves_reach_disk() {
     assert_eq!(stored_sorts(&path), snapshot.folder_sorts);
 }
 #[test]
+fn reset_never_overwrites_an_existing_backup() {
+    let (directory, path) = temp_database();
+    let backup = directory.path().join("settings.failed");
+    let database = SettingsDatabase::open(&path).unwrap();
+    drop(database);
+    fs::write(&backup, b"earlier backup").unwrap();
+
+    let (database, result) = reset_database_to(&path, None, &backup);
+
+    assert!(result.is_err());
+    assert!(database.is_some(), "the original database remains usable");
+    assert!(path.exists());
+    assert_eq!(fs::read(&backup).unwrap(), b"earlier backup");
+}
+#[test]
 fn worker_reports_a_failed_open_by_category_and_stays_available() {
     let (_directory, path) = temp_database();
     let connection = Connection::open(&path).unwrap();

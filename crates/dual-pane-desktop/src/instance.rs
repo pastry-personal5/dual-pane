@@ -117,11 +117,11 @@ fn lock_file(path: &Path) -> io::Result<File> {
     {
         return Err(io::Error::other("the instance lock is not a regular file"));
     }
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600).open(path)?;
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::other("the instance lock is not a regular file"));
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
     Ok(file)
 }
 

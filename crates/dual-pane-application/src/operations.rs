@@ -10,8 +10,8 @@ pub struct PlannedItem {
     pub kind: EntryKind,
 }
 
-/// Why one item could not be handled. Every kind except
-/// `ExecutorUnavailable` is recoverable with Try Again, Skip, or Cancel.
+/// Why one item could not be handled. An executor loss or a folder metadata
+/// failure ends the operation; other failures offer recovery choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationErrorKind {
     PermissionDenied,
@@ -38,6 +38,9 @@ pub enum OperationErrorKind {
     /// A source folder that should be empty after its contents were handled
     /// still holds items.
     FolderNotEmpty,
+    /// Content arrived, but attributes could not be copied onto a newly
+    /// created destination folder after its contents were handled.
+    FolderMetadataCopyFailed,
     /// The destination folder lies inside a source folder through a link or
     /// another spelling of its path.
     DestinationWithinSource,
@@ -223,6 +226,12 @@ pub enum StepResult {
         progress: OperationProgress,
     },
     Finished {
+        progress: OperationProgress,
+    },
+    /// All planned items were handled, but source folder metadata could not
+    /// be copied to a newly created destination folder.
+    MetadataFailed {
+        failure: OperationFailure,
         progress: OperationProgress,
     },
     Failed {
@@ -497,6 +506,12 @@ impl OperationCoordinator {
                 job.status = OperationStatus::Finished(Self::completed_outcome(job));
                 Some(vec![])
             }
+            StepResult::MetadataFailed { failure, .. } if count == len && matches!(job.intent.kind(), OperationKind::Copy | OperationKind::Move) && failure.kind == OperationErrorKind::FolderMetadataCopyFailed && plan.iter().any(|item| item.source == failure.item && item.kind == EntryKind::Directory) => {
+                job.progress = progress;
+                job.failure = Some(failure);
+                job.status = OperationStatus::Finished(OperationOutcome::Partial);
+                Some(vec![])
+            }
             StepResult::Failed { failure, .. } if failure.item == *expected && progress.failed == job.progress.failed + 1 && progress.completed == job.progress.completed && progress.skipped == job.progress.skipped && count == at + 1 => {
                 job.progress = progress;
                 job.failure = Some(failure);
@@ -513,16 +528,16 @@ impl OperationCoordinator {
         let plan = job.plan.as_ref()?;
         let len = plan.len();
         let progress = match result {
-            StepResult::Advanced { progress, .. } | StepResult::DecisionRequired { progress, .. } | StepResult::RecoverableError { progress, .. } | StepResult::NameCollision { progress, .. } | StepResult::NameRejected { progress, .. } | StepResult::Finished { progress } | StepResult::Failed { progress, .. } => *progress,
+            StepResult::Advanced { progress, .. } | StepResult::DecisionRequired { progress, .. } | StepResult::RecoverableError { progress, .. } | StepResult::NameCollision { progress, .. } | StepResult::NameRejected { progress, .. } | StepResult::Finished { progress } | StepResult::MetadataFailed { progress, .. } | StepResult::Failed { progress, .. } => *progress,
         };
         let count = progress.total()?;
         if job.progress.total() != Some(at) || progress.completed < job.progress.completed || progress.skipped < job.progress.skipped || progress.failed < job.progress.failed || count > len {
             return None;
         }
-        if job.scan_skip_positions.binary_search(&at).is_ok() && !matches!(result, StepResult::Advanced { .. } | StepResult::Finished { .. }) {
+        if job.scan_skip_positions.binary_search(&at).is_ok() && !matches!(result, StepResult::Advanced { .. } | StepResult::Finished { .. } | StepResult::MetadataFailed { .. }) {
             return None;
         }
-        if matches!(result, StepResult::Advanced { .. } | StepResult::Finished { .. }) {
+        if matches!(result, StepResult::Advanced { .. } | StepResult::Finished { .. } | StepResult::MetadataFailed { .. }) {
             let subtree_end = if job.issued_choice == Some(OperationChoice::Skip) { plan[at + 1..].iter().position(|item| !starts_with(&item.source, &plan[at].source)).map_or(len, |offset| at + 1 + offset) } else { at };
             if count < subtree_end || progress.failed != job.progress.failed {
                 return None;
@@ -535,7 +550,7 @@ impl OperationCoordinator {
         }
         match result {
             StepResult::Advanced { next, .. } if *next != count || *next <= at || *next >= len => None,
-            StepResult::Finished { .. } if count != len => None,
+            StepResult::Finished { .. } | StepResult::MetadataFailed { .. } if count != len => None,
             _ => Some(progress),
         }
     }

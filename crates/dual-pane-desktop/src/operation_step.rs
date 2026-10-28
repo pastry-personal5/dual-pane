@@ -133,7 +133,7 @@ pub struct OperationState {
     journaled: HashSet<PathBuf>,
     next_temporary: u64,
     /// Folders this operation created, for their metadata at the end.
-    created_folders: Vec<(PathBuf, PathBuf)>,
+    created_folders: Vec<(Location, PathBuf, PathBuf)>,
     /// A source copied to another volume whose removal is still pending.
     awaiting_removal: Option<Location>,
     /// Folders that received items moved to the Trash.
@@ -207,8 +207,10 @@ impl OperationState {
                 }
             }
         }
-        self.finish_folders(context.fs);
-        Outcome::Done(StepResult::Finished { progress })
+        match self.finish_folders(context.fs) {
+            Some(failure) => Outcome::Done(StepResult::MetadataFailed { failure, progress }),
+            None => Outcome::Done(StepResult::Finished { progress }),
+        }
     }
 
     fn item(&mut self, context: &mut StepContext<'_>, plan: &[PlannedItem], identities: &[Option<Identity>], index: usize, choice: Option<OperationChoice>) -> Item {

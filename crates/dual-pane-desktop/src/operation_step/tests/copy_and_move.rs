@@ -32,6 +32,21 @@ fn a_copy_merges_folders_keeps_metadata_and_never_clobbers() {
 }
 
 #[test]
+fn a_folder_metadata_failure_is_reported_as_a_partial_copy() {
+    let mut run = Run::new();
+    run.write("from/dir/item.txt", "copied content");
+    run.fs.failing_metadata.lock().unwrap().push(run.path("to/dir"));
+
+    let id = run.start(&["dir"], OperationKind::Copy);
+
+    assert_eq!(run.status(id), OperationStatus::Finished(OperationOutcome::Partial));
+    assert_eq!(run.ws.operation_jobs().iter().find(|job| job.id() == id).unwrap().failure(), Some(&OperationFailure { item: run.location("from/dir"), kind: OperationErrorKind::FolderMetadataCopyFailed }));
+    assert_eq!(run.read("to/dir/item.txt"), "copied content");
+    assert_eq!(run.read("from/dir/item.txt"), "copied content");
+    assert!(run.events.iter().any(|event| matches!(event, Event::OperationStepped { id: event_id, result: StepResult::MetadataFailed { .. }, .. } if *event_id == id)));
+}
+
+#[test]
 fn an_unlisted_destination_child_still_requires_a_conflict_decision() {
     let mut run = Run::new();
     run.write("from/dir/.DS_Store", "new");
