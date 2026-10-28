@@ -63,7 +63,9 @@ impl OperationState {
                 }
             }
         }
-        let folders = self.journaled.iter().cloned().chain(journal.folders(self.id.get())).collect::<HashSet<_>>();
+        let recorded = journal.checked_folders(self.id.get());
+        uncertain |= recorded.is_none();
+        let folders = self.journaled.iter().cloned().chain(recorded.unwrap_or_default()).collect::<HashSet<_>>();
         uncertain |= !remove_operation_temporaries(self.id, fs, journal, &folders);
         if !uncertain && !folders.is_empty() && !journal.clear(self.id.get()) {
             uncertain = true;
@@ -82,7 +84,8 @@ impl OperationState {
 /// Removes, without state, every temporary of `id` in its recorded folders,
 /// as after a worker panic. Records stay unless every folder is clean.
 pub fn clean_up_after_loss(id: OperationId, fs: &dyn FileSystem, journal: &Journal) -> CleanupResult {
-    let folders = journal.folders(id.get()).into_iter().collect::<HashSet<_>>();
+    let Some(recorded) = journal.checked_folders(id.get()) else { return CleanupResult::Uncertain };
+    let folders = recorded.into_iter().collect::<HashSet<_>>();
     if remove_operation_temporaries(id, fs, journal, &folders) && (folders.is_empty() || journal.clear(id.get())) { CleanupResult::Clean } else { CleanupResult::Uncertain }
 }
 
@@ -100,13 +103,24 @@ pub(super) fn remove_operation_temporaries(id: OperationId, fs: &dyn FileSystem,
                 continue;
             }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    clean = false;
+                    continue;
+                }
+            };
             if !is_operation_temporary(entry.file_name().as_bytes(), &launch, id.get()) {
                 continue;
             }
             let path = entry.path();
-            if fs::symlink_metadata(&path).is_ok_and(|metadata| !metadata.is_dir()) && fs.remove_file(&path).is_err_and(|error| error.kind() != io::ErrorKind::NotFound) {
-                clean = false;
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_dir() => clean = false,
+                Ok(_) if fs.remove_file(&path).is_err_and(|error| error.kind() != io::ErrorKind::NotFound) => clean = false,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => clean = false,
+                Ok(_) => {}
             }
         }
     }

@@ -197,8 +197,15 @@ impl Journal {
         })
     }
     /// The folders recorded for `operation` during this launch.
+    #[cfg(test)]
     pub fn folders(&self, operation: u64) -> Vec<PathBuf> {
         self.lock().as_ref().and_then(|database| database.records(&self.launch.hex(), operation).ok()).unwrap_or_default().into_iter().map(|record| record.folder).collect()
+    }
+    /// Returns `None` when cleanup cannot establish the complete recorded set.
+    pub fn checked_folders(&self, operation: u64) -> Option<Vec<PathBuf>> {
+        let database = self.lock();
+        let database = database.as_ref()?;
+        database.records(&self.launch.hex(), operation).map(|records| records.into_iter().map(|record| record.folder).collect()).map_err(|error| log_journal_error("read folders", &error)).ok()
     }
     /// Forgets `operation`'s records once no temporary of it remains.
     pub fn clear(&self, operation: u64) -> bool {

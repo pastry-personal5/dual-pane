@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn cleanup_cannot_claim_success_without_reading_the_journal() {
+    let run = Run::new();
+    let unavailable = Journal::new(None, LaunchId::from_bytes([7; 16]));
+    assert_eq!(clean_up_after_loss(OperationId::new(42), &*run.fs, &unavailable), CleanupResult::Uncertain);
+}
+
+#[test]
+fn unexpected_temporary_directory_keeps_recovery_record() {
+    let run = Run::new();
+    let id = OperationId::new(42);
+    let folder = run.path("to");
+    let temporary = folder.join(crate::operation_journal::temporary_name(run.lane.services.journal.launch(), id.get(), 1));
+    fs::create_dir(&temporary).unwrap();
+    run.lane.services.journal.record(id.get(), &folder, fs::metadata(&folder).unwrap().dev()).unwrap();
+
+    assert_eq!(clean_up_after_loss(id, &*run.fs, &run.lane.services.journal), CleanupResult::Uncertain);
+    assert!(temporary.is_dir());
+    assert_eq!(run.lane.services.journal.folders(id.get()), vec![folder]);
+}
+
+#[test]
 fn cancelling_mid_copy_keeps_completed_work_and_removes_only_its_temporaries() {
     let mut run = Run::new();
     run.write("from/a.txt", "a");

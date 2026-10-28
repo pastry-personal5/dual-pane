@@ -38,17 +38,26 @@ pub(super) fn preserve_files(path: &Path, backup: &Path) -> Result<bool, Setting
     let mut moved = Vec::new();
     for suffix in ["", "-wal", "-shm"] {
         let (from, to) = (with_suffix(path, suffix), with_suffix(backup, suffix));
-        if fs::symlink_metadata(&from).is_err() {
-            continue;
+        match fs::symlink_metadata(&from) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                restore_files(&moved);
+                return Err(error.into());
+            }
         }
         if let Err(error) = fs::rename(&from, &to) {
-            for (from, to) in moved.iter().rev() {
-                // Best effort: the original error is the one worth reporting.
-                fs::rename(to, from).ok();
-            }
+            restore_files(&moved);
             return Err(error.into());
         }
         moved.push((from, to));
     }
     Ok(moved.iter().any(|(from, _)| from == path))
+}
+
+fn restore_files(moved: &[(PathBuf, PathBuf)]) {
+    for (from, to) in moved.iter().rev() {
+        // Best effort: the original error is the one worth reporting.
+        fs::rename(to, from).ok();
+    }
 }

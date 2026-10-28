@@ -43,6 +43,10 @@ Out of scope:
 
 ## Completion checklist
 
+- [x] Propagate failed macOS visibility classification as a retryable listing error and avoid per-item metadata work for non-folder column choices. Verify both paths with isolated tests and the full gate.
+- [x] Keep operation recovery records when temporary cleanup cannot inspect an entry or finds a temporary-shaped directory. Verify uncertain cleanup with a disposable directory and the full gate.
+- [x] Report cleanup as uncertain when operation journal records cannot be read, including after worker loss. Verify an unavailable journal and the full gate.
+- [x] Treat storage-file inspection errors during Reset Settings as failures, and restore files already moved aside. Verify the storage tests and full gate.
 - [x] Coalesce unchanged background observations, keep at most one lookup per open folder, and retry failed observations with capped exponential backoff. Preserve explicit Refresh Applications and stale-result safety. Verify failure and retry timing in application tests, native checks, and the full gate.
 - [x] Keep the File Associations footer stable during background type observation; show progress there for actions started from Settings. Verify the native check and full gate.
 - [x] Publish observed file types as a complete folder snapshot after lookup, preserving the prior list during refresh and retiring absent types only when the replacement is ready. Explain the generic `public.data` row. Verify with application tests, native checks, and the full gate.
@@ -87,6 +91,13 @@ Out of scope:
 - The footer previously switched on every shared association-pending change, including frequent background observations. It now keeps its explanation through background work and shows progress for requests started in Settings. The native File Associations check verifies both paths; `scripts/check-file-associations.sh`, `scripts/check-settings-window.sh`, `make check`, and `git diff --check` passed after the footer repair.
 - Every successful folder reload previously submitted all eligible files to the single serialized macOS association worker, even when the file set was unchanged. A frequently invalidated folder such as Home could therefore enqueue lookups faster than Launch Services completed them; superseding a request only rejected its result and did not remove its queued work, eventually producing the runtime's busy/unavailable failure. Observation now caches the completed file set per folder, keeps one active request, and holds only the latest changed replacement. A rejected background request schedules 1, 2, 4, 8, 16, 32, 60, then 60-second retries; generations reject stale timers, changed listings update the retry payload, and closing or emptying a folder cancels its retry state. Explicit Refresh Applications still bypasses the delay.
 - `cargo test -q -p dual-pane-application --test context_menus` passed all 22 tests, including unchanged/replacement coalescing and the complete capped delay sequence. `scripts/check-file-associations.sh`, `scripts/check-settings-window.sh`, `make check`, and `git diff --check` passed. The disposable native profile again reported no application candidate and exercised its safe empty state; no Launch Services default was changed.
+
+## Reliability follow-up evidence — 2026-10-28
+
+- A failed child visibility check now rejects the folder snapshot with `VisibilityClassificationFailed`, preserving the last successful view and its retry path. Column choices skip ordinary files before reading visibility flags or metadata. Isolated tests verify both outcomes and that file visibility reads are avoided.
+- Operation cleanup treats unreadable directory entries, unreadable temporary metadata, and temporary-shaped directories as uncertain. It also requires a successful journal-record read before claiming cleanup after worker loss. Disposable-directory tests verify an unexpected directory retains its recovery record and an unavailable journal reports uncertainty.
+- Reset Settings now skips only missing storage files during preservation; other inspection errors trigger rollback of files already moved. The existing failed-reset storage test verifies rollback and subsequent saves.
+- `make check` passed Rust and C++ formatting, both linters, and all tests with macOS pasteboard and Unix socket access. `git diff --check` passed. The restricted filesystem sandbox blocks existing pasteboard and socket tests, so the full gate ran with its required native access.
 
 ## Guided macOS acceptance
 

@@ -51,6 +51,19 @@ pub fn read_folder_choices(parent: &Location, selected: Option<&EntryName>, afte
         if after.is_some_and(|after| bytes <= after.as_bytes()) {
             continue;
         }
+        if (rules.hidden)(bytes) {
+            continue;
+        }
+        // Column choices only contain folders. Discard ordinary files before
+        // reading their visibility flags and metadata, which can require two
+        // filesystem calls per file in a large mixed directory.
+        let candidate = match folder_choice_candidate(&item) {
+            Ok(candidate) => candidate,
+            Err(kind) => return Some(Err(kind)),
+        };
+        if !candidate {
+            continue;
+        }
         let on_path = selected.is_some_and(|selected| selected.as_bytes() == bytes);
         let policy = if on_path { VisibilityPolicy { show_macos_items: true, show_dotfiles: true, show_macos_invisible: true } } else { visibility };
         let entry = match classify_dir_entry(item, &path, policy, cancelled, rules)? {
@@ -79,6 +92,14 @@ pub fn read_folder_choices(parent: &Location, selected: Option<&EntryName>, afte
         None
     };
     Some(Ok(FolderChoicePage { names: names.into(), next, selected_found }))
+}
+
+fn folder_choice_candidate(entry: &DirEntry) -> Result<bool, ListingErrorKind> {
+    Ok(match classify_own_type(entry.file_type().map(native_kind))? {
+        Some(NativeKind::Directory) => true,
+        Some(NativeKind::Symlink) => fs::metadata(entry.path()).is_ok_and(|target| target.is_dir()),
+        Some(_) | None => false,
+    })
 }
 
 /// What a listing leaves out and how it recognizes packages.
@@ -161,9 +182,6 @@ fn classify_dir_entry(entry: DirEntry, directory: &Path, visibility: VisibilityP
     match hidden_by_visibility(entry.file_name().as_bytes(), &entry.path(), directory, own_kind, visibility, rules) {
         Ok(Some(true) | None) => return Some(Ok(None)),
         Ok(Some(false)) => {}
-        // One entry's visibility cannot be classified. Leaving it out of this
-        // listing is strictly better than failing the whole directory read.
-        Err(ListingErrorKind::VisibilityClassificationFailed) => return Some(Ok(None)),
         Err(kind) => return Some(Err(kind)),
     }
     if is_cancelled(cancelled) {
@@ -550,15 +568,37 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_whose_visibility_cannot_be_classified_is_left_out_but_the_listing_still_succeeds() {
+    fn visibility_failure_rejects_the_snapshot_instead_of_silently_omitting_an_entry() {
         let temporary = tempdir().unwrap();
         File::create(temporary.path().join("plain")).unwrap();
         File::create(temporary.path().join("unreadable")).unwrap();
         let location = location_from_path(temporary.path()).unwrap();
         let rules = ListingRules { hidden: &|_| false, package: &|_| false, volume_root: &|_| Ok(false), invisible: &|path| if path.file_name().is_some_and(|name| name.as_bytes() == b"unreadable") { Err(io::Error::from(io::ErrorKind::PermissionDenied)) } else { Ok(false) } };
-        let entries = read_listing(&location, SortSpec::default(), VisibilityPolicy::default(), &AtomicBool::new(false), &rules).unwrap().unwrap();
-        let names = entries.iter().map(|entry| entry.name().as_bytes().to_vec()).collect::<Vec<_>>();
-        assert_eq!(names, [b"plain".to_vec()]);
+        assert_eq!(read_listing(&location, SortSpec::default(), VisibilityPolicy::default(), &AtomicBool::new(false), &rules).map(|result| result.map(|_| ())), Some(Err(ListingErrorKind::VisibilityClassificationFailed)));
+    }
+
+    #[test]
+    fn folder_choices_skip_file_metadata_but_keep_folder_visibility_errors() {
+        let temporary = tempdir().unwrap();
+        File::create(temporary.path().join("file")).unwrap();
+        fs::create_dir(temporary.path().join("folder")).unwrap();
+        let location = location_from_path(temporary.path()).unwrap();
+        let checked = std::sync::Mutex::new(Vec::new());
+        let rules = ListingRules {
+            hidden: &|_| false,
+            package: &|_| false,
+            volume_root: &|_| Ok(false),
+            invisible: &|path| {
+                checked.lock().unwrap().push(path.file_name().unwrap().as_bytes().to_vec());
+                Ok(false)
+            },
+        };
+        let page = read_folder_choices(&location, None, None, VisibilityPolicy::default(), &AtomicBool::new(false), &rules).unwrap().unwrap();
+        assert_eq!(page.names.iter().map(|name| name.as_bytes()).collect::<Vec<_>>(), vec![b"folder".as_slice()]);
+        assert_eq!(*checked.lock().unwrap(), vec![b"folder".to_vec()]);
+
+        let unreadable = ListingRules { hidden: &|_| false, package: &|_| false, volume_root: &|_| Ok(false), invisible: &|_| Err(io::Error::from(io::ErrorKind::PermissionDenied)) };
+        assert!(matches!(read_folder_choices(&location, None, None, VisibilityPolicy::default(), &AtomicBool::new(false), &unreadable), Some(Err(ListingErrorKind::VisibilityClassificationFailed))));
     }
 
     #[test]
