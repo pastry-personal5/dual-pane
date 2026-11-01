@@ -3,7 +3,7 @@
 use super::shortcuts::{binding_params, insert_shortcut, replace_shortcuts, stored_shortcuts};
 use super::*;
 
-pub(super) const SCHEMA_VERSION: i64 = 12;
+pub(super) const SCHEMA_VERSION: i64 = 13;
 
 /// Move to Trash factory lists as the migrations that introduced them wrote
 /// them, so a later default never changes what an earlier step writes.
@@ -125,6 +125,12 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<(), SettingsStorage
         let defaults = ContextMenuPreferences::default();
         for kind in ContextMenuKind::ALL {
             tx.execute("INSERT OR IGNORE INTO context_menu_action(menu_kind, action, visible) VALUES (?1, ?2, ?3)", params![kind.as_str(), ActionId::ConfigureOpenWith.as_str(), i64::from(defaults.visible(kind, ActionId::ConfigureOpenWith))])?;
+        }
+    }
+    if version < 13 {
+        let defaults = ContextMenuPreferences::default();
+        for kind in ContextMenuKind::ALL {
+            tx.execute("INSERT OR IGNORE INTO context_menu_action(menu_kind, action, visible) VALUES (?1, ?2, ?3)", params![kind.as_str(), ActionId::OpenFolderInFinder.as_str(), i64::from(defaults.visible(kind, ActionId::OpenFolderInFinder))])?;
         }
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;

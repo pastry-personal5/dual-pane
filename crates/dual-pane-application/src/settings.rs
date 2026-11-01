@@ -41,6 +41,7 @@ pub enum ActionId {
     PasteItems,
     EditPath,
     ConfigureOpenWith,
+    OpenFolderInFinder,
 }
 
 /// The two persistent Folder Items Context Menu configurations.
@@ -869,14 +870,14 @@ mod tests {
         assert_eq!(default_shortcut(ActionId::CutItems), shortcut(true, false, Key::Character('X')));
         assert_eq!(default_shortcut(ActionId::PasteItems), shortcut(true, false, Key::Character('V')));
         assert_eq!(default_shortcut(ActionId::EditPath), shortcut(true, false, Key::Character('L')));
-        assert_eq!(ActionId::ALL.last(), Some(&ActionId::ConfigureOpenWith), "Configure Open With is appended last");
+        assert_eq!(ActionId::ALL.last(), Some(&ActionId::OpenFolderInFinder), "Open Folder in Finder is appended last");
         assert_eq!(default_shortcut(ActionId::ShowPackageContents), None);
         assert_eq!(default_shortcut(ActionId::OpenInFinder), None);
         assert!(ActionId::ALL.windows(3).any(|actions| actions == [ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems]), "clipboard IDs stay consecutive");
     }
     #[test]
     fn file_command_shortcuts_need_a_focused_list_and_only_quit_works_while_editing() {
-        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::ConfigureOpenWith];
+        let list = [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::CopyItems, ActionId::CutItems, ActionId::PasteItems, ActionId::ConfigureOpenWith, ActionId::OpenFolderInFinder];
         for action in ActionId::ALL {
             let expected = if list.contains(&action) {
                 ShortcutScope::FolderItemsList
@@ -892,7 +893,7 @@ mod tests {
     #[test]
     fn focus_filter_default_is_appended_and_respects_older_bindings() {
         let command_f = default_shortcut(ActionId::FocusFolderItemsFilter).unwrap();
-        assert_eq!(ActionId::ALL.get(ActionId::ALL.len() - 6), Some(&ActionId::FocusFolderItemsFilter));
+        assert_eq!(ActionId::ALL.get(ActionId::ALL.len() - 7), Some(&ActionId::FocusFolderItemsFilter));
         assert_eq!(ActionId::FocusFolderItemsFilter.scope(), ShortcutScope::Window);
         let mut old = SettingsState::new();
         old.apply(SettingsSnapshot { bindings: vec![ActionBinding { action: ActionId::FocusOtherBrowser, shortcut: Some(command_f) }], ..SettingsSnapshot::default() });
@@ -926,7 +927,7 @@ mod tests {
         let older = ActionId::ALL[..18].iter().map(|action| ActionBinding { action: *action, shortcut: default_shortcut(*action) }).collect::<Vec<_>>();
         let mut state = SettingsState::new();
         state.apply(SettingsSnapshot { bindings: older, ..SettingsSnapshot::default() });
-        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::ConfigureOpenWith] {
+        for action in [ActionId::CopyToOtherBrowser, ActionId::MoveToOtherBrowser, ActionId::RenameItem, ActionId::MoveToTrash, ActionId::DeletePermanently, ActionId::ShowPackageContents, ActionId::OpenItem, ActionId::OpenInFinder, ActionId::ConfigureOpenWith, ActionId::OpenFolderInFinder] {
             assert_eq!(state.binding(action), default_shortcut(action), "{action:?}");
         }
         let taken = ActionBinding { action: ActionId::NewTab, shortcut: default_shortcut(ActionId::RenameItem) };

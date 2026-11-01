@@ -709,6 +709,7 @@ impl Workspace {
             MenuAvailability::PackageItem => self.single_selected_entry(browser, tab).is_some_and(|(_, entry)| entry.is_package()),
             MenuAvailability::SingleItem => self.single_selected_entry(browser, tab).is_some(),
             MenuAvailability::AssociationItems => self.association_selection_locations(browser, tab).is_some(),
+            MenuAvailability::EmptySpace => !row_invocation,
         }
     }
     fn single_selected_entry(&self, browser: BrowserSide, tab: TabId) -> Option<(usize, &Entry)> {
@@ -754,6 +755,7 @@ impl Workspace {
             MenuInvocation::OpenItem => self.command_for_single_item(browser, tab, |row, name| Command::OpenEntry { browser, tab, row, name }),
             MenuInvocation::ShowPackageContents => self.command_for_single_item(browser, tab, |row, name| Command::ShowPackageContents { browser, tab, row, name }),
             MenuInvocation::RevealInFinder => self.command_for_single_item(browser, tab, |row, name| Command::RevealEntryInFinder { browser, tab, row, name }),
+            MenuInvocation::RevealFolderInFinder => Transition::output(Output::RevealInFinder { item: menu.source }),
             MenuInvocation::ConfigureOpenWith => {
                 let files = menu.selection.iter().map(|name| menu.source.join(name)).collect();
                 self.resolve_file_associations(files, FileAssociationRequestPurpose::FocusSettings)

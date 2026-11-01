@@ -89,10 +89,13 @@ fn row_requests_apply_secondary_selection_and_project_only_available_configured_
 fn empty_space_preserves_selection_and_suppresses_every_source_action() {
     let (mut workspace, tab, revision, _) = setup(vec![Entry::new(name("item"), EntryKind::File)]);
     workspace.handle(Command::SelectEntry { browser: BrowserSide::Left, tab, row: 0, name: name("item") }.into());
-    assert!(request(&mut workspace, tab, revision, ContextMenuKind::Normal, FolderItemsMenuTarget::EmptySpace).is_none(), "Normal has no configured available destination action with an unsupported clipboard");
+    let normal = request(&mut workspace, tab, revision, ContextMenuKind::Normal, FolderItemsMenuTarget::EmptySpace).unwrap();
+    assert_eq!(actions(&normal), vec![ActionId::OpenFolderInFinder]);
+    let revealed = workspace.handle(Command::InvokeFolderItemsMenu { token: normal.token, action: ActionId::OpenFolderInFinder }.into());
+    assert!(matches!(revealed.outputs.as_slice(), [Output::RevealInFinder { item }] if item == &location("from")));
     let comprehensive = request(&mut workspace, tab, revision, ContextMenuKind::Comprehensive, FolderItemsMenuTarget::EmptySpace).unwrap();
     assert_eq!(workspace.selection(BrowserSide::Left).entries(), &[name("item")]);
-    assert_eq!(actions(&comprehensive), vec![ActionId::NewFolder]);
+    assert_eq!(actions(&comprehensive), vec![ActionId::NewFolder, ActionId::OpenFolderInFinder]);
 }
 
 #[test]
@@ -183,11 +186,11 @@ fn comprehensive_projection_groups_package_actions_and_cached_paste_without_io()
 
     let snapshot = request(&mut workspace, tab, revision, ContextMenuKind::Comprehensive, FolderItemsMenuTarget::Row { row: 0, name: name("Tool.app") }).unwrap();
     assert_eq!(snapshot.sections.iter().map(|section| section.group).collect::<Vec<_>>(), ContextMenuGroup::ALL);
-    assert_eq!(actions(&snapshot), dual_pane_application::CONTEXT_MENU_ACTIONS.into_iter().filter(|action| *action != ActionId::ConfigureOpenWith).collect::<Vec<_>>());
+    assert_eq!(actions(&snapshot), dual_pane_application::CONTEXT_MENU_ACTIONS.into_iter().filter(|action| *action != ActionId::ConfigureOpenWith && *action != ActionId::OpenFolderInFinder).collect::<Vec<_>>());
     assert!(workspace.handle(Command::DismissFolderItemsMenu { token: snapshot.token }.into()).work.is_empty(), "projection and dismissal perform no clipboard read");
 
     let empty = request(&mut workspace, tab, revision, ContextMenuKind::Normal, FolderItemsMenuTarget::EmptySpace).unwrap();
-    assert_eq!(actions(&empty), vec![ActionId::PasteItems]);
+    assert_eq!(actions(&empty), vec![ActionId::OpenFolderInFinder, ActionId::PasteItems]);
     let invoked = workspace.handle(Command::InvokeFolderItemsMenu { token: empty.token, action: ActionId::PasteItems }.into());
     assert!(matches!(invoked.work.as_slice(), [WorkRequest::ReadClipboard { .. }]), "Paste validates through its ordinary fresh clipboard read only after invocation");
 }

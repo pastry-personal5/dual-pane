@@ -345,7 +345,7 @@ mod tests {
         presenter.apply_chrome(&chrome);
         let view = presenter.view();
         assert_eq!(view.context_menu_rows().len(), CONTEXT_MENU_ACTIONS.len());
-        assert_eq!(view.context_menu_rows().iter().filter(|row| row.normal).count(), 8);
+        assert_eq!(view.context_menu_rows().iter().filter(|row| row.normal).count(), 9);
         assert!(view.context_menu_rows().iter().all(|row| row.comprehensive));
         assert_eq!(view.context_menu_rows().iter().find(|row| row.action == ActionId::OpenItem).and_then(|row| row.shortcut), Some(shortcut));
         assert_eq!(view.context_menu_rows().first().map(|row| (row.label.as_str(), row.group_label)), Some(("Rename Item", "Rename and Create")));
