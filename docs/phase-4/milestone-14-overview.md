@@ -43,6 +43,12 @@ On 2026-10-23, the repair replaced the ambient-AppKit-event early exit with supp
 
 The disposable native checks now send secondary press, context, and release events to actual Folder Items viewports in both Browsers. They cover rows and empty space; Normal, exact-Shift Comprehensive, and Shift-plus-Control Normal classification; a deliberately primary ambient event during a genuine secondary context request; Control-primary suppression before and after release; suppression reset by either a true secondary or unrelated primary press; and drag-root preservation. `scripts/check-folder-items-context-menu.sh`, `scripts/check-file-drag-drop.sh`, and `make check` passed on 2026-10-23.
 
+On 2026-11-01, the Context Menu check passed 22 tests, the drag-and-drop check passed 9 tests, and `make check` passed again. These automated results do not establish the physical gesture sequence or its visible outcome.
+
+A subsequent physical run recorded secondary press and context events delivered to the menu handler on a row and empty space, including Shift variants. The run aborted when tracing queried AppKit's event number on a KitDefined event; the diagnostic now reads mouse-only properties only for recognized mouse events. The trace does not identify the physical gesture used for each event or establish the visible results, so acceptance must be repeated.
+
+After that fix, a second trace recorded unrelated KitDefined events without aborting and secondary context events delivered in both Browsers on empty space. The owner reported “all Pass” after being asked to test the physical gestures and menu outcomes; the recorded traces do not identify a Control-primary sequence or the original pre-repair failure branch. Those details remain to be confirmed before the checklist can be closed.
+
 Physical pointer acceptance remains open. To record the required path-free trace, launch a disposable profile with `DUAL_PANE_GESTURE_TRACE=1`, then perform the gestures named in the checklist and retain the emitted `folder-items` lines. The trace records only Browser side, row versus empty target, Qt button and modifiers, context reason, AppKit event type, button number, modifier flags, event number, and the delivery or suppression branch.
 
 Use the following disposable setup for that acceptance run. After closing the app, retain only the filtered trace output as evidence; it contains no fixture names or paths.

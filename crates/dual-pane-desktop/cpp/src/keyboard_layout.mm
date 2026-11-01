@@ -22,7 +22,6 @@ auto current_native_event_snapshot() -> NativeEventSnapshot {
     NativeEventSnapshot snapshot;
     snapshot.type = static_cast<int>(event.type);
     snapshot.modifiers = static_cast<std::uint64_t>(event.modifierFlags);
-    snapshot.event_number = static_cast<std::int64_t>(event.eventNumber);
     switch (event.type) {
     case NSEventTypeLeftMouseDown:
         snapshot.mouse = NativeMouseEvent::PrimaryPress;
@@ -45,8 +44,10 @@ auto current_native_event_snapshot() -> NativeEventSnapshot {
     default:
         break;
     }
-    if (snapshot.mouse != NativeMouseEvent::Unknown)
+    if (snapshot.mouse != NativeMouseEvent::Unknown) {
         snapshot.button_number = static_cast<int>(event.buttonNumber);
+        snapshot.event_number = static_cast<std::int64_t>(event.eventNumber);
+    }
     return snapshot;
 }
 
