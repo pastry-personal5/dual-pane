@@ -1,5 +1,10 @@
 # Dual Pane
 
+[![Release](https://img.shields.io/github/v/tag/pastry-personal5/dual-pane?label=release)](docs/release-notes/3.0.0.md)
+[![Rust](https://img.shields.io/badge/rust-stable-blue)](docs/contributing.md#requirements)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](docs/contributing.md)
+
 <p align="center">
   <img src="crates/dual-pane-desktop/cpp/resources/dual-pane-icon.png" alt="Dual Pane app icon" width="128">
 </p>
