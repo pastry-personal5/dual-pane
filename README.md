@@ -1,97 +1,54 @@
 # Dual Pane
 
-Dual Pane is a super-fast file manager for macOS, written in Rust.
+<p align="center">
+  <img src="crates/dual-pane-desktop/cpp/resources/dual-pane-icon.png" alt="Dual Pane app icon" width="128">
+</p>
 
-> **Version v3.0.0 has been released.** Dual Pane now includes tabbed Browsers, editable Favorites, safe file operations, persistent workspace sessions, live folder refresh, image previews, and a redesigned Settings Window. The frameless macOS window moves from its Sidebar title row and supports the system full-screen shortcut.
+<p align="center">
+  A super-fast file manager for macOS written in Rust
+</p>
 
-## Goals
+<p align="center">
+  <a href="#key-features">Explore features</a> ·
+  <a href="#contributing">Build and contribute</a> ·
+  <a href="docs/product-behavior.md">Read the product behavior</a>
+</p>
 
-Two Browsers sit side by side. Each Browser browses its own directory, and future file operations move items between them with as little friction as possible.
+> **v3.0.0 is here.** See the [release notes](docs/release-notes/3.0.0.md).
 
-The [product behavior](docs/product-behavior.md) defines included features, file-operation safeguards, session recovery, and exclusions. The [UX documents](docs/ux-terms.md) define the current interface.
+## Summary
 
-Dual Pane shows two independently browsable Browsers with compact, edge-to-edge layouts. Folder Pane Row #1 shows the current directory's full path as clickable breadcrumbs, with Expand and Edit controls. Click a path breadcrumb to visit that folder, or use Expand to browse sibling folders along the path. Click the empty space to the right of the path or the Edit button, or press `Command+L` to open the path editor in that same row. Type an absolute, `~/`, or relative path and press Return to go there, or Escape to cancel. `Command+Up` opens the parent folder; `Command+Down` enters the single selected folder or opens the single selected file with its default app. Return renames the selected Item, `Shift+Command+N` creates a folder, `Command+Delete` or `Command+Forward Delete` moves selected Items to Trash, and `Option+Command+Delete` deletes them permanently. `Command+W` closes the active tab; `Command+Q`, or the close button that appears when you point at the right end of the Sidebar's **Dual Pane** title row, quits the app; `Control+Command+F` toggles full screen.
+Dual Pane puts two folders side by side. Compare, organize, and move files with less friction.
 
-Version v3.0.0 adds:
+## Local by design
 
-- Each Browser has up to eight tabs with Back, Forward, Up, and `Command+R` refresh.
-- `Command+T` opens a tab and `Command+W` closes the active tab; Close Window has no default shortcut.
-- Sidebar Favorites can be edited.
-- Folder Items show six columns, including native icons and age-colored Relative Dates that dim with their Browser, with direct sort buttons, a Folder Summary Row, and a Browser Status Bar that mirrors its counts and sizes when idle.
-- Multiple Items can be selected with Command-click, Shift-click, Shift-arrow, and `Command+A`.
-- A Notices window reports settings and Favorites problems and offers a confirmed Reset Settings.
-- The Settings gear and `Command+,` open Settings while settings storage is healthy. Its title row can be dragged to move the window. General controls startup Notices, whether the Sidebar close button asks before quitting, Reset Settings, and three independent visibility switches for macOS metadata and service items, dotfiles, and items marked invisible by macOS. Keyboard Shortcuts groups actions by purpose and uses icon controls to add, remove, and restore multiple bindings per action.
-- Workspace sessions restore tabs, active Browsers, and window layout; a delayed settings load shows an accessible Waiting Window and protects the prior session after its timeout.
-- Space previews the Folder Items cursor with macOS Quick Look; a tap opens its normal panel, while a 256 ms hold opens a panel at the largest usable screen frame with a short, motion-aware native transition.
-- Each Browser has a collapsible Preview Pane above its always-visible one-line Status Bar. Expanding the pane shows a selected image supported by the installed Qt reader and item details; the chosen pane height is restored with the workspace.
-- File operations, delivered by milestone P3-M8, are in the development build:
-  - Copy and Move to the other Browser, Rename, New Folder, Move to Trash, and Delete Permanently, from the Folder Items Context Menu or their shortcuts.
-  - Each operation runs off the GUI thread, never overwrites without a choice, and reports its progress and decisions in an Operation Panel and its result in Notices.
-  - Activating a file, an application, or another package opens it with its default application.
+100% open source. 100% local. No server connection is required. Your files and secrets stay on your Mac. Rust-powered for speed and security.
 
-The current development build adds Finder-style macOS symbols to Sidebar Favorites: familiar locations have distinct symbols, and other targets show a folder. It also adds Normal and Comprehensive Folder Items Context Menus. Secondary-click opens Normal; exact Shift-secondary-click opens Comprehensive. Each shows currently available file actions, and the Context Menus Settings page controls which actions may appear in each menu. File Associations Settings discovers regular-file content types in open folders or from a chosen sample file. It lets you add macOS-ranked applications as flat **Open with App Name** rows independently in each menu, refresh the system application list, and make a separately confirmed type-wide default-app change for the current macOS user. **Configure Open With…** opens the captured type directly and remains independently configurable in both menus. Selected Folder Items can also be dragged within Dual Pane to a Browser's folder, an eligible folder row, or a Browser Tab. During a file drag, each Browser shows a **Drop into this folder** target over its list, so the current folder remains reachable even when the list is full. A primary-button drag can start with modifiers held; release before the drag threshold keeps the normal click selection gesture. A drop moves by default, including with other modifiers, or copies when Option is held at release. A refused release explains why in the target Browser's Status Bar. The existing safe operation workflow handles accepted drops.
+## In the workspace
 
-## Technology and architecture
+<p align="center">
+  <img src="docs/assets/dual-pane-screenshot.jpg" alt="Dual Pane showing two file Browsers filled with fictional folders and files" width="100%">
+</p>
 
-The [architecture](docs/architecture.md) defines the selected technologies, Clean Architecture boundaries, threading, file-operation safety, and verification strategy.
+<p align="center"><em>A fictional workspace shown for illustration. No personal or real filesystem data is included.</em></p>
 
-## Requirements
+## Key Features
 
-- macOS
-- Rust stable, installed through [rustup](https://rustup.rs/), with the `rustfmt` and `clippy` components
-- Xcode Command Line Tools (`xcode-select --install`), which provide the C++ compiler
-- Qt 6, installed with Homebrew (`brew install qt`) or the official Qt installer
-- LLVM's `clang-format` and `clang-tidy` (`brew install llvm`)
+| | What you get |
+| --- | --- |
+| **Two Browsers** | Work in two folders at once. |
+| **Safe file actions** | Copy, move, rename, trash, and delete with clear feedback. |
+| **Native macOS feel** | Quick Look, native icons, Finder-style Favorites, and default-app launching. |
+| **Fast organization** | Tabs, live folder refresh, sorting, previews, and multi-selection. |
+| **Drag and drop** | Move or copy items between folders with confidence. |
+| **Session recovery** | Return to your workspace without losing your place. |
 
-CXX-Qt finds Qt through `qmake`. Either put Qt 6's `qmake` on your `PATH`, or point the `QMAKE` environment variable at it:
+Read the [product behavior](docs/product-behavior.md) for the full scope and safeguards.
 
-```sh
-export QMAKE="$(brew --prefix qt)/bin/qmake"
-```
+## Contributing
 
-The desktop requires Qt 6.11.2+ and dynamically links Qt Widgets through CXX-Qt. The quality scripts locate Homebrew LLVM automatically; set `CLANG_FORMAT` or `CLANG_TIDY` to override those binaries.
-
-## Building and running
-
-```sh
-make build
-make run
-make package-macos
-```
-
-`make install` builds a release binary and links it as `~/.local/bin/dual-pane` (override with `BIN_DIR=...`; make sure that folder is on your `PATH`). Then:
-
-`make package-macos` creates the local, unnotarized application bundle at `target/package/Dual Pane.app` (override with `APP_BUNDLE="/path/to/Dual Pane.app"`).
-
-`make install-macos` replaces `/Applications/Dual Pane.app` and links its executable as `~/.local/bin/dual-pane`. This may require permission to write `/Applications`; use `APP_INSTALL_DIR="$HOME/Applications"` for a per-user install. Ensure `~/.local/bin` is on your `PATH`.
-
-```sh
-dual-pane              # open normally
-dual-pane <folder>     # show the folder in the running workspace
-dual-pane <file>       # show the file's folder with the file selected
-dual-pane --new-instance [<folder> | <file>]  # start an independent window
-```
-
-The path may be relative or start with `~`. By default, a launch reuses the running instance for the same profile: an existing tab on the folder is activated in either Browser, or the active Browser opens it, and the workspace comes forward. A launch without a path only brings the running workspace forward. `--new-instance` bypasses forwarding. A missing or unreadable path, or more than one path, prints an error and exits without opening a window.
-
-## Development
-
-```sh
-make check
-scripts/check-folder-items-context-menu.sh
-scripts/check-file-drag-drop.sh
-scripts/check-file-associations.sh
-scripts/check-single-instance.sh
-```
-
-`make fmt`, `make fmt-check`, `make lint-rust`, `make lint-cpp`, and `make test` expose each part of the gate. The Folder Items Context Menu check exercises the owned asynchronous native-menu lifecycle without observing the global clipboard. The file drag-and-drop check uses only temporary source and destination folders. The file-associations check uses temporary text files and a disposable profile, discovers macOS applications, and never changes a Launch Services default. The single-instance check launches isolated offscreen processes and profiles. Rustfmt has a practical unlimited width (`max_width = 1000000`); clang-format has no column limit (`ColumnLimit: 0`); neither linter applies a line-length diagnostic.
-
-The contributor and coding-agent guidelines are in [AGENTS.md](AGENTS.md). Design docs, the development process (phases and milestones), and plans are in [docs/](docs/README.md).
+See the [contribution guide](docs/contributing.md) for requirements, build instructions, and development checks. Design docs and project plans are indexed in [docs/](docs/README.md).
 
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
-
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be licensed as above, without any additional terms or conditions.
-
-Qt is a separate project with its own license. Dual Pane is intended to link Qt dynamically and use it under the LGPLv3.

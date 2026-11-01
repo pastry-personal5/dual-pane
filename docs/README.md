@@ -9,6 +9,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [development-process.md](development-process.md) | Phases, milestones, IDs (`P1-M2`), definition of done, where plans live, and doc status values |
 | [architecture.md](architecture.md) | Active Clean Architecture with MVVM presentation and command-based input, technical stack, crate boundaries, threading, file-operation safety, and testing. |
 | [product-behavior.md](product-behavior.md) | Active product scope, Favorites identity, file-operation safeguards, session recovery, Notices startup policy, and exclusions. |
+| [contributing.md](contributing.md) | Development checks, native acceptance scripts, and contribution guidance. |
 | [hidden-files-research.md](research/hidden-files-research.md) | Evidence for macOS metadata/service names, dotfiles, platform invisibility, and P3-M15 visibility settings. |
 | [file-type-default-app-research.md](research/file-type-default-app-research.md) | How macOS maps a file to its opening application through content types and Launch Services, where the default is stored, and how it is read and set. |
 | [ux-terms.md](ux-terms.md) | Canonical component and action names, code mappings, and naming exemptions. |
