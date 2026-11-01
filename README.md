@@ -56,9 +56,14 @@ The desktop requires Qt 6.11.2+ and dynamically links Qt Widgets through CXX-Qt.
 ```sh
 make build
 make run
+make package-macos
 ```
 
 `make install` builds a release binary and links it as `~/.local/bin/dual-pane` (override with `BIN_DIR=...`; make sure that folder is on your `PATH`). Then:
+
+`make package-macos` creates the local, unnotarized application bundle at `target/package/Dual Pane.app` (override with `APP_BUNDLE="/path/to/Dual Pane.app"`).
+
+`make install-macos` replaces `/Applications/Dual Pane.app` and links its executable as `~/.local/bin/dual-pane`. This may require permission to write `/Applications`; use `APP_INSTALL_DIR="$HOME/Applications"` for a per-user install. Ensure `~/.local/bin` is on your `PATH`.
 
 ```sh
 dual-pane              # open normally

@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file>dual-pane-icon.png</file>
+  </qresource>
+</RCC>

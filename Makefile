@@ -1,6 +1,9 @@
-.PHONY: build run install test fmt fmt-check lint-rust lint-cpp check
+.PHONY: build run install package-macos install-macos test fmt fmt-check lint-rust lint-cpp check
 
 BIN_DIR ?= $(HOME)/.local/bin
+APP_BUNDLE ?= $(CURDIR)/target/package/Dual Pane.app
+APP_INSTALL_DIR ?= /Applications
+INSTALLED_APP ?= $(APP_INSTALL_DIR)/Dual Pane.app
 
 build:
 	cargo build
@@ -14,6 +17,26 @@ install:
 	mkdir -p "$(BIN_DIR)"
 	ln -sf "$(CURDIR)/target/release/dual-pane-desktop" "$(BIN_DIR)/dual-pane"
 	@echo "Installed $(BIN_DIR)/dual-pane"
+
+# Creates an unnotarized macOS application bundle for local use.
+package-macos:
+	cargo build --release -p dual-pane-desktop
+	rm -rf "$(APP_BUNDLE)"
+	mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources"
+	cp target/release/dual-pane-desktop "$(APP_BUNDLE)/Contents/MacOS/dual-pane"
+	cp crates/dual-pane-desktop/cpp/resources/dual-pane-icon.png "$(APP_BUNDLE)/Contents/Resources/dual-pane-icon.png"
+	cp packaging/macos/Info.plist "$(APP_BUNDLE)/Contents/Info.plist"
+	@echo "Created $(APP_BUNDLE)"
+
+# Installs the application for the current user and exposes its executable on PATH.
+install-macos: package-macos
+	rm -rf "$(INSTALLED_APP)"
+	mkdir -p "$(APP_INSTALL_DIR)"
+	cp -R "$(APP_BUNDLE)" "$(INSTALLED_APP)"
+	mkdir -p "$(BIN_DIR)"
+	ln -sfn "$(INSTALLED_APP)/Contents/MacOS/dual-pane" "$(BIN_DIR)/dual-pane"
+	@echo "Installed $(INSTALLED_APP)"
+	@echo "Command: $(BIN_DIR)/dual-pane"
 
 test:
 	cargo test

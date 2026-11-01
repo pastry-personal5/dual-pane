@@ -402,7 +402,7 @@ Property tests generate input sequences and check that invariants hold, for exam
 
 ## 8. Deliberate non-decisions
 
-This architecture does not decide exact macOS API choices, concurrency primitive, worker-capacity value, operation step size, storage format, sort collation rules, session-save delay, or performance thresholds. Distribution is limited to local, unnotarized, unsandboxed builds (see [§1](#1-goals-and-constraints)); packaging tooling is not decided. Product choices are defined in [product-behavior.md](product-behavior.md) and key bindings in [ux-gui.md](ux-gui.md).
+This architecture does not decide exact macOS API choices, concurrency primitive, worker-capacity value, operation step size, storage format, sort collation rules, session-save delay, or performance thresholds. Distribution is limited to local, unnotarized, unsandboxed builds (see [§1](#1-goals-and-constraints)); `make package-macos` creates the corresponding application bundle. Product choices are defined in [product-behavior.md](product-behavior.md) and key bindings in [ux-gui.md](ux-gui.md).
 
 Section 5.3 plans invariants for future support of locations already mounted by macOS; it does not change the current exclusion of remote file systems or decide mounting, discovery, authentication, credential storage, direct SMB access, or user-visible offline behavior. Those product and technology choices require a future phase decision.
 

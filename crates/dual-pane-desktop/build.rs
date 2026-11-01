@@ -26,6 +26,7 @@ fn main() {
             .cpp_file("cpp/src/clipboard_adapter.mm")
             .cpp_file("cpp/src/application_activation.mm")
             .cpp_file("cpp/src/location_watcher.cpp")
+            .qrc("cpp/resources/resources.qrc")
             .qt_module("Widgets")
             .cc_builder(|builder| {
                 builder.include("cpp/include");

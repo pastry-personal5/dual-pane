@@ -43,7 +43,7 @@ The owner also requested [P4-M15](milestone-15-overview.md), a focused Sidebar F
 | Better empty and no-match states, status counts, focus return, and shortcut discoverability | Included as acceptance details in the related feature milestones. |
 | Broader large-folder responsiveness work | Kept as a later phase candidate; this phase still requires its new interactions to stay responsive. |
 | Recursive search, archive browsing, or a built-in viewer | Outside this phase; archive browsing and the built-in viewer remain excluded by product behavior. |
-| Remote-volume or packaging work | Outside this phase; current product scope excludes remote file systems, and packaging tooling is undecided. |
+| Remote-volume work | Outside this phase; current product scope excludes remote file systems. Local macOS application packaging is provided by the repository Makefile. |
 
 ## Milestones
 

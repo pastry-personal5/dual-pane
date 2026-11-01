@@ -71,6 +71,7 @@ auto run_desktop(::rust::Box<BrowserStartup> startup) -> int {
     char name[] = "dual-pane";
     char *argv[] = {name, nullptr};
     QApplication app(argc, argv);
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/dual-pane-icon.png")));
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_FOLDER_ITEMS_CONTEXT_MENU_CHECK"))
         return run_folder_items_context_menu_checks(app);
     if (qEnvironmentVariableIsSet("DUAL_PANE_INTERNAL_SETTINGS_WINDOW_CHECK"))
